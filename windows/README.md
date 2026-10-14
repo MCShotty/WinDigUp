@@ -68,6 +68,8 @@ that the packaged helper starts and the Vulkan module loads without a developmen
 For AMD, download and extract **WinDigUp-Windows-x64-AMD-Vulkan**, install a current AMD graphics
 driver supporting Vulkan 1.3, and run `WinDigUp.exe`. Choose **AMD GPU · Vulkan**, add your folders,
 download the GGUF model, and save settings. The encoder status should show your AMD/Radeon device.
+When switching from an existing CPU installation, update **DigUp helper** to this package's
+`helper/digup.exe`; saved settings can otherwise keep pointing to the previous helper.
 GPU inference and performance must still be checked on the actual AMD machine; the CI runner has no AMD GPU.
 NVIDIA CUDA distributions require a build with the CUDA SDK.
 
