@@ -269,6 +269,11 @@ def serve(embedder, stream=sys.stdin):
 
 
 def main():
+    # Python's isolated mode ignores PYTHONUTF8. Windows pipe defaults otherwise use the system
+    # code page, while Swift's JSONEncoder always writes UTF-8 (including multilingual paths).
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="strict")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", required=True, help="local exported OpenVINO bundle")
     parser.add_argument("--text-only", action="store_true")

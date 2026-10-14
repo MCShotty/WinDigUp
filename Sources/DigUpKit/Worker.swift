@@ -91,7 +91,7 @@ public struct WorkerConfig: Sendable {
                 throw WorkerError.notFound("OpenVINO's Python executable or worker script is missing")
             }
             var config = WorkerConfig(executable: URL(fileURLWithPath: python), arguments: [
-                "-I", worker, "--model", models, "--device", "NPU",
+                "-I", "-X", "utf8", worker, "--model", models, "--device", "NPU",
             ])
             config.environment["HF_HUB_OFFLINE"] = "1"
             config.environment["TOKENIZERS_PARALLELISM"] = "false"

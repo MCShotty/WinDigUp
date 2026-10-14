@@ -132,6 +132,18 @@ def test_export_real_embeddinggemma2_architecture_and_worker(tmp_path):
     manifest, fingerprint = worker.validate_bundle(output)
     # Metadata and a live encoder must agree, even though text-only does not load media encoders.
     assert worker.model_info(manifest, fingerprint, True, "CPU")["runtime"] == embedder.info["runtime"]
+    texts = ["ملفات من العطلة", "বাংলায় লেখা নোট"]
+    request = json.dumps({"id": 11, "op": "text", "inputs": texts}, ensure_ascii=False) + "\n"
+    request += '{"id":12,"op":"quit"}\n'
+    process = subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("openvino_worker.py")),
+        "--model", str(output), "--device", "CPU", "--text-only"], input=request,
+        capture_output=True, encoding="utf-8", timeout=45)
+    assert process.returncode == 0, process.stdout + process.stderr
+    messages = [json.loads(line) for line in process.stdout.splitlines()]
+    assert messages[0]["ready"] is True and messages[1]["id"] == 11
+    values = np.frombuffer(base64.b64decode(messages[1]["vectors"]), "<f4").reshape(2, 768)
+    expected, _ = embedder.text(texts)
+    np.testing.assert_allclose(values, expected, rtol=1e-5, atol=1e-6)
     embedder.close()
     (output / "token_embeddings.npy").write_bytes(b"corrupted")
     with pytest.raises(ValueError, match="checksum"):

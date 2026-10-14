@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $previousLocation = Get-Location
 $previousBackends = $env:DIGUP_GPU_BACKENDS
+$previousPath = $env:Path
 function Invoke-Checked([scriptblock]$Command) {
     & $Command
     if ($LASTEXITCODE -ne 0) { throw "Build command failed with exit code $LASTEXITCODE" }
@@ -23,6 +24,9 @@ try {
     $env:DIGUP_GPU_BACKENDS = $GpuBackends
     Invoke-Checked { & $bash --noprofile --norc scripts/fetch-vendor.sh }
     Invoke-Checked { & $bash --noprofile --norc scripts/build-llama.sh }
+    # Windows has no rpath: Swift's test runner also needs the native dependencies before the
+    # final packaging step copies them beside digup.exe.
+    $env:Path = "$root/Vendor/llama/lib;$root/Vendor/pdfium/bin;$env:Path"
     Invoke-Checked { swift build -c release }
     if ($Test) { Invoke-Checked { swift test } }
     $bin = (swift build -c release --show-bin-path | Select-Object -Last 1).Trim()
@@ -73,5 +77,6 @@ try {
     Write-Host "Built into $artifact"
 } finally {
     $env:DIGUP_GPU_BACKENDS = $previousBackends
+    $env:Path = $previousPath
     Set-Location $previousLocation
 }
