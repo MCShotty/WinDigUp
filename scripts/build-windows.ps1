@@ -19,6 +19,9 @@ try {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool is missing from PATH. See windows/README.md." }
     }
     if (-not (Get-Command cl -ErrorAction SilentlyContinue)) { throw 'Run this in an x64 Visual Studio Developer PowerShell.' }
+    foreach ($tool in @('ffmpeg', 'ffprobe')) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool 8.1 or newer is required. See windows/README.md." }
+    }
     $bash = Join-Path $env:ProgramFiles 'Git/bin/bash.exe'
     if (-not (Test-Path $bash)) { throw 'Install Git for Windows (its bash is used by the vendor scripts).' }
     $env:DIGUP_GPU_BACKENDS = $GpuBackends
@@ -38,6 +41,17 @@ try {
     Copy-Item (Join-Path $bin 'digup.exe') $helper
     Copy-Item 'Vendor/llama/lib/*.dll' $helper
     Copy-Item 'Vendor/pdfium/bin/*.dll' $helper
+    foreach ($tool in @('ffmpeg', 'ffprobe')) {
+        $program = (Get-Command $tool).Source
+        Copy-Item $program $helper
+        $mediaRoot = Split-Path (Split-Path $program -Parent) -Parent
+        # Keep the distributor's license and source/build information beside the separate tools.
+        foreach ($notice in @('LICENSE', 'LICENSE.txt', 'COPYING', 'README.txt')) {
+            if (Test-Path (Join-Path $mediaRoot $notice)) {
+                Copy-Item (Join-Path $mediaRoot $notice) (Join-Path $helper "FFmpeg-$notice")
+            }
+        }
+    }
 
     # Swift's installer puts its shared runtime outside the toolchain. Look only in known runtime
     # paths and their bin folders; a supplied path is useful for custom toolchain layouts.
@@ -70,6 +84,7 @@ try {
     New-Item (Join-Path $artifact 'worker') -ItemType Directory -Force | Out-Null
     Copy-Item 'worker/windows/openvino_worker.py' (Join-Path $artifact 'worker')
     Copy-Item 'Resources/Acknowledgements.txt', 'LICENSE' $artifact
+    Copy-Item 'windows/FFmpeg-NOTICE.txt' $artifact
     if (-not $SkipApp) {
         Invoke-Checked { dotnet run --project windows/WinDigUp.Core.Tests -c Release }
         Invoke-Checked { dotnet publish windows/WinDigUp/WinDigUp.csproj -c Release -p:Platform=x64 --self-contained true -o $artifact }

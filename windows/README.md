@@ -30,7 +30,8 @@ Windows 10 version 2004 or later, x64 (Windows 11 recommended). Install:
   Git for Windows, and Python 3.12.
 - CUDA Toolkit for a CUDA build; Vulkan SDK (with `glslc`) for a Vulkan build. Both are needed to package both
   GPU backends. Users need a compatible GPU driver, not the development SDKs.
-- `ffmpeg` and `ffprobe` on PATH for portable audio/video extraction (as in the upstream portable engine).
+- Static `ffmpeg` and `ffprobe` **8.1 or newer** on PATH for image/audio/video extraction. The build packages
+  them beside the helper, along with the distributor's license and source/build information.
 
 In **x64 Developer PowerShell for Visual Studio**, from the repository root:
 

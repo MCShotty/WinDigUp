@@ -1,0 +1,15 @@
+WinDigUp's Windows package includes FFmpeg and ffprobe as separate command-line programs.
+They decode images, sound and video locally through DigUp's portable extraction engine.
+
+CI obtains the static Windows release through FedericoCarboni/setup-ffmpeg, from Gyan's builds:
+https://github.com/GyanD/codexffmpeg/releases
+https://www.gyan.dev/ffmpeg/builds/
+
+The build script includes the distributor's LICENSE and README, when supplied, beside these executables.
+FFmpeg's source, license information, configuration and build instructions are available at:
+https://ffmpeg.org/download.html
+https://ffmpeg.org/legal.html
+https://github.com/GyanD/codexffmpeg
+
+The license of the actual binary depends on its enabled components; consult its bundled license and
+the configuration printed by ffmpeg -version. WinDigUp's own code remains under the repository's MIT license.

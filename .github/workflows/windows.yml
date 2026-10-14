@@ -37,6 +37,7 @@ jobs:
           swift-version: swift-6.2.3-release
           swift-build: 6.2.3-RELEASE
       - uses: actions/cache@v4
+        id: native-cache
         with:
           path: |
             Vendor/llama
@@ -46,7 +47,22 @@ jobs:
             Vendor/pdfium
             Vendor/VENDOR
           key: windows-cpu-swift6.2.3-b11461-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
+      - uses: FedericoCarboni/setup-ffmpeg@36c6454b5a2348e7794ba2d82a21506605921e3d
+        with:
+          ffmpeg-version: release
+          linking-type: static
       - run: ./scripts/build-windows.ps1 -GpuBackends cpu -SkipApp -Test
+      - uses: actions/cache/save@v4
+        if: always() && hashFiles('Vendor/llama/BUILD') != '' && steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            Vendor/llama
+            Vendor/sqlite
+            Vendor/stb
+            Vendor/miniz
+            Vendor/pdfium
+            Vendor/VENDOR
+          key: windows-cpu-swift6.2.3-b11461-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
       - uses: actions/upload-artifact@v4
         with:
           name: DigUp-Windows-helper
