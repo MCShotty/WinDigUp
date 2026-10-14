@@ -1,0 +1,50 @@
+name: Windows port
+on:
+  push:
+    paths: ['windows/**', 'worker/windows/**', 'Sources/**', 'Tests/**', 'scripts/**', 'Package.swift', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['windows/**', 'worker/windows/**', 'Sources/**', 'Tests/**', 'scripts/**', 'Package.swift', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  winui:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet run --project windows/WinDigUp.Core.Tests -c Release
+      - run: dotnet publish windows/WinDigUp/WinDigUp.csproj -c Release -p:Platform=x64 --self-contained true -o windows/artifacts/WinUI
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WinUI-build
+          path: windows/artifacts/WinUI
+  helper:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057
+        with:
+          swift-version: swift-6.2.3-release
+          swift-build: 6.2.3-RELEASE
+      - run: ./scripts/build-windows.ps1 -GpuBackends cpu -SkipApp -Test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DigUp-Windows-helper
+          path: windows/artifacts/WinDigUp
+  openvino:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install openvino==2026.4.1 numpy==2.5.4 pytest
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install transformers==5.19.0
+      - run: python -m pytest -q worker/windows/test_openvino_worker.py

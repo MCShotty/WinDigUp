@@ -49,12 +49,21 @@ public final class LlamaEmbedder: Embedder {
         let started = Date()
         LlamaLog.shared.send(to: log)
         _ = Self.backend
+        let acceleration = try Acceleration.selected()
+        let selectedDevice = try Self.selectDevice(acceleration)
         guard textOnly || models.media != nil else {
             throw WorkerError.notFound("\(LlamaModels.mediaFile) (images and audio) isn't downloaded yet")
         }
         var modelParams = llama_model_default_params()
-        modelParams.n_gpu_layers = 999
-        guard let model = llama_model_load_from_file(models.text.path, modelParams) else {
+        modelParams.n_gpu_layers = selectedDevice == nil ? 0 : 999
+        // This nil-terminated list is borrowed only while loading. It also keeps a machine with two
+        // different GPUs from picking an unrelated adapter after an explicit backend choice.
+        var devices: [OpaquePointer?] = [selectedDevice, nil]
+        let loaded = devices.withUnsafeMutableBufferPointer { buffer in
+            modelParams.devices = buffer.baseAddress
+            return llama_model_load_from_file(models.text.path, modelParams)
+        }
+        guard let model = loaded else {
             throw WorkerError.failed("can't load \(models.text.path)")
         }
         // One input must fit one micro-batch: 2048 tokens (the reference's cut), which also holds a 1120-token image or
@@ -79,7 +88,8 @@ public final class LlamaEmbedder: Embedder {
         var media: OpaquePointer?
         if let mediaFile = models.media, !textOnly {
             var mediaParams = mtmd_context_params_default()
-            mediaParams.use_gpu = true
+            mediaParams.use_gpu = selectedDevice != nil
+            mediaParams.device = selectedDevice
             mediaParams.print_timings = false
             mediaParams.warmup = true
             mediaParams.image_min_tokens = 1      // never rescale: images arrive at their final size (ImageSizing)
@@ -104,7 +114,8 @@ public final class LlamaEmbedder: Embedder {
         self.maxTokens = maxTokens
         let known = Self.modelInfo
         info = WorkerInfo(model: known.model, revision: known.revision, runtime: known.runtime, dtype: known.dtype,
-                          dim: embeddingSize, textOnly: textOnly, loadSeconds: nil)
+                          dim: embeddingSize, textOnly: textOnly, loadSeconds: nil,
+                          accelerator: selectedDevice.map { String(cString: ggml_backend_dev_description($0)) } ?? "CPU")
         // The first calls build the Metal pipelines: pay that now (the panel is opening).
         do {
             for _ in 0..<2 { _ = try embedTexts([Prompts.query("warm up")]) }
@@ -114,7 +125,7 @@ public final class LlamaEmbedder: Embedder {
         }
         let seconds = (Date().timeIntervalSince(started) * 100).rounded() / 100
         info = WorkerInfo(model: info.model, revision: info.revision, runtime: info.runtime, dtype: info.dtype,
-                          dim: info.dim, textOnly: textOnly, loadSeconds: seconds)
+                          dim: info.dim, textOnly: textOnly, loadSeconds: seconds, accelerator: info.accelerator)
         LlamaLog.shared.line("ready in \(seconds) s (\(textOnly ? "text-only" : "full"), llama.cpp \(Self.buildTag), "
                              + "vectors \(Self.vectorVersion))")
     }
@@ -322,6 +333,17 @@ public final class LlamaEmbedder: Embedder {
         #endif
         llama_backend_init()
     }()
+
+    private static func selectDevice(_ acceleration: Acceleration) throws -> OpaquePointer? {
+        let handles = (0..<ggml_backend_dev_count()).compactMap { ggml_backend_dev_get($0) }
+        let descriptions = handles.map { handle in
+            Acceleration.Device(backend: String(cString: ggml_backend_reg_name(ggml_backend_dev_backend_reg(handle))),
+                                name: String(cString: ggml_backend_dev_description(handle)),
+                                gpu: ggml_backend_dev_type(handle) == GGML_BACKEND_DEVICE_TYPE_GPU
+                                    || ggml_backend_dev_type(handle) == GGML_BACKEND_DEVICE_TYPE_IGPU)
+        }
+        return try acceleration.deviceIndex(in: descriptions).map { handles[$0] }
+    }
 
     #if !os(macOS)
     /// The threads llama.cpp computes on (what runs on the CPU: all of it on a machine without a GPU): every logical

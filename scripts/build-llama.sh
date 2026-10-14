@@ -22,14 +22,21 @@ OUT=Vendor/llama
 OS=$(uname -s)
 if [[ $OS == Darwin ]]; then
   FLAVOR=metal
-elif command -v "${CUDACXX:-nvcc}" > /dev/null; then
-  FLAVOR=cuda
-elif command -v glslc > /dev/null; then
-  FLAVOR=vulkan
 else
-  FLAVOR=cpu
+  FLAVOR=${DIGUP_GPU_BACKENDS:-auto}
+  if [[ $FLAVOR == auto ]]; then
+    FLAVOR=cpu
+    if command -v "${CUDACXX:-nvcc}" > /dev/null; then FLAVOR=cuda; fi
+    if command -v glslc > /dev/null; then
+      if [[ $FLAVOR == cuda ]]; then FLAVOR=cuda,vulkan; else FLAVOR=vulkan; fi
+    fi
+  fi
+  case $FLAVOR in
+    cpu|cuda|vulkan|cuda,vulkan) ;;
+    *) echo "DIGUP_GPU_BACKENDS must be auto, cpu, cuda, vulkan or cuda,vulkan" >&2; exit 1 ;;
+  esac
 fi
-STAMP="$TAG $(shasum -a 256 "$PATCH" 2>/dev/null | cut -c1-12 || sha256sum "$PATCH" | cut -c1-12) $FLAVOR"
+STAMP="$TAG $(shasum -a 256 "$PATCH" 2>/dev/null | cut -c1-12 || sha256sum "$PATCH" | cut -c1-12) $FLAVOR ${CUDA_ARCHS:-native}"
 if [[ ( -f "$OUT/lib/libllamacpp.a" || -f "$OUT/lib/libllama.so" || -f "$OUT/lib/llama.dll" ) \
       && "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then
   exit 0
@@ -82,11 +89,10 @@ else
   if [[ $OS == MINGW* || $OS == MSYS* ]]; then
     export CC=cl CXX=cl   # MSVC, not whatever else bash finds first
   fi
-  case $FLAVOR in
-    cuda) GPU=(-DGGML_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS:-native}") ;;
-    vulkan) GPU=(-DGGML_VULKAN=ON) ;;
-    *) GPU=() ;;
-  esac
+  # Reset both flags when reusing a build directory. Ship both modules in a multi-vendor Windows build.
+  GPU=(-DGGML_CUDA=OFF -DGGML_VULKAN=OFF)
+  if [[ $FLAVOR == *cuda* ]]; then GPU+=(-DGGML_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS:-native}"); fi
+  if [[ $FLAVOR == *vulkan* ]]; then GPU+=(-DGGML_VULKAN=ON); fi
   # Shared libraries, the backends as modules (every CPU variant, so one build fits any x86-64 or arm64 machine).
   cmake -S "$SOURCE" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF "${GPU[@]}" \

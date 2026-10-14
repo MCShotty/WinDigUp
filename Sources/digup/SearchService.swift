@@ -252,7 +252,7 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             encoder = worker
             encoderState = "ready"
             write(["event": "encoder", "state": "ready", "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
-                  "source": worker.info.vectorSource])
+                  "source": worker.info.vectorSource, "accelerator": worker.info.accelerator ?? "unknown"])
             return worker
         } catch {
             encoderState = "unavailable"

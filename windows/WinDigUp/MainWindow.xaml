@@ -1,0 +1,89 @@
+<Window x:Class="WinDigUp.MainWindow" Title="WinDigUp"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Grid x:Name="Root" Padding="24" RowSpacing="16" Loaded="Loaded" KeyDown="KeyDown">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <Grid ColumnSpacing="12">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <Image x:Name="Logo" Width="36" Height="36" AutomationProperties.Name="WinDigUp"/>
+      <StackPanel Grid.Column="1"><TextBlock Text="WinDigUp" Style="{StaticResource TitleTextBlockStyle}"/>
+        <TextBlock Text="Describe it. Dig it up." Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Content="Folders &amp; settings" Click="SettingsClick"/>
+        <Button Content="Quit" Click="QuitClick"/>
+      </StackPanel>
+    </Grid>
+    <AutoSuggestBox x:Name="Query" Grid.Row="1" PlaceholderText="Search your files by what’s in them. Use code: for your projects."
+      QueryIcon="Find" TextChanged="QueryChanged" QuerySubmitted="QuerySubmitted" AutomationProperties.Name="Search files"/>
+    <InfoBar x:Name="Notice" Grid.Row="2" IsOpen="False" IsClosable="True"/>
+    <Expander x:Name="SettingsPanel" Grid.Row="3" Header="Your folders and acceleration" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+      <ScrollViewer MaxHeight="370" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="12" Padding="0,12,8,12">
+          <TextBlock Text="Only the folders you choose are indexed. Everything stays on this computer." TextWrapping="Wrap"/>
+          <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <StackPanel Spacing="8"><TextBlock Text="Files, pictures, PDFs and recordings"/>
+              <ListView x:Name="Folders" Height="90" SelectionMode="Single" AutomationProperties.Name="Indexed folders"/>
+              <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="Add folder" Click="AddFolderClick"/>
+                <Button Content="Remove" Click="RemoveFolderClick"/></StackPanel></StackPanel>
+            <StackPanel Grid.Column="1" Spacing="8"><TextBlock Text="Code projects (optional)"/>
+              <ListView x:Name="CodeFolders" Height="90" SelectionMode="Single" AutomationProperties.Name="Code folders"/>
+              <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="Add project" Click="AddCodeFolderClick"/>
+                <Button Content="Remove" Click="RemoveCodeFolderClick"/></StackPanel></StackPanel>
+          </Grid>
+          <ComboBox x:Name="Acceleration" Header="Run EmbeddingGemma 2 on" HorizontalAlignment="Stretch" SelectedIndex="0">
+            <ComboBoxItem Content="Automatic · GPU when available"/><ComboBoxItem Content="CPU"/>
+            <ComboBoxItem Content="NVIDIA GPU · CUDA"/><ComboBoxItem Content="AMD GPU · Vulkan"/>
+            <ComboBoxItem Content="Intel NPU · OpenVINO"/>
+          </ComboBox>
+          <TextBlock Text="OpenVINO runs the text backbone on the NPU; image and audio encoders run on the CPU. NPU support is checked against reference vectors at startup." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+          <TextBox x:Name="OpenVinoPython" Header="OpenVINO Python executable" PlaceholderText="C:\…\.venv\Scripts\python.exe"/>
+          <TextBox x:Name="OpenVinoModels" Header="Exported OpenVINO model folder" PlaceholderText="Folder containing digup-openvino.json"/>
+          <TextBox x:Name="HelperPath" Header="DigUp helper"/>
+          <TextBox x:Name="ModelsPath" Header="GGUF model folder (CPU and GPU)"/>
+          <TextBox x:Name="CodeEditor" Header="Code editor executable (optional)" PlaceholderText="Path to Code.exe or Cursor.exe"/>
+          <TextBox x:Name="SkipTypes" Header="Skip file extensions" PlaceholderText="csv, log"/>
+          <TextBox x:Name="SkippedFolders" Header="Skip folders (one full path per line)" AcceptsReturn="True" Height="70"/>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button x:Name="SaveSettings" Content="Save &amp; start indexing" Style="{StaticResource AccentButtonStyle}" Click="SaveClick"/>
+            <Button Content="Download GGUF model" Click="DownloadClick"/>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Expander>
+    <Grid Grid.Row="4" ColumnSpacing="20">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+      <Grid RowSpacing="8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <ComboBox x:Name="KindFilter" SelectedIndex="0" SelectionChanged="FilterChanged" AutomationProperties.Name="File type filter">
+          <ComboBoxItem Content="All files" Tag=""/><ComboBoxItem Content="Pictures &amp; screenshots" Tag="image,screenshot"/>
+          <ComboBoxItem Content="PDFs &amp; documents" Tag="pdf,doc"/><ComboBoxItem Content="Audio &amp; video" Tag="audio,video"/>
+        </ComboBox>
+        <ListView x:Name="Results" Grid.Row="1" SelectionMode="Single" IsItemClickEnabled="True" ItemClick="ResultClicked" SelectionChanged="ResultSelected" AutomationProperties.Name="Search results">
+          <ListView.ItemTemplate><DataTemplate>
+            <StackPanel Padding="0,8" Spacing="4">
+              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+              <TextBlock Text="{Binding Detail}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock Text="{Binding Path}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+          </DataTemplate></ListView.ItemTemplate>
+        </ListView>
+      </Grid>
+      <ScrollViewer Grid.Column="1"><StackPanel Spacing="12">
+        <TextBlock x:Name="PreviewTitle" Text="Search by meaning or exact words" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap"/>
+        <Image x:Name="PreviewImage" MaxHeight="240" Stretch="Uniform"/>
+        <TextBlock x:Name="PreviewText" Text="Pick a result to preview its page, passage, picture or moment." TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Content="Open" Click="OpenClick"/><Button Content="Show in Explorer" Click="RevealClick"/>
+        </StackPanel>
+      </StackPanel></ScrollViewer>
+    </Grid>
+    <Grid Grid.Row="5"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <StackPanel><TextBlock x:Name="Status" Text="Choose folders to get started." TextWrapping="Wrap"/>
+        <TextBlock x:Name="DeviceStatus" Text="Ctrl+Shift+Space opens search from any app." FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/></StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"><Button x:Name="Pause" Content="Pause indexing" Click="PauseClick"/>
+        <Button Content="Sync now" Click="SyncClick"/></StackPanel>
+    </Grid>
+  </Grid>
+</Window>

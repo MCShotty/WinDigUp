@@ -1,5 +1,9 @@
 <p align="center"><img src="docs/logo.png" width="96" alt=""></p>
 
+**WinDigUp Windows port:** this fork adds a native WinUI 3 app, NVIDIA CUDA and AMD Vulkan backend selection,
+and an OpenVINO Intel NPU worker for EmbeddingGemma 2. See [Windows build and acceleration setup](windows/README.md).
+The original [DigUp](https://github.com/ARahim3/DigUp) documentation follows.
+
 <h1 align="center">DigUp</h1>
 
 <p align="center"><b>Describe it. Dig it up.</b><br>

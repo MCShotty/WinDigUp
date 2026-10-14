@@ -193,7 +193,7 @@ func skippedLine(_ skipped: [String: Int]) -> String {
 // MARK: Commands
 
 /// The embedding runtime: llama.cpp in this process, or the worker in $DIGUP_WORKER_DIR (the mlx-vlm reference).
-func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) throws -> any Embedder {
+func makeEmbedder(textOnly: Bool, log: URL? = nil, qos: QualityOfService = .default) throws -> any Embedder {
     if var config = try WorkerConfig.fromEnvironment() {
         config.log = log
         config.qos = qos
@@ -204,7 +204,25 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
 
 /// `makeEmbedder`'s vector source when it's known without starting it: llama.cpp's always is.
 func embedderSource() -> String? {
-    ProcessInfo.processInfo.environment["DIGUP_WORKER_DIR"] == nil ? LlamaEmbedder.modelInfo.vectorSource : nil
+    EmbedderSourceCache.value
+}
+
+/// Cache the external runtime's contract too, so a changed OpenVINO export requeues an otherwise unchanged
+/// index before the first file needs embedding. This process's environment is immutable after launch.
+private enum EmbedderSourceCache {
+    static let value: String? = {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["DIGUP_BACKEND"] == "openvino-npu" {
+            do {
+                guard var config = try WorkerConfig.fromEnvironment() else { return nil }
+                config.arguments.append("--metadata")
+                let worker = try EmbeddingWorker(config, textOnly: true)
+                defer { worker.close() }
+                return worker.info.vectorSource
+            } catch { return nil }
+        }
+        return environment["DIGUP_WORKER_DIR"] == nil ? LlamaEmbedder.modelInfo.vectorSource : nil
+    }()
 }
 
 func estimate(_ args: Arguments) throws {
@@ -440,7 +458,15 @@ func indexService(_ args: Arguments) throws -> Int32 {
                                                                         roots: codeRoots),
                                folder: args.indexFolder,
                                model: model,
-                               modelReady: { embedderSource() == nil || LlamaModels.complete },
+                               modelReady: {
+                                   if ProcessInfo.processInfo.environment["DIGUP_BACKEND"] == "openvino-npu" {
+                                       return ProcessInfo.processInfo.environment["DIGUP_OPENVINO_MODELS"].map {
+                                           FileManager.default.fileExists(atPath: URL(fileURLWithPath: $0)
+                                               .appendingPathComponent("digup-openvino.json").path)
+                                       } ?? false
+                                   }
+                                   return embedderSource() == nil || LlamaModels.complete
+                               },
                                backfill: args.flags.contains("--backfill"),
                                newFilesLimit: args.values["--new-limit"].flatMap(Int.init) ?? 50,
                                linger: args.values["--linger"].flatMap(Double.init) ?? 60)

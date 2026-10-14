@@ -9,9 +9,11 @@ public struct WorkerInfo: Codable, Sendable {
     public let dim: Int
     public let textOnly: Bool
     public let loadSeconds: Double?
+    /// The actual device, for diagnostics; it does not change the vector contract.
+    public let accelerator: String?
 
     public init(model: String, revision: String, runtime: String, dtype: String, dim: Int, textOnly: Bool,
-                loadSeconds: Double?) {
+                loadSeconds: Double?, accelerator: String? = nil) {
         self.model = model
         self.revision = revision
         self.runtime = runtime
@@ -19,6 +21,7 @@ public struct WorkerInfo: Codable, Sendable {
         self.dim = dim
         self.textOnly = textOnly
         self.loadSeconds = loadSeconds
+        self.accelerator = accelerator
     }
 
     /// Vectors from different models, revisions, runtimes or precisions must never share an index.
@@ -75,7 +78,26 @@ public struct WorkerConfig: Sendable {
 
     /// $DIGUP_WORKER_DIR: a worker folder to use instead of the built-in runtime (mlx-vlm for evals: `worker`).
     public static func fromEnvironment() throws -> WorkerConfig? {
-        try ProcessInfo.processInfo.environment["DIGUP_WORKER_DIR"].map { try python(URL(fileURLWithPath: $0)) }
+        let environment = ProcessInfo.processInfo.environment
+        if try Acceleration.selected(in: environment) == .openvinoNPU {
+            guard let python = environment["DIGUP_OPENVINO_PYTHON"], !python.isEmpty,
+                  let worker = environment["DIGUP_OPENVINO_WORKER"], !worker.isEmpty,
+                  let models = environment["DIGUP_OPENVINO_MODELS"], !models.isEmpty else {
+                throw WorkerError.notFound("OpenVINO requires DIGUP_OPENVINO_PYTHON, DIGUP_OPENVINO_WORKER and "
+                    + "DIGUP_OPENVINO_MODELS; see windows/README.md")
+            }
+            guard FileManager.default.isExecutableFile(atPath: python),
+                  FileManager.default.fileExists(atPath: worker) else {
+                throw WorkerError.notFound("OpenVINO's Python executable or worker script is missing")
+            }
+            var config = WorkerConfig(executable: URL(fileURLWithPath: python), arguments: [
+                "-I", worker, "--model", models, "--device", "NPU",
+            ])
+            config.environment["HF_HUB_OFFLINE"] = "1"
+            config.environment["TOKENIZERS_PARALLELISM"] = "false"
+            return config
+        }
+        return try environment["DIGUP_WORKER_DIR"].map { try python(URL(fileURLWithPath: $0)) }
     }
 }
 
