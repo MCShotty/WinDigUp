@@ -132,6 +132,7 @@ def test_export_real_embeddinggemma2_architecture_and_worker(tmp_path):
     manifest, fingerprint = worker.validate_bundle(output)
     # Metadata and a live encoder must agree, even though text-only does not load media encoders.
     assert worker.model_info(manifest, fingerprint, True, "CPU")["runtime"] == embedder.info["runtime"]
+    embedder.close()
     (output / "token_embeddings.npy").write_bytes(b"corrupted")
     with pytest.raises(ValueError, match="checksum"):
         worker.validate_bundle(output)

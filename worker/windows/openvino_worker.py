@@ -136,6 +136,14 @@ class Embedder:
             raise ValueError("tokenizer and model vocabulary do not match")
         return np.asarray(self.table[ids], np.float32) * self.scale
 
+    def close(self):
+        # Windows locks mapped files until their mappings close. End inference before releasing the
+        # table, so a completed session can be removed or replaced without restarting its host.
+        self.compiled = None
+        self.media_encoder = self.processor = None
+        if isinstance(self.table, np.memmap):
+            self.table._mmap.close()
+
     def _infer(self, embeddings, mask):
         count = embeddings.shape[1]
         if count > self.length:
@@ -281,7 +289,10 @@ def main():
         return 1
     reply({"ready": True, "info": info})
     if embedder is not None:
-        serve(embedder)
+        try:
+            serve(embedder)
+        finally:
+            embedder.close()
     return 0
 
 

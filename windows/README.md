@@ -58,7 +58,9 @@ dotnet build windows/WinDigUp/WinDigUp.csproj -p:Platform=x64
 ```
 
 The app offers a helper path setting. UI-only builds need a previously built `helper/digup.exe` and its libraries.
-CI builds the UI and CPU helper independently; these artifacts must be combined for a runnable distribution.
+CI builds the UI and CPU helper independently, then combines them into **WinDigUp-Windows-x64** and checks
+the packaged helper starts without the development toolchain on PATH. The CI package has CPU acceleration;
+build with CUDA/Vulkan SDKs for a GPU distribution.
 
 ## Intel NPU / OpenVINO
 
