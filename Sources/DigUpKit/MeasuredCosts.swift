@@ -94,7 +94,21 @@ public struct MeasuredCosts: Codable, Sendable, Equatable {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? encoder.encode(self).write(to: Self.file(in: folder), options: .atomic)
+        guard let data = try? encoder.encode(self) else { return }
+        #if os(Windows)
+        // Windows can briefly deny replacement while a scanner still has the previous file open.
+        // Keep the atomic write, and retry before dropping this best-effort statistics update.
+        for attempt in 0..<5 {
+            do {
+                try data.write(to: Self.file(in: folder), options: .atomic)
+                return
+            } catch {
+                if attempt < 4 { Thread.sleep(forTimeInterval: 0.01 * Double(attempt + 1)) }
+            }
+        }
+        #else
+        try? data.write(to: Self.file(in: folder), options: .atomic)
+        #endif
     }
 
     private static let lock = NSLock()

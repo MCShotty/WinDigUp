@@ -42,6 +42,14 @@ import Testing
         #expect(measured.tallies["image"] == MeasuredCosts.Tally(seconds: 152, units: 170))
     }
 
+    @Test func repeatedCostFileReplacementKeepsTheLatestSpeed() {
+        for step in 1...20 {
+            let speed = MeasuredCosts.Speed(embedding: Double(step) / 10, ocr: 1)
+            MeasuredCosts.setSpeed(speed, in: folder)
+            #expect(MeasuredCosts.load(from: folder).speed == speed)
+        }
+    }
+
     @Test func indexingKeepsWhatItCostsBesideTheIndex() throws {
         let notes = folder.appendingPathComponent("notes")
         try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
