@@ -1,12 +1,16 @@
 name: Windows port
 on:
   push:
+    branches: [main]
     paths: ['windows/**', 'worker/windows/**', 'Sources/**', 'Tests/**', 'scripts/**', 'Package.swift', '.github/workflows/windows.yml']
   pull_request:
     paths: ['windows/**', 'worker/windows/**', 'Sources/**', 'Tests/**', 'scripts/**', 'Package.swift', '.github/workflows/windows.yml']
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: windows-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   winui:
     runs-on: windows-2025
@@ -32,6 +36,16 @@ jobs:
         with:
           swift-version: swift-6.2.3-release
           swift-build: 6.2.3-RELEASE
+      - uses: actions/cache@v4
+        with:
+          path: |
+            Vendor/llama
+            Vendor/sqlite
+            Vendor/stb
+            Vendor/miniz
+            Vendor/pdfium
+            Vendor/VENDOR
+          key: windows-cpu-swift6.2.3-b11461-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
       - run: ./scripts/build-windows.ps1 -GpuBackends cpu -SkipApp -Test
       - uses: actions/upload-artifact@v4
         with:
