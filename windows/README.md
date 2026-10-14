@@ -59,9 +59,17 @@ dotnet build windows/WinDigUp/WinDigUp.csproj -p:Platform=x64
 ```
 
 The app offers a helper path setting. UI-only builds need a previously built `helper/digup.exe` and its libraries.
-CI builds the UI and CPU helper independently, then combines them into **WinDigUp-Windows-x64** and checks
-the packaged helper starts without the development toolchain on PATH. The CI package has CPU acceleration;
-build with CUDA/Vulkan SDKs for a GPU distribution.
+CI builds the UI plus separate CPU and Vulkan helpers, then publishes **WinDigUp-Windows-x64** (CPU)
+and **WinDigUp-Windows-x64-AMD-Vulkan** (AMD GPU, with CPU fallback). Both contain the full app.
+The AMD package includes the Vulkan backend, compiled shaders, loader, and license notices. CI checks
+that the packaged helper starts and the Vulkan module loads without a development SDK on PATH.
+`build-info.json` records the source commit, native build configuration and Vulkan SDK version.
+
+For AMD, download and extract **WinDigUp-Windows-x64-AMD-Vulkan**, install a current AMD graphics
+driver supporting Vulkan 1.3, and run `WinDigUp.exe`. Choose **AMD GPU · Vulkan**, add your folders,
+download the GGUF model, and save settings. The encoder status should show your AMD/Radeon device.
+GPU inference and performance must still be checked on the actual AMD machine; the CI runner has no AMD GPU.
+NVIDIA CUDA distributions require a build with the CUDA SDK.
 
 ## Intel NPU / OpenVINO
 

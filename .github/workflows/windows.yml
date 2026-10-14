@@ -26,7 +26,12 @@ jobs:
           name: WinUI-build
           path: windows/artifacts/WinUI
   helper:
+    name: helper (${{ matrix.backend }})
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [cpu, vulkan]
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
@@ -36,6 +41,12 @@ jobs:
         with:
           swift-version: swift-6.2.3-release
           swift-build: 6.2.3-RELEASE
+      - name: Install Vulkan SDK
+        if: matrix.backend == 'vulkan'
+        uses: humbletim/install-vulkan-sdk@30ba978f977e81b72d091fc8888feb1fb26f9aff
+        with:
+          version: latest
+          cache: true
       - uses: actions/cache@v4
         id: native-cache
         with:
@@ -46,12 +57,12 @@ jobs:
             Vendor/miniz
             Vendor/pdfium
             Vendor/VENDOR
-          key: windows-cpu-swift6.2.3-b11461-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
+          key: windows-${{ matrix.backend }}-swift6.2.3-b11461-${{ matrix.backend == 'vulkan' && format('sdk{0}-', env.VULKAN_SDK_VERSION) || '' }}${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
       - uses: FedericoCarboni/setup-ffmpeg@36c6454b5a2348e7794ba2d82a21506605921e3d
         with:
           ffmpeg-version: release
           linking-type: static
-      - run: ./scripts/build-windows.ps1 -GpuBackends cpu -SkipApp -Test
+      - run: ./scripts/build-windows.ps1 -GpuBackends ${{ matrix.backend }} -SkipApp -Test
       - uses: actions/cache/save@v4
         if: always() && hashFiles('Vendor/llama/BUILD') != '' && steps.native-cache.outputs.cache-hit != 'true'
         with:
@@ -62,10 +73,10 @@ jobs:
             Vendor/miniz
             Vendor/pdfium
             Vendor/VENDOR
-          key: windows-cpu-swift6.2.3-b11461-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
+          key: windows-${{ matrix.backend }}-swift6.2.3-b11461-${{ matrix.backend == 'vulkan' && format('sdk{0}-', env.VULKAN_SDK_VERSION) || '' }}${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-no-logits.patch', 'scripts/fetch-vendor.sh') }}
       - uses: actions/upload-artifact@v4
         with:
-          name: DigUp-Windows-helper
+          name: DigUp-Windows-helper-${{ matrix.backend }}
           path: windows/artifacts/WinDigUp
   openvino:
     runs-on: windows-2025
@@ -79,24 +90,32 @@ jobs:
       - run: python -m pip install transformers==5.19.0
       - run: python -m pytest -q worker/windows/test_openvino_worker.py
   package:
+    name: package (${{ matrix.backend }})
     needs: [winui, helper, openvino]
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cpu
+            artifact: WinDigUp-Windows-x64
+          - backend: vulkan
+            artifact: WinDigUp-Windows-x64-AMD-Vulkan
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: WinUI-build
           path: package/WinDigUp
       - uses: actions/download-artifact@v4
         with:
-          name: DigUp-Windows-helper
+          name: DigUp-Windows-helper-${{ matrix.backend }}
           path: package/WinDigUp
-      - name: Verify helper without the development toolchain on PATH
+      - name: Verify packaged helper and backend without the development toolchain
         shell: pwsh
         run: |
-          $env:Path = "$env:SystemRoot/System32;$env:SystemRoot"
-          & ./package/WinDigUp/helper/digup.exe --help
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged helper could not start with its bundled libraries.' }
+          ./scripts/verify-windows-package.ps1 -PackageDirectory ./package/WinDigUp -Backend ${{ matrix.backend }}
       - uses: actions/upload-artifact@v4
         with:
-          name: WinDigUp-Windows-x64
+          name: ${{ matrix.artifact }}
           path: package/WinDigUp

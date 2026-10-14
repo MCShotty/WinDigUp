@@ -1,0 +1,10 @@
+WinDigUp's AMD Vulkan package includes ggml-vulkan.dll from llama.cpp (MIT license,
+covered by Acknowledgements.txt) and vulkan-1.dll, the Khronos Vulkan Loader.
+
+Vulkan Loader source: https://github.com/KhronosGroup/Vulkan-Loader
+License: Apache License 2.0; see Vulkan-Loader-LICENSE.txt.
+The SDK version used for the build is recorded in build-info.json.
+
+The shader compiler and development SDK are not required to run this package.
+Install a current AMD graphics driver with Vulkan 1.3 support. The loader does not
+replace the driver's Vulkan implementation. Select AMD GPU / Vulkan in settings.

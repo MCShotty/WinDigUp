@@ -41,6 +41,18 @@ try {
     Copy-Item (Join-Path $bin 'digup.exe') $helper
     Copy-Item 'Vendor/llama/lib/*.dll' $helper
     Copy-Item 'Vendor/pdfium/bin/*.dll' $helper
+    if (Test-Path (Join-Path $helper 'ggml-vulkan.dll')) {
+        # The SDK is needed to compile shaders, but the package needs only the loader and a GPU driver.
+        $vulkanCandidates = @()
+        if ($env:VULKAN_SDK) { $vulkanCandidates += (Join-Path $env:VULKAN_SDK 'Bin/vulkan-1.dll') }
+        $shaderCompiler = Get-Command glslc -ErrorAction SilentlyContinue
+        if ($shaderCompiler) { $vulkanCandidates += (Join-Path (Split-Path $shaderCompiler.Source -Parent) 'vulkan-1.dll') }
+        $vulkanCandidates += (Join-Path $env:SystemRoot 'System32/vulkan-1.dll')
+        $vulkanLoader = $vulkanCandidates | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+        if (-not $vulkanLoader) { throw 'The Vulkan loader vulkan-1.dll is missing from the SDK and system runtime.' }
+        Copy-Item $vulkanLoader $helper
+        Copy-Item 'windows/Vulkan-NOTICE.txt', 'windows/Vulkan-Loader-LICENSE.txt' $artifact
+    }
     foreach ($tool in @('ffmpeg', 'ffprobe')) {
         $program = (Get-Command $tool).Source
         Copy-Item $program $helper
@@ -85,6 +97,13 @@ try {
     Copy-Item 'worker/windows/openvino_worker.py' (Join-Path $artifact 'worker')
     Copy-Item 'Resources/Acknowledgements.txt', 'LICENSE' $artifact
     Copy-Item 'windows/FFmpeg-NOTICE.txt' $artifact
+    [ordered]@{
+        schema = 1
+        commit = (git rev-parse HEAD).Trim()
+        native_build = (Get-Content 'Vendor/llama/BUILD' -Raw).Trim()
+        vulkan_sdk = $(if (Test-Path (Join-Path $helper 'ggml-vulkan.dll')) { $env:VULKAN_SDK_VERSION } else { $null })
+        backend_modules = @(Get-ChildItem $helper -Filter 'ggml-*.dll' -File | Select-Object -ExpandProperty Name)
+    } | ConvertTo-Json | Set-Content (Join-Path $artifact 'build-info.json') -Encoding utf8
     if (-not $SkipApp) {
         Invoke-Checked { dotnet run --project windows/WinDigUp.Core.Tests -c Release }
         Invoke-Checked { dotnet publish windows/WinDigUp/WinDigUp.csproj -c Release -p:Platform=x64 --self-contained true -o $artifact }
