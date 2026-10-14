@@ -13,6 +13,7 @@ public sealed class SearchClient(HelperLaunch launch) : IAsyncDisposable
     private Task? _reader;
     private long _nextId;
     private bool _disposed;
+    private bool _restartRequired;
     public event Action<JsonElement>? Event;
 
     public async Task<JsonElement> AskAsync(object request, CancellationToken cancellation = default)
@@ -28,15 +29,18 @@ public sealed class SearchClient(HelperLaunch launch) : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellation.ThrowIfCancellationRequested();
-            if (_process is null || _process.HasExited || _reader?.IsCompleted == true)
+            if (_process is null || _process.HasExited || Volatile.Read(ref _restartRequired) || _reader?.IsCompleted == true)
             {
                 // Await the old reader before starting again: its failure must not reach the new generation.
                 if (_reader is not null) await _reader;
+                if (_process is not null) await HelperLaunch.AbortAsync(_process);
                 _process?.Dispose();
-                _process = launch.Start();
-                _reader = ReadAsync(_process);
+                _process = null; _reader = null;
+                Volatile.Write(ref _restartRequired, false);
             }
+            // Register before starting the reader: a helper can fail before the first write.
             _pending[id] = completion;
+            if (_process is null) { _process = launch.Start(); _reader = ReadAsync(_process); }
             var message = JsonSerializer.SerializeToNode(request)!.AsObject();
             message["id"] = id;
             await _process.StandardInput.WriteLineAsync(message.ToJsonString());
@@ -80,8 +84,10 @@ public sealed class SearchClient(HelperLaunch launch) : IAsyncDisposable
         { failure = error; }
         finally
         {
+            Volatile.Write(ref _restartRequired, true);
             foreach (var id in _pending.Keys)
                 if (_pending.TryRemove(id, out var pending)) pending.TrySetException(failure);
+            if (!Volatile.Read(ref _disposed)) await HelperLaunch.AbortAsync(process);
         }
     }
 
@@ -93,7 +99,8 @@ public sealed class SearchClient(HelperLaunch launch) : IAsyncDisposable
             if (_disposed) return;
             _disposed = true;
             if (_process is not null) await HelperLaunch.StopAsync(_process, "{\"op\":\"quit\"}");
-            if (_reader is not null) await _reader;
+            try { if (_reader is not null) await _reader; }
+            finally { _process?.Dispose(); }
         }
         finally { _write.Release(); }
     }

@@ -26,31 +26,59 @@ public sealed record HelperLaunch(string Executable, IReadOnlyList<string> Argum
 
     private async Task DrainErrorsAsync(Process process)
     {
+        StreamWriter? log = null;
         try
         {
-            await using var log = Log is null ? null : new StreamWriter(
-                new FileStream(Log, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false)) { AutoFlush = true };
+            if (Log is not null)
+            {
+                try { log = new StreamWriter(new FileStream(Log, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
+                    new UTF8Encoding(false)) { AutoFlush = true }; }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            }
+            // A missing/unwritable log must never stop draining the pipe and block the helper.
             while (await process.StandardError.ReadLineAsync() is { } line)
-                if (log is not null) await log.WriteLineAsync(line);
+                if (log is not null)
+                {
+                    try { await log.WriteLineAsync(line); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                    {
+                        try { await log.DisposeAsync(); } catch (IOException) { }
+                        log = null;
+                    }
+                }
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException) { }
+        finally { if (log is not null) { try { await log.DisposeAsync(); } catch (IOException) { } } }
     }
 
     internal static async Task StopAsync(Process process, string farewell)
     {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         try
         {
             if (!process.HasExited)
             {
-                await process.StandardInput.WriteLineAsync(farewell);
-                process.StandardInput.Close();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                try
+                {
+                    await process.StandardInput.WriteLineAsync(farewell.AsMemory(), timeout.Token).WaitAsync(timeout.Token);
+                    process.StandardInput.Close();
+                }
+                catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException) { }
                 try { await process.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); }
+                catch (OperationCanceledException) { await AbortAsync(process); }
             }
         }
-        catch (Exception error) when (error is IOException or InvalidOperationException) { }
-        finally { process.Dispose(); }
+        catch (InvalidOperationException) { }
+    }
+
+    internal static async Task AbortAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+        }
+        catch (InvalidOperationException) { }
     }
 }
 
@@ -60,6 +88,7 @@ public sealed class EventHelper : IAsyncDisposable
     private readonly Process _process;
     private readonly Task _reader;
     private readonly string _farewell;
+    private int _stopping;
     public Task Completion => _reader;
     public async Task SendAsync(string command)
     {
@@ -82,18 +111,26 @@ public sealed class EventHelper : IAsyncDisposable
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 using var document = JsonDocument.Parse(line);
-                receive(document.RootElement.Clone());
+                if (Volatile.Read(ref _stopping) == 0) receive(document.RootElement.Clone());
             }
             await _process.WaitForExitAsync();
-            receive(JsonSerializer.SerializeToElement(new { @event = "helper_exit", exit_code = _process.ExitCode }));
+            if (Volatile.Read(ref _stopping) == 0)
+                receive(JsonSerializer.SerializeToElement(new { @event = "helper_exit", exit_code = _process.ExitCode }));
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException or JsonException)
-        { receive(JsonSerializer.SerializeToElement(new { @event = "error", message = error.Message })); }
+        {
+            if (Volatile.Read(ref _stopping) == 0)
+            {
+                receive(JsonSerializer.SerializeToElement(new { @event = "error", message = error.Message }));
+                await HelperLaunch.AbortAsync(_process);
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        await HelperLaunch.StopAsync(_process, _farewell);
-        await _reader;
+        if (Interlocked.Exchange(ref _stopping, 1) == 0) await HelperLaunch.StopAsync(_process, _farewell);
+        try { await _reader; }
+        finally { _process.Dispose(); }
     }
 }

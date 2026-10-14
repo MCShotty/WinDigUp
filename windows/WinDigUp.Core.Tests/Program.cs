@@ -1,8 +1,48 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using WinDigUp.Core;
+
+if (args.FirstOrDefault() == "--fake-bad-helper")
+{
+    Console.WriteLine(JsonSerializer.Serialize(new { @event = "started", pid = Environment.ProcessId }));
+    Console.WriteLine("{invalid-json");
+    await Task.Delay(30000); // A broken output stream must not leave this process alive.
+    return;
+}
+
+if (args.FirstOrDefault() is "search-service" or "index-service" or "download-model")
+{
+    var models = Environment.GetEnvironmentVariable("DIGUP_MODELS")!;
+    var versionFile = Path.Combine(models, "test-version");
+    var modelFile = Path.Combine(models, "test-model");
+    void Emit(string name) => Console.WriteLine(JsonSerializer.Serialize(new { @event = name }));
+    if (args[0] == "index-service")
+    {
+        Emit("sync"); await Task.Delay(100);
+        await File.WriteAllTextAsync(versionFile, "42"); Emit("file"); Emit("idle");
+        while (Console.ReadLine() is { } command)
+            if (command == "stop") Environment.Exit(9); // Expected stops must not report a crash.
+        return;
+    }
+    if (args[0] == "download-model") { await File.WriteAllTextAsync(modelFile, "ready"); Emit("done"); return; }
+    var version = File.ReadAllText(versionFile);
+    string? encoder = null;
+    while (Console.ReadLine() is { } line)
+    {
+        using var document = JsonDocument.Parse(line);
+        var message = document.RootElement;
+        var op = message.GetProperty("op").GetString();
+        if (op == "quit") return;
+        if (op == "reload") version = File.ReadAllText(versionFile);
+        if (op == "prewarm") encoder ??= File.Exists(modelFile) ? "ready" : "unavailable";
+        if (op == "slow") await Task.Delay(250);
+        Console.WriteLine(JsonSerializer.Serialize(new { id = message.GetProperty("id").GetInt64(), version, encoder }));
+    }
+    return;
+}
 
 if (args.FirstOrDefault() == "--fake-helper")
 {
@@ -14,6 +54,7 @@ if (args.FirstOrDefault() == "--fake-helper")
         if (message.GetProperty("op").GetString() == "quit") break;
         if (message.GetProperty("op").GetString() == "crash") Environment.Exit(7);
         if (message.GetProperty("op").GetString() == "slow") await Task.Delay(250);
+        if (message.GetProperty("op").GetString() == "stderr") Console.Error.WriteLine(new string('x', 256 * 1024));
         Console.WriteLine(JsonSerializer.Serialize(new
         {
             id = message.GetProperty("id").GetInt64(), ok = true,
@@ -75,12 +116,95 @@ try
     Check((await client.AskAsync(new { op = "search", q = "after cancellation" }, timeout.Token)).GetProperty("q").GetString() == "after cancellation", "late reply cannot poison next query");
     try { await client.AskAsync(new { op = "crash" }, timeout.Token); throw new Exception("crash was not reported"); }
     catch (IOException) { checks++; }
-    // Reader completion and process exit can be separated by a few milliseconds.
-    await Task.Delay(50);
     Check((await client.AskAsync(new { op = "search", q = "after restart" }, timeout.Token)).GetProperty("q").GetString() == "after restart", "helper restarts after crash");
     await client.DisposeAsync();
     try { await client.AskAsync(new { op = "search" }); throw new Exception("disposed client accepted a request"); }
     catch (ObjectDisposedException) { checks++; }
+
+    using var regressionTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+    await using (var noLog = new SearchClient(new HelperLaunch(dotnet, [assembly, "--fake-helper"],
+        settings.HelperEnvironment(), folder))) // A directory cannot be opened as a log file.
+    {
+        await noLog.AskAsync(new { op = "stderr" }, regressionTimeout.Token);
+        Check(true, "unwritable log cannot block stderr or helper replies");
+    }
+
+    var pids = new ConcurrentQueue<int>();
+    await using (var broken = new SearchClient(new HelperLaunch(dotnet, [assembly, "--fake-bad-helper"], settings.HelperEnvironment())))
+    {
+        broken.Event += message => pids.Enqueue(message.GetProperty("pid").GetInt32());
+        try
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                try { await broken.AskAsync(new { op = "search" }, regressionTimeout.Token); throw new Exception("bad protocol was accepted"); }
+                catch (Exception error) when (error is JsonException or IOException) { checks++; }
+            }
+            Check(pids.Count == 2, "broken protocol restarts a fresh helper");
+            var firstPid = pids.First();
+            bool running;
+            try { using var process = Process.GetProcessById(firstPid); running = !process.HasExited; }
+            catch (ArgumentException) { running = false; }
+            Check(!running, "broken helper is terminated before replacement");
+        }
+        finally
+        {
+            foreach (var pid in pids)
+                try { using var process = Process.GetProcessById(pid); if (!process.HasExited) process.Kill(true); }
+                catch (ArgumentException) { }
+        }
+    }
+
+    // Run the real Engine against executable helpers with the CLI's event/request behavior.
+    // The fake helper never opens the app's index database; fixture files stay in this temporary folder.
+    Environment.SetEnvironmentVariable("DOTNET_ROOT", Path.GetDirectoryName(dotnet));
+    var watched = Path.Combine(folder, "watched");
+    var models = Path.Combine(folder, "models");
+    Directory.CreateDirectory(watched); Directory.CreateDirectory(models);
+    await File.WriteAllTextAsync(Path.Combine(models, "test-version"), "0");
+    var engineSettings = new Settings
+    {
+        HelperPath = Path.Combine(AppContext.BaseDirectory, Path.GetFileNameWithoutExtension(assembly)
+            + (OperatingSystem.IsWindows() ? ".exe" : "")),
+        ModelsPath = models, Folders = [watched]
+    };
+    var engineEvents = new ConcurrentQueue<JsonElement>();
+    var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    await using (var engine = new Engine())
+    {
+        engine.Event += message =>
+        {
+            engineEvents.Enqueue(message);
+            var name = message.GetProperty("event").GetString();
+            if (name == "idle") idle.TrySetResult();
+            if (name == "done") done.TrySetResult();
+        };
+        await engine.ConfigureAsync(engineSettings);
+        Check((await engine.AskAsync(new { op = "prewarm" }, regressionTimeout.Token)).GetProperty("encoder").GetString() == "unavailable", "fixture encoder fails before download");
+        await engine.SyncAsync();
+        await idle.Task.WaitAsync(regressionTimeout.Token);
+        using (var refreshTimeout = CancellationTokenSource.CreateLinkedTokenSource(regressionTimeout.Token))
+        {
+            refreshTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+            while ((await engine.AskAsync(new { op = "status" }, refreshTimeout.Token)).GetProperty("version").GetString() != "42")
+                await Task.Delay(100, refreshTimeout.Token);
+        }
+        Check(true, "final index event gets a trailing reload");
+        await engine.DownloadAsync();
+        await done.Task.WaitAsync(regressionTimeout.Token);
+        Check((await engine.AskAsync(new { op = "prewarm" }, regressionTimeout.Token)).GetProperty("encoder").GetString() == "ready", "model download recovers unavailable encoder");
+        await engine.SetPausedAsync(true);
+        Check(!engineEvents.Any(message => message.GetProperty("event").GetString() is "error" or "warning"
+            || message.GetProperty("event").GetString() == "helper_exit" && message.GetProperty("exit_code").GetInt32() != 0), "intentional helper stops do not show crash errors");
+        var stale = engine.AskAsync(new { op = "slow" }, regressionTimeout.Token);
+        await engine.ConfigureAsync(engineSettings);
+        try { await stale; throw new Exception("old configuration returned a reply"); }
+        catch (OperationCanceledException) { checks++; }
+        await engine.DisposeAsync();
+        try { await engine.SetPausedAsync(false); throw new Exception("disposed engine accepted resume"); }
+        catch (ObjectDisposedException) { checks++; }
+    }
     Console.WriteLine($"PASS: {checks} Windows core and helper integration checks");
 }
 finally { Directory.Delete(folder, recursive: true); }

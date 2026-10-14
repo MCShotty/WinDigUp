@@ -22,7 +22,7 @@ public sealed partial class MainWindow : Window
     private readonly nint _handle;
     private NativeDesktop? _desktop;
     private CancellationTokenSource? _queryCancellation, _previewCancellation;
-    private bool _loaded, _quitting, _configured;
+    private bool _loaded, _quitting;
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     public MainWindow()
@@ -31,7 +31,13 @@ public sealed partial class MainWindow : Window
         SystemBackdrop = new MicaBackdrop();
         _handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1060, 780));
-        AppWindow.Closing += (_, args) => { if (!_quitting) { args.Cancel = true; _desktop?.Hide(); } };
+        AppWindow.Closing += (_, args) =>
+        {
+            if (_quitting) return;
+            args.Cancel = true;
+            if (_desktop?.CanHide == true) _desktop.Hide();
+            else DispatcherQueue.TryEnqueue(async () => await QuitAsync());
+        };
         Folders.ItemsSource = _folders; CodeFolders.ItemsSource = _codeFolders; Results.ItemsSource = _hits;
         Logo.Source = new BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "logo.png")));
         _engine.Event += message => DispatcherQueue.TryEnqueue(() => Receive(message));
@@ -41,16 +47,24 @@ public sealed partial class MainWindow : Window
     {
         if (_loaded) return;
         _loaded = true;
-        _desktop = new NativeDesktop(_handle, action => DispatcherQueue.TryEnqueue(() => DesktopAction(action)));
+        await Run(() =>
+        {
+            _desktop = new NativeDesktop(_handle, action => DispatcherQueue.TryEnqueue(() => DesktopAction(action)));
+            return Task.CompletedTask;
+        });
         await Run(async () =>
         {
+            FillSettings();
             _settings = await SettingsStore.LoadAsync(_settingsFile);
             FillSettings();
             if (_folders.Count + _codeFolders.Count == 0) { SettingsPanel.IsExpanded = true; return; }
-            await _engine.ConfigureAsync(_settings); _configured = true;
+            await ApplySettingsAsync(_settings);
             await _engine.SyncAsync();
         });
-        if (!_desktop.HotkeyRegistered) ShowNotice("Ctrl+Shift+Space is already in use. You can open WinDigUp from the tray.");
+        if (_desktop is { HotkeyRegistered: false, TrayRegistered: true })
+            ShowNotice("Ctrl+Shift+Space is already in use. You can open WinDigUp from the tray.");
+        else if (_desktop is { CanHide: false })
+            ShowNotice("The tray and global shortcut are unavailable. Closing this window will quit WinDigUp.");
         Query.Focus(FocusState.Programmatic);
     }
 
@@ -76,15 +90,24 @@ public sealed partial class MainWindow : Window
         SkippedFolders = SkippedFolders.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
     };
 
+    private async Task ApplySettingsAsync(Settings settings)
+    {
+        settings.Validate();
+        _queryCancellation?.Cancel(); _previewCancellation?.Cancel();
+        _hits.Clear(); ClearPreview();
+        await _engine.ConfigureAsync(settings);
+        _settings = settings;
+    }
+
     private async void SaveClick(object sender, RoutedEventArgs args) => await Run(async () =>
     {
         SaveSettings.IsEnabled = false;
         try
         {
             var settings = ReadSettings();
-            await _engine.ConfigureAsync(settings);
+            await ApplySettingsAsync(settings);
             await SettingsStore.SaveAsync(settings, _settingsFile);
-            _settings = settings; _configured = true; SettingsPanel.IsExpanded = false; Notice.IsOpen = false;
+            SettingsPanel.IsExpanded = false; Notice.IsOpen = false;
             await _engine.SyncAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
             await _engine.AskAsync(new { op = "prewarm" }, timeout.Token);
@@ -105,7 +128,7 @@ public sealed partial class MainWindow : Window
     private void SettingsClick(object sender, RoutedEventArgs args) => SettingsPanel.IsExpanded = !SettingsPanel.IsExpanded;
     private async void DownloadClick(object sender, RoutedEventArgs args) => await Run(async () =>
     {
-        if (!_configured) { await _engine.ConfigureAsync(ReadSettings()); _configured = true; }
+        await ApplySettingsAsync(ReadSettings());
         await _engine.DownloadAsync();
     });
     private async void SyncClick(object sender, RoutedEventArgs args) => await Run(() => _engine.SyncAsync());
@@ -124,6 +147,7 @@ public sealed partial class MainWindow : Window
     private void FilterChanged(object sender, SelectionChangedEventArgs args) { if (_loaded) ScheduleSearch(); }
     private void ScheduleSearch()
     {
+        if (_quitting) return;
         _queryCancellation?.Cancel(); _queryCancellation?.Dispose();
         _queryCancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         _ = SearchAsync(_queryCancellation.Token);
@@ -152,7 +176,7 @@ public sealed partial class MainWindow : Window
             if (hits.Length == 0) PreviewText.Text = "No matches yet. Check your folders or let indexing finish.";
         }
         catch (OperationCanceledException) { }
-        catch (Exception error) { ShowNotice(error.Message); }
+        catch (Exception error) { if (!cancellation.IsCancellationRequested) ShowNotice(error.Message); }
     }
 
     private void QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
@@ -162,8 +186,9 @@ public sealed partial class MainWindow : Window
     private async void ResultSelected(object sender, SelectionChangedEventArgs args)
     {
         _previewCancellation?.Cancel(); _previewCancellation?.Dispose();
+        _previewCancellation = null;
+        if (Results.SelectedItem is not SearchHit hit) { ClearPreview(); return; }
         _previewCancellation = new(TimeSpan.FromSeconds(45));
-        if (Results.SelectedItem is not SearchHit hit) return;
         PreviewTitle.Text = hit.Name; PreviewImage.Source = null; PreviewText.Text = hit.Detail;
         var cancellation = _previewCancellation.Token;
         await Run(async () =>
@@ -181,7 +206,14 @@ public sealed partial class MainWindow : Window
                 if (rendered.TryGetProperty("image", out var image) && image.ValueKind == JsonValueKind.String)
                     PreviewImage.Source = new BitmapImage(new Uri(image.GetString()!));
             }
-        });
+        }, cancellation);
+    }
+
+    private void ClearPreview()
+    {
+        PreviewTitle.Text = "Search by meaning or exact words";
+        PreviewImage.Source = null;
+        PreviewText.Text = "Pick a result to preview its page, passage, picture or moment.";
     }
 
     private void ResultClicked(object sender, ItemClickEventArgs args) { if (args.ClickedItem is SearchHit hit) Results.SelectedItem = hit; }
@@ -220,12 +252,20 @@ public sealed partial class MainWindow : Window
 
     private void KeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Key == VirtualKey.Escape) { _desktop?.Hide(); args.Handled = true; }
+        if (args.Key == VirtualKey.Escape && _desktop?.CanHide == true) { _desktop.Hide(); args.Handled = true; }
+    }
+
+    private void QueryKeyDown(object sender, KeyRoutedEventArgs args)
+    {
         if (args.Key is VirtualKey.Down or VirtualKey.Up && _hits.Count > 0)
         {
             Results.SelectedIndex = Math.Clamp(Results.SelectedIndex + (args.Key == VirtualKey.Down ? 1 : -1), 0, _hits.Count - 1);
             Results.ScrollIntoView(Results.SelectedItem); args.Handled = true;
         }
+    }
+
+    private void ResultsKeyDown(object sender, KeyRoutedEventArgs args)
+    {
         if (args.Key == VirtualKey.Enter && Results.SelectedItem is SearchHit hit) { Open(hit); args.Handled = true; }
     }
 
@@ -246,7 +286,9 @@ public sealed partial class MainWindow : Window
             case "file": Status.Text = message.TryGetProperty("path", out var path) ? $"Indexing {Path.GetFileName(path.GetString())}" : "Indexing…"; break;
             case "progress":
                 Status.Text = message.TryGetProperty("bytes", out var bytes) ? $"Downloading model · {bytes.GetInt64() / (1 << 20)} MB" : "Downloading model…"; break;
-            case "done": Status.Text = "Model ready. Indexing your folders."; break;
+            case "done":
+                Status.Text = _engine.Paused ? "Model ready. Indexing paused." : "Model ready. Indexing your folders.";
+                ScheduleSearch(); break;
             case "helper_exit":
                 if (message.GetProperty("exit_code").GetInt32() != 0) ShowNotice("A helper stopped. Check the logs in " + _settings.IndexDirectory);
                 break;
@@ -265,13 +307,14 @@ public sealed partial class MainWindow : Window
     {
         if (_quitting) return;
         _quitting = true; _queryCancellation?.Cancel(); _previewCancellation?.Cancel();
-        _desktop?.Dispose(); await _engine.DisposeAsync(); Close(); Application.Current.Exit();
+        try { _desktop?.Dispose(); await _engine.DisposeAsync(); }
+        finally { Close(); Application.Current.Exit(); }
     }
-    private async Task Run(Func<Task> work)
+    private async Task Run(Func<Task> work, CancellationToken cancellation = default)
     {
         try { await work(); }
         catch (OperationCanceledException) { }
-        catch (Exception error) { ShowNotice(error.Message); }
+        catch (Exception error) { if (!cancellation.IsCancellationRequested) ShowNotice(error.Message); }
     }
     private void ShowNotice(string message) { Notice.Message = message; Notice.Severity = InfoBarSeverity.Warning; Notice.IsOpen = true; }
 }

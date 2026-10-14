@@ -12,6 +12,8 @@ internal sealed class NativeDesktop : IDisposable
     private readonly uint _taskbarCreated;
     private NotifyIcon _icon;
     public bool HotkeyRegistered { get; }
+    public bool TrayRegistered { get; private set; }
+    public bool CanHide => HotkeyRegistered || TrayRegistered;
 
     public NativeDesktop(nint window, Action<string> action)
     {
@@ -25,13 +27,14 @@ internal sealed class NativeDesktop : IDisposable
             CallbackMessage = TrayMessage, Icon = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "Assets", "icon.ico"), 1, 16, 16, 0x10),
             Tip = "WinDigUp · Ctrl+Shift+Space", Info = "", InfoTitle = ""
         };
-        ShellNotifyIcon(0, ref _icon);
+        TrayRegistered = _icon.Icon != 0 && ShellNotifyIcon(0, ref _icon);
     }
 
     private nint WindowProc(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
     {
         if (message == 0x0312 || message == ShowMessage) _action("show");
-        if (message == _taskbarCreated) ShellNotifyIcon(0, ref _icon);
+        if (_taskbarCreated != 0 && message == _taskbarCreated)
+            TrayRegistered = _icon.Icon != 0 && ShellNotifyIcon(0, ref _icon);
         if (message == TrayMessage)
         {
             if ((uint)lParam is 0x0202 or 0x0203) _action("show");

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 
 namespace WinDigUp.Core;
@@ -11,7 +12,11 @@ public sealed class Engine : IAsyncDisposable
     private FolderMonitor? _monitor;
     private Timer? _periodic;
     private bool _disposed;
-    private DateTime _lastReload = DateTime.MinValue;
+    private readonly object _reloadGate = new();
+    private CancellationTokenSource? _reloadCancellation;
+    private Task? _reloadTask;
+    private bool _reloadRequested;
+    private long _generation;
     public Settings Settings { get; private set; } = new();
     public bool Paused { get; private set; }
     public event Action<JsonElement>? Event;
@@ -23,28 +28,48 @@ public sealed class Engine : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            await StopAsync();
-            Settings = settings;
-            Directory.CreateDirectory(settings.IndexDirectory);
-            _search = new SearchClient(Launch(settings.Arguments("search-service"), "search.log"));
-            _search.Event += Receive;
-            _monitor = new FolderMonitor(settings.Folders.Concat(settings.CodeFolders),
-                () => _ = SyncSafelyAsync(), Warn);
-            // Also catches a reconnected drive and changes made while its watcher was unavailable.
-            _periodic = new Timer(_ => _ = SyncSafelyAsync(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+            await ConfigureCoreAsync(settings);
         }
         finally { _lifecycle.Release(); }
     }
 
-    public Task<JsonElement> AskAsync(object request, CancellationToken cancellation = default) =>
-        (_search ?? throw new InvalidOperationException("Choose folders and save settings first.")).AskAsync(request, cancellation);
+    private async Task ConfigureCoreAsync(Settings settings)
+    {
+        await StopAsync();
+        Settings = settings;
+        Directory.CreateDirectory(settings.IndexDirectory);
+        var generation = Volatile.Read(ref _generation);
+        _reloadCancellation = new();
+        _search = new SearchClient(Launch(settings.Arguments("search-service"), "search.log"));
+        _search.Event += message => Receive(message, generation);
+        _monitor = new FolderMonitor(settings.Folders.Concat(settings.CodeFolders),
+            () => _ = SyncSafelyAsync(generation), Warn);
+        // Also catches a reconnected drive and changes made while its watcher was unavailable.
+        _periodic = new Timer(_ => _ = SyncSafelyAsync(generation), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+    }
 
-    public async Task SyncAsync()
+    public async Task<JsonElement> AskAsync(object request, CancellationToken cancellation = default)
+    {
+        var search = _search ?? throw new InvalidOperationException("Choose folders and save settings first.");
+        try
+        {
+            var reply = await search.AskAsync(request, cancellation);
+            if (!ReferenceEquals(search, _search)) throw new OperationCanceledException("The settings changed.", cancellation);
+            return reply;
+        }
+        catch (Exception) when (!ReferenceEquals(search, _search))
+        { throw new OperationCanceledException("The settings changed.", cancellation); }
+    }
+
+    public Task SyncAsync() => SyncAsync(null);
+
+    private async Task SyncAsync(long? generation)
     {
         await _lifecycle.WaitAsync();
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            if (generation is not null && generation != Volatile.Read(ref _generation)) return;
             if (Paused || Settings.Folders.Length + Settings.CodeFolders.Length == 0) return;
             if (_index is not null && !_index.Completion.IsCompleted)
             {
@@ -53,16 +78,18 @@ public sealed class Engine : IAsyncDisposable
                 return;
             }
             if (_index is not null) await _index.DisposeAsync();
-            _index = new EventHelper(Launch(Settings.Arguments("index-service"), "index.log"), "stop", Receive);
+            var current = Volatile.Read(ref _generation);
+            _index = new EventHelper(Launch(Settings.Arguments("index-service"), "index.log"), "stop",
+                message => Receive(message, current));
         }
         finally { _lifecycle.Release(); }
     }
 
-    private async Task SyncSafelyAsync()
+    private async Task SyncSafelyAsync(long generation)
     {
-        try { await SyncAsync(); }
-        catch (Exception error) when (error is IOException or InvalidOperationException or ObjectDisposedException)
-        { if (!_disposed) Warn(error.Message); }
+        try { await SyncAsync(generation); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException)
+        { if (!_disposed && generation == Volatile.Read(ref _generation)) Warn(error.Message); }
     }
 
     public async Task SetPausedAsync(bool paused)
@@ -70,6 +97,7 @@ public sealed class Engine : IAsyncDisposable
         await _lifecycle.WaitAsync();
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             Paused = paused;
             if (paused && _index is not null) { await _index.DisposeAsync(); _index = null; }
         }
@@ -87,7 +115,9 @@ public sealed class Engine : IAsyncDisposable
                 throw new InvalidOperationException("OpenVINO uses a locally exported bundle. Run worker/windows/export_openvino.py.");
             if (_download is not null && !_download.Completion.IsCompleted) return;
             if (_download is not null) await _download.DisposeAsync();
-            _download = new EventHelper(Launch(["download-model", "--to", Settings.ModelsPath], "download.log"), "", Receive);
+            var generation = Volatile.Read(ref _generation);
+            _download = new EventHelper(Launch(["download-model", "--to", Settings.ModelsPath], "download.log"), "",
+                message => Receive(message, generation));
         }
         finally { _lifecycle.Release(); }
     }
@@ -96,34 +126,92 @@ public sealed class Engine : IAsyncDisposable
         Settings.HelperEnvironment(), Path.Combine(Settings.IndexDirectory, log));
 
     private void Warn(string message) => Event?.Invoke(JsonSerializer.SerializeToElement(new { @event = "warning", message }));
-    private void Receive(JsonElement message)
+    private void Receive(JsonElement message, long generation)
     {
-        Event?.Invoke(message);
+        if (_disposed || generation != Volatile.Read(ref _generation)) return;
         var name = message.TryGetProperty("event", out var value) ? value.GetString() : "";
-        if (name == "done") _ = SyncSafelyAsync();
-        if (name is "file" or "idle" or "summary" or "sync") _ = ReloadSafelyAsync();
+        if (name == "done") { _ = ModelDownloadedAsync(message, generation); return; }
+        Event?.Invoke(message);
+        if (name is "file" or "idle" or "summary" or "sync") ScheduleReload(generation);
     }
 
-    private async Task ReloadSafelyAsync()
+    private async Task ModelDownloadedAsync(JsonElement message, long generation)
     {
-        if (DateTime.UtcNow - _lastReload < TimeSpan.FromSeconds(2)) return;
-        _lastReload = DateTime.UtcNow;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await AskAsync(new { op = "reload" }, timeout.Token);
+            await _lifecycle.WaitAsync();
+            try
+            {
+                if (_disposed || generation != Volatile.Read(ref _generation)) return;
+                // search-service remembers an unavailable encoder. Replace it after installation,
+                // so a search made before the download does not disable meaning search indefinitely.
+                await ConfigureCoreAsync(Settings);
+                generation = Volatile.Read(ref _generation);
+            }
+            finally { _lifecycle.Release(); }
+            await SyncAsync(generation);
+            if (!_disposed && generation == Volatile.Read(ref _generation)) Event?.Invoke(message);
         }
-        catch (Exception error) when (error is IOException or OperationCanceledException or InvalidOperationException or ObjectDisposedException)
-        { }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException)
+        { if (!_disposed && generation == Volatile.Read(ref _generation)) Warn(error.Message); }
+    }
+
+    private void ScheduleReload(long generation)
+    {
+        lock (_reloadGate)
+        {
+            if (generation != Volatile.Read(ref _generation) || _search is null || _reloadCancellation is null) return;
+            _reloadRequested = true;
+            _reloadTask ??= ReloadAsync(_search, generation, _reloadCancellation.Token);
+        }
+    }
+
+    private async Task ReloadAsync(SearchClient search, long generation, CancellationToken cancellation)
+    {
+        try
+        {
+            while (true)
+            {
+                // Coalesce bursts, while retaining a trailing refresh if indexing changes during a reload.
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellation);
+                lock (_reloadGate) _reloadRequested = false;
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(30));
+                    await search.AskAsync(new { op = "reload" }, timeout.Token);
+                }
+                catch (Exception error) when (error is IOException or JsonException or OperationCanceledException or InvalidOperationException) { }
+                lock (_reloadGate)
+                {
+                    if (!_reloadRequested) { _reloadTask = null; return; }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        { lock (_reloadGate) { if (generation == Volatile.Read(ref _generation)) _reloadTask = null; } }
     }
 
     private async Task StopAsync()
     {
+        Interlocked.Increment(ref _generation);
+        var search = _search;
+        _search = null;
+        Task? reload;
+        var cancellation = _reloadCancellation;
+        lock (_reloadGate)
+        {
+            cancellation?.Cancel();
+            _reloadCancellation = null;
+            reload = _reloadTask; _reloadTask = null; _reloadRequested = false;
+        }
+        if (reload is not null) await reload;
+        cancellation?.Dispose();
         _monitor?.Dispose(); _monitor = null;
         _periodic?.Dispose(); _periodic = null;
         if (_index is not null) { await _index.DisposeAsync(); _index = null; }
         if (_download is not null) { await _download.DisposeAsync(); _download = null; }
-        if (_search is not null) { await _search.DisposeAsync(); _search = null; }
+        if (search is not null) await search.DisposeAsync();
     }
 
     public async ValueTask DisposeAsync()

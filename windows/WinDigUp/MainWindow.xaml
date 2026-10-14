@@ -17,7 +17,7 @@
       </StackPanel>
     </Grid>
     <AutoSuggestBox x:Name="Query" Grid.Row="1" PlaceholderText="Search your files by what’s in them. Use code: for your projects."
-      QueryIcon="Find" TextChanged="QueryChanged" QuerySubmitted="QuerySubmitted" AutomationProperties.Name="Search files"/>
+      QueryIcon="Find" TextChanged="QueryChanged" QuerySubmitted="QuerySubmitted" KeyDown="QueryKeyDown" AutomationProperties.Name="Search files"/>
     <InfoBar x:Name="Notice" Grid.Row="2" IsOpen="False" IsClosable="True"/>
     <Expander x:Name="SettingsPanel" Grid.Row="3" Header="Your folders and acceleration" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
       <ScrollViewer MaxHeight="370" HorizontalScrollBarVisibility="Disabled">
@@ -60,7 +60,7 @@
           <ComboBoxItem Content="All files" Tag=""/><ComboBoxItem Content="Pictures &amp; screenshots" Tag="image,screenshot"/>
           <ComboBoxItem Content="PDFs &amp; documents" Tag="pdf,doc"/><ComboBoxItem Content="Audio &amp; video" Tag="audio,video"/>
         </ComboBox>
-        <ListView x:Name="Results" Grid.Row="1" SelectionMode="Single" IsItemClickEnabled="True" ItemClick="ResultClicked" SelectionChanged="ResultSelected" AutomationProperties.Name="Search results">
+        <ListView x:Name="Results" Grid.Row="1" SelectionMode="Single" IsItemClickEnabled="True" ItemClick="ResultClicked" SelectionChanged="ResultSelected" KeyDown="ResultsKeyDown" AutomationProperties.Name="Search results">
           <ListView.ItemTemplate><DataTemplate>
             <StackPanel Padding="0,8" Spacing="4">
               <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
