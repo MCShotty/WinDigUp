@@ -40,14 +40,23 @@ pub struct Status {
     /// Last reported stage/counts and errors survive an idle/exit event, rather than looking like an empty index.
     pub scan: Value,
     pub last_error: Option<String>,
+    pub last_event_at: Option<f64>,
+    pub last_progress_at: Option<f64>,
+    pub phase_started_at: Option<f64>,
 }
 
 impl Status {
     /// An index-service event (`Sources/digup/IndexService.swift`); events about the code index don't count here.
     pub fn apply(&mut self, event: &Value) {
+        self.apply_at(event, crate::diagnostics::now());
+    }
+
+    fn apply_at(&mut self, event: &Value, time: f64) {
         if event["code"] == true {
             return;
         }
+        let previous = (self.activity.clone(), self.searchable, self.pending, self.scan.clone());
+        self.last_event_at = Some(time);
         let count = |key: &str| event[key].as_u64().unwrap_or(0);
         if event["files"].is_u64() {
             self.files = count("files");
@@ -56,12 +65,12 @@ impl Status {
             self.unfinished = count("unfinished");
         }
         match event["event"].as_str().unwrap_or_default() {
-            "started" => { self.last_error = None; self.scan = Value::Null; self.activity = Activity::Starting; }
+            "started" => { self.scan = Value::Null; self.activity = Activity::Starting; }
             "phase" | "scanning" | "scan_progress" => {
                 self.activity = Activity::Scanning;
                 self.scan = event.clone();
             }
-            "sync" => { self.scan = event.clone(); self.activity = if count("new") > 0 || self.pending > 0 {
+            "sync" => { self.last_error = None; self.scan = event.clone(); self.activity = if count("new") > 0 || self.pending > 0 {
                 Activity::Indexing { done: 0, total: count("new").max(self.pending) }
             } else { Activity::Idle }; },
             "file" => {
@@ -100,6 +109,15 @@ impl Status {
                 }
             }
             _ => {}
+        }
+        // Identical heartbeats are contact, not progress. A new path/stage or a changed
+        // counter is evidence of work; no wall-clock stall diagnosis is inferred here.
+        if previous != (self.activity.clone(), self.searchable, self.pending, self.scan.clone()) {
+            self.last_progress_at = Some(time);
+        }
+        if std::mem::discriminant(&previous.0) != std::mem::discriminant(&self.activity)
+            || previous.3["stage"] != self.scan["stage"] {
+            self.phase_started_at = Some(time);
         }
     }
 
@@ -240,6 +258,12 @@ impl Status {
             "model": model,
             "scan": self.scan,
             "lastError": self.last_error,
+            "lastEventAt": self.last_event_at,
+            "lastProgressAt": self.last_progress_at,
+            "phaseStartedAt": self.phase_started_at,
+            "missing": self.missing,
+            "unreadable": self.unreadable,
+            "finishing": match self.activity { Activity::Finishing { done, total, files } => json!({"done":done,"total":total,"files":files}), _ => Value::Null },
         })
     }
 }
@@ -341,14 +365,30 @@ mod tests {
         status.apply(&json!({"event":"ended","status":0}));
         assert!(status.line(true, &ready).contains("database is locked"));
         status.apply(&json!({"event":"started","pid":123}));
-        assert_eq!(status.last_error, None);
+        assert!(status.last_error.is_some(), "a restart is not proof the failed operation recovered");
         status.apply(&json!({"event":"scan_progress","visited":2020,"candidates":17,"path":"C:/Documents"}));
-        assert!(status.line(true, &ready).contains("2,020 entries checked"));
+        assert_eq!(status.snapshot(true, &ready)["scan"]["visited"], 2020);
+        status.apply(&json!({"event":"sync","files":17,"new":17}));
+        assert!(status.last_error.is_none());
         status.apply(&json!({"event":"ended","status":-1073741819_i64}));
         assert!(status.line(true, &ready).contains("-1073741819"));
         status.apply(&json!({"event":"started"}));
         status.apply(&json!({"event":"sync","files":0,"candidates":0,"visited":500,"skipped":{"other type":500}}));
         assert_eq!(status.line(true, &ready), "No supported local files found in the selected folders");
         assert_eq!(status.snapshot(true, &ready)["scan"]["skipped"]["other type"], 500);
+    }
+
+    #[test]
+    fn timestamps_separate_contact_from_progress_and_ignore_code_events() {
+        let mut status=Status::default();
+        let event=json!({"event":"scan_progress","visited":8,"candidates":3,"stage":"discovering"});
+        status.apply_at(&event,10.0);
+        status.apply_at(&event,20.0);
+        assert_eq!(status.last_event_at,Some(20.0));
+        assert_eq!(status.last_progress_at,Some(10.0));
+        status.apply_at(&json!({"event":"scan_progress","visited":9,"candidates":3,"stage":"discovering"}),30.0);
+        assert_eq!(status.last_progress_at,Some(30.0));
+        status.apply_at(&json!({"event":"file","code":true}),40.0);
+        assert_eq!(status.last_event_at,Some(30.0));
     }
 }
