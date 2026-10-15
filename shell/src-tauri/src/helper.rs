@@ -128,6 +128,10 @@ struct Searching {
 }
 
 impl SearchService {
+    pub fn generation(&self) -> u64 {
+        self.running.lock().unwrap().as_ref().map(|running| running.number).unwrap_or(0)
+    }
+
     pub fn new(launch: Launch, on_event: impl Fn(Value) + Send + Sync + 'static) -> SearchService {
         SearchService {
             launch,

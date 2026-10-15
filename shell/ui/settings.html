@@ -5,12 +5,14 @@
   <title>DigUp Settings</title>
   <link rel="stylesheet" href="setup.css">
   <link rel="stylesheet" href="settings.css">
+  <link rel="stylesheet" href="applications.css">
 </head>
 <body>
   <nav class="tabs" id="tabs" role="tablist">
     <button role="tab" data-tab="general">General</button>
     <button role="tab" data-tab="folders">Folders</button>
     <button role="tab" data-tab="code">Code</button>
+    <button role="tab" data-tab="apps" id="apps-tab" hidden>Apps</button>
     <button role="tab" data-tab="storage">Storage</button>
   </nav>
   <main class="settings">
@@ -155,6 +157,17 @@
       </div>
     </section>
 
+    <section class="tab" id="apps" role="tabpanel" hidden>
+      <label class="option"><input type="checkbox" id="apps-enabled"><span class="text"><span class="name">Include installed applications</span><span class="info">Find and launch the applications registered with Windows.</span></span></label>
+      <label class="option"><input type="checkbox" id="apps-semantic"><span class="text"><span class="name">Match applications by purpose</span><span class="info">Describe what you want to do. Uses the selected inference device; name matching works while the model is unavailable.</span></span></label>
+      <p id="apps-status" class="note" aria-live="polite"></p>
+      <button id="apps-refresh">Refresh applications</button>
+      <label for="apps-filter">Find an application to customize</label>
+      <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">
+      <div id="apps-editors"></div>
+      <button id="apps-more" hidden>Show more applications</button>
+    </section>
+
     <section class="tab" id="storage" role="tabpanel" hidden>
       <h3>Model</h3>
       <div class="card facts">
@@ -177,6 +190,7 @@
     <p class="note problem" id="problem" hidden></p>
   </main>
   <script src="shortcut.js"></script>
+  <script src="applications-settings.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

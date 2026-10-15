@@ -39,6 +39,7 @@ const state = {
   counts: {},           // strong results of each filter for the query, whatever the filter (the chips' numbers)
   meaning: true,        // the results matched by meaning too (false: words only)
   hasResults: false,    // the results of the query in the field are in
+  filesPending: false,
   codePhase: null,      // "hint": "code:" alone; "off": no code folders
   selection: null,      // a result's path
   showWeaker: false,
@@ -52,12 +53,22 @@ const state = {
   indexed: null,        // files indexed of each kind (the home)
 };
 let debugPending = false;
+const applicationSearch = new ApplicationSearch(() => {
+  state.counts.apps = applicationSearch.total;
+  if (applicationSearch.hits.length || isAppsMode()) state.hasResults = true;
+  const shown = rows();
+  if (!state.navigated || !shown.some(hit => resultKey(hit) === state.selection)) state.selection = shown.length ? resultKey(shown[0]) : null;
+  render();
+  if (debugPending && isAppsMode() && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
+}, 100);
 
 // MARK: Searching
 
 function isCode() {
-  return state.filter === "code" || /^code:/i.test(state.query.trim());
+  return Apps.parse(state.query, state.filter).code;
 }
+function isAppsMode() { return Apps.parse(state.query, state.filter).mode === "apps"; }
+function hasQuery() { return Boolean(state.query.trim()) || isAppsMode(); }
 
 /// The query or the filter changed: after a short pause in typing, the search (and the same search of one kind, for a
 /// filter), all at once. The query's meaning is embedded on every keystroke, so the pause is the whole wait.
@@ -66,10 +77,18 @@ function run() {
   clearTimeout(state.timer);
   state.navigated = false;
   state.error = null;
+  state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = null;
   const typed = state.query.trim();
-  const code = isCode();
-  const text = /^code:/i.test(typed) ? typed.slice(5).trim() : typed;
+  const mode = Apps.parse(typed, state.filter);
+  const code = mode.code;
+  const text = mode.text;
+  applicationSearch.limit = mode.mode === "apps" ? 100 : 6;
+  applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"));
   state.codePhase = null;
+  if (mode.mode === "apps") {
+    Object.assign(state, { ranked: [], weaker: [], counts: {}, text, hasResults: true, filesPending: false, selection: null });
+    render(); return;
+  }
   if (!typed || (code && (!state.info.hasCode || !text))) {
     Object.assign(state, { ranked: [], weaker: [], counts: {}, hasResults: false, selection: null });
     if (typed) state.codePhase = state.info.hasCode ? "hint" : "off";
@@ -77,6 +96,7 @@ function run() {
     return;
   }
   ask({ op: "embed_ahead", q: text, code }).catch(() => {});
+  state.filesPending = true;
   // Results of an earlier query stay until these are in; with none to show, a spinner.
   renderBar();
   if (!state.hasResults) renderContent();
@@ -87,7 +107,9 @@ function run() {
       const shown = filter && !code
         ? await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT, kinds: filter.kinds }) : all;
       if (generation !== state.generation) return;
+      state.filesPending = false;
       const counts = {};
+      counts.apps = applicationSearch.total;
       if (code) counts.code = all.strong;
       else for (const hit of all.hits.slice(0, all.strong)) {
         const key = FILTER_OF_KIND[hit.kind];
@@ -95,13 +117,14 @@ function run() {
       }
       Object.assign(state, { counts, text, meaning: shown.meaning, hasResults: true, showWeaker: false,
                              ranked: shown.hits.slice(0, shown.strong), weaker: shown.hits.slice(shown.strong) });
-      if (!rows().some((hit) => hit.path === state.selection)) state.selection = rows()[0]?.path ?? null;
+      if (!rows().some((hit) => resultKey(hit) === state.selection)) state.selection = rows().length ? resultKey(rows()[0]) : null;
       render();
       if (debugPending) report();
     } catch (error) {
       if (generation !== state.generation) return;
+      state.filesPending = false;
       state.error = String(error);
-      renderStatus();
+      render();
     }
   }, TYPING_PAUSE);
 }
@@ -119,24 +142,27 @@ function queryChanged() {
 }
 
 function setFilter(key) {
-  if (key === state.filter) return;
+  if (key === state.filter && !/^(apps|code):/i.test(state.query.trim())) return;
   state.filter = key;
   if (key !== "code" && /^code:/i.test(state.query.trim())) {
     // Leaving code for files: "code:" goes from the field.
     $query.value = state.query.trim().slice(5).trim();
     state.query = $query.value;
   }
+  if (key !== "apps" && /^apps:/i.test(state.query.trim()) && Apps.supported) {
+    $query.value = state.query.trim().slice(5).trim(); state.query = $query.value;
+  }
   run();
 }
 
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
 function rows() {
-  return [...state.ranked, ...(state.showWeaker ? state.weaker : [])];
+  return [...applicationSearch.hits, ...state.ranked, ...(state.showWeaker ? state.weaker : [])];
 }
 
 function selectedHit() {
   const shown = rows();
-  return shown.find((hit) => hit.path === state.selection) ?? shown[0] ?? null;
+  return shown.find((hit) => resultKey(hit) === state.selection) ?? shown[0] ?? null;
 }
 
 // MARK: Drawing
@@ -155,9 +181,10 @@ function renderBar() {
     : state.info.hasCode ? "Describe it: “zebra in a video”, “code: retry with backoff”…"
     : "Describe it: “receipt from the hardware store”, “zebra in a video”…";
   $kinds.replaceChildren();
-  $kinds.append(chip("All", null, null, state.filter === null && !code, () => setFilter(null), 1));
+  $kinds.append(chip("All", null, null, state.filter === null && !code && !isAppsMode(), () => setFilter(null), 1));
+  if (Apps.supported && Apps.enabled) $kinds.append(chip("Apps", null, state.counts.apps, isAppsMode(), () => setFilter("apps"), 8));
   FILTERS.forEach((filter, index) => {
-    const selected = state.filter === filter.key && !code;
+    const selected = state.filter === filter.key && !code && !isAppsMode();
     $kinds.append(chip(filter.title, filter.icon, code ? null : state.counts[filter.key], selected,
                        () => setFilter(selected ? null : filter.key), index + 2));
   });
@@ -184,13 +211,35 @@ function renderContent() {
   thumbnails.disconnect();
   $content.replaceChildren();
   $content.scrollTop = 0;
+  if (isAppsMode()) { $content.append(applicationGroup()); return; }
+  if (applicationSearch.hits.length) $content.append(applicationGroup());
   if (!state.info.folders.length) $content.append(chooseFolders());
   else if (!state.query.trim()) $content.append(home());
   else if (state.codePhase) $content.append(codeHintOrOff());
-  else if (!state.hasResults) $content.append(centered(element("div", "spinner")));
+  else if (!state.hasResults || state.filesPending) $content.append(centered(element("div", "spinner")));
   else if (!state.ranked.length && !state.weaker.length) $content.append(nothingFound());
   else if (isCode()) $content.append(codeList());
   else $content.append(grid());
+}
+
+function applicationGroup() {
+  const box = element("section", "app-group"); box.setAttribute("aria-label", "Applications");
+  box.append(element("div", "app-group-title", "Apps"));
+  for (const hit of applicationSearch.hits) {
+    const row = Apps.row(hit, state.selection === resultKey(hit), select, open);
+    row.oncontextmenu = (event) => {
+      event.preventDefault(); select(resultKey(hit));
+      showMenu(event.clientX, event.clientY, [["Launch", () => open(hit)],
+        ...(hit.shortcut ? [["Show shortcut location", () => reveal(hit)]] : [])]);
+    };
+    box.append(row);
+  }
+  if (applicationSearch.total > applicationSearch.hits.length) {
+    const more = element("button", "app-more", isAppsMode() ? "Show more applications" : `Show all ${applicationSearch.total} matching apps…`);
+    more.onclick = () => isAppsMode() ? applicationSearch.more() : setFilter("apps"); box.append(more);
+  }
+  box.append(element("div", "app-status", applicationSearch.status()));
+  return box;
 }
 
 function grid() {
@@ -212,8 +261,9 @@ function cells(hits, className) {
 /// A result in the grid: its picture in a fixed box (a picture's own shape never sizes the cell), what kind it is,
 /// the page or moment that matched, its name and folder.
 function cell(hit) {
-  const item = element("div", "cell" + (hit.path === state.selection ? " selected" : ""));
+  const item = element("div", "cell" + (resultKey(hit) === state.selection ? " selected" : ""));
   item.dataset.path = hit.path;
+  item.dataset.resultKey = resultKey(hit);
   item.setAttribute("role", "option");
   item.setAttribute("aria-label", `${KIND_TITLE[hit.kind] || "File"}, ${nameOf(hit.path)}, ${reasonOf(hit)}`);
   const picture = element("div", "picture");
@@ -291,7 +341,7 @@ function weakerToggle() {
   toggle.onmousedown = (event) => event.preventDefault();
   toggle.onclick = () => {
     state.showWeaker = !state.showWeaker;
-    if (!rows().some((hit) => hit.path === state.selection)) state.selection = rows()[0]?.path ?? null;
+    if (!rows().some((hit) => resultKey(hit) === state.selection)) state.selection = rows().length ? resultKey(rows()[0]) : null;
     const scroll = $content.scrollTop;
     renderContent();
     $content.scrollTop = scroll;
@@ -312,8 +362,9 @@ function codeList() {
 }
 
 function codeRow(hit, weaker) {
-  const item = element("div", "row" + (hit.path === state.selection ? " selected" : "") + (weaker ? " weaker-results" : ""));
+  const item = element("div", "row" + (resultKey(hit) === state.selection ? " selected" : "") + (weaker ? " weaker-results" : ""));
   item.dataset.path = hit.path;
+  item.dataset.resultKey = resultKey(hit);
   item.setAttribute("role", "option");
   const icon = element("div", "icon");
   icon.innerHTML = ICONS.code;
@@ -365,11 +416,11 @@ function wire(item, hit) {
     window.addEventListener("mousemove", moved);
     window.addEventListener("mouseup", done);
   };
-  item.onclick = () => select(hit.path);
+  item.onclick = () => select(resultKey(hit));
   item.ondblclick = () => open(hit);
   item.oncontextmenu = (event) => {
     event.preventDefault();
-    select(hit.path);
+    select(resultKey(hit));
     showMenu(event.clientX, event.clientY, [
       ["Open", () => open(hit)],
       [`Show in ${FILE_MANAGER}`, () => reveal(hit)],
@@ -383,7 +434,7 @@ function wire(item, hit) {
 function select(path) {
   state.selection = path;
   state.navigated = true;
-  for (const item of $content.querySelectorAll("[data-path]")) item.classList.toggle("selected", item.dataset.path === path);
+  for (const item of $content.querySelectorAll("[data-result-key]")) item.classList.toggle("selected", item.dataset.resultKey === path);
   $content.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
   renderSide();
   if (!$big.hidden) renderBig();
@@ -393,12 +444,13 @@ function select(path) {
 function move(step) {
   const shown = rows();
   if (!shown.length) return;
-  const index = shown.findIndex((hit) => hit.path === state.selection);
-  select(shown[Math.max(0, Math.min(shown.length - 1, (index < 0 ? -1 : index) + step))].path);
+  const index = shown.findIndex((hit) => resultKey(hit) === state.selection);
+  select(resultKey(shown[Math.max(0, Math.min(shown.length - 1, (index < 0 ? -1 : index) + step))]));
 }
 
 /// The grid's columns right now (↑ ↓ move by a row); a list has one.
 function columns() {
+  if (isApp(selectedHit())) return 1;
   const grid = $content.querySelector(".grid");
   return grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 1;
 }
@@ -408,6 +460,7 @@ function open(hit) {
 }
 
 function reveal(hit) {
+  if (isApp(hit)) { if (hit.shortcut) invoke("reveal", { path: hit.shortcut }).catch(failed); return; }
   invoke("reveal", { path: hit.path }).catch(failed);
 }
 
@@ -543,10 +596,11 @@ let playing = null;   // the audio of the selected result, while it plays
 
 function renderSide() {
   stopPlaying();
-  const hit = state.hasResults && !state.codePhase && state.query.trim() ? selectedHit() : null;
+  const hit = state.hasResults && !state.codePhase && hasQuery() ? selectedHit() : null;
   $side.hidden = !state.showsPreview || !hit;
   $side.replaceChildren();
   if (!hit) return;
+  if (isApp(hit)) { $side.append(Apps.details(hit, failed)); return; }
   $side.append(previewPicture(hit), facts(hit), why(hit), actions(hit));
 }
 
@@ -641,6 +695,7 @@ function closeBig() {
 function renderBig() {
   const hit = state.hasResults && state.query.trim() ? selectedHit() : null;
   if (!hit) return closeBig();
+  if (isApp(hit)) return closeBig();
   const sheet = element("div", "sheet");
   const head = element("div", "head");
   const title = element("div", "title");
@@ -868,11 +923,13 @@ function renderStatus() {
       + `cy="6" r="4.6" stroke-dasharray="${(length * Math.max(0.02, app.progress)).toFixed(2)} ${length.toFixed(2)}"/></svg>`;
   }
   let count = "";
-  if (state.error) count = `DigUp's helper: ${state.error}`;
+  if (state.error) count = `DigUp: ${state.error}`;
+  else if (isAppsMode()) count = applicationSearch.status();
   else if (state.hasResults && state.query.trim()) {
     const strong = state.ranked.length, weaker = state.weaker.length;
     count = app.caveat || (!state.meaning ? "Words only: meaning search isn't available"
       : `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : ""));
+    if (applicationSearch.hits.length) count = `${applicationSearch.total} apps · ${strong} file ${strong === 1 ? "result" : "results"}`;
   }
   $("count").textContent = count;
   renderUpdate(app.update);
@@ -1000,6 +1057,7 @@ document.addEventListener("keydown", (event) => {
       setFilter("code");
       return;
     }
+    if (number === 8 && Apps.supported && Apps.enabled) { event.preventDefault(); setFilter("apps"); return; }
     switch (event.key.toLowerCase()) {
       case ",":
         event.preventDefault();
@@ -1023,6 +1081,7 @@ document.addEventListener("keydown", (event) => {
   }
   switch (event.key) {
     case " ":
+      if (isApp(selectedHit())) return;
       // After the arrows or a click: the big preview. While typing: a space.
       if (!plain || !(state.navigated || !$big.hidden) || !state.hasResults || !state.query.trim() || !selectedHit()) return;
       event.preventDefault();
@@ -1041,7 +1100,7 @@ document.addEventListener("keydown", (event) => {
       move(event.key === "ArrowRight" ? 1 : -1);
       return;
     case "Enter": {
-      const hit = state.hasResults && state.query.trim() ? selectedHit() : null;
+      const hit = state.hasResults && hasQuery() ? selectedHit() : null;
       if (!hit) return;
       if (modifier && !event.altKey && !event.shiftKey) reveal(hit);
       else if (plain) open(hit);
@@ -1087,7 +1146,7 @@ tauri.event.listen("window-search", ({ payload }) => {
   $query.focus();
 });
 
-window.addEventListener("focus", () => ask({ op: "prewarm" }).catch(() => {}));
+window.addEventListener("focus", () => { if (!isAppsMode()) ask({ op: "prewarm" }).catch(() => {}); });
 
 // Its size, for the next time it opens (the shell keeps it when the window closes).
 let sizeTimer = null;
@@ -1136,8 +1195,8 @@ async function start() {
   render();
   loadIndexed();
   $query.focus();
-  if (state.query) run();
-  ask({ op: "prewarm" }).catch(() => {});
+  if (state.query || isAppsMode()) run();
+  if (!isAppsMode()) ask({ op: "prewarm" }).catch(() => {});
   if (info.debugQuery != null) debugSearch(info.debugQuery);
 }
 
@@ -1154,6 +1213,13 @@ function debugSearch(query) {
 
 function report() {
   debugPending = false;
+  if (state.info.debugLaunch) {
+    const hit = selectedHit();
+    if (!isApp(hit)) { invoke("debug_report", {report:{launchAccepted:false,error:"No matching catalog application"}}); return; }
+    Apps.launch(hit).then(() => invoke("debug_report", {report:{launchAccepted:true,applicationId:hit.id,name:hit.name}}),
+      error => invoke("debug_report", {report:{launchAccepted:false,error:String(error)}}));
+    return;
+  }
   // With --debug-settings, Settings opens as its button opens it, and Settings reports once its page is up.
   if (state.info.debugSettings) {
     setTimeout(() => $("settings").click(), 500);
@@ -1176,7 +1242,8 @@ function report() {
         query: $query.value,
         filter: state.filter,
         kinds: [...$kinds.querySelectorAll(".chip")].map((chip) => chip.textContent + (chip.classList.contains("selected") ? " (selected)" : "")),
-        results: state.ranked.map((hit) => nameOf(hit.path)),
+        results: [...applicationSearch.hits, ...state.ranked].map(titleOf),
+        applications: applicationSearch.hits.map(hit => ({id: hit.id, name: hit.name})),
         weaker: state.weaker.length,
         columns: columns(),
         selected: state.selection && nameOf(state.selection),

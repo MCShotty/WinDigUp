@@ -28,6 +28,8 @@ jobs:
           /tmp/ov/bin/pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
           /tmp/ov/bin/pip install -r worker/openvino/requirements.txt pytest==9.1.1
           /tmp/ov/bin/python -m pytest worker/openvino/tests -q
+      - name: Application catalog fixtures and cached name budget
+        run: cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
       - name: Script checks
         run: |
           node --check shell/ui/settings.js
@@ -39,3 +41,4 @@ jobs:
           server=$!
           trap 'kill "$server"' EXIT
           NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome node tests/ui/acceleration.cjs
+          NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome node tests/ui/applications.cjs

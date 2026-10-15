@@ -6,6 +6,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod acceleration;
+mod applications;
+mod application_commands;
 mod clipboard;
 mod code;
 mod editors;
@@ -39,6 +41,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use watcher::FolderWatcher;
+use application_commands::{search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override};
 
 const PANEL_WIDTH: f64 = 780.0;
 /// The panel's window, under one name or the other: made anew when the person turns centering on or off.
@@ -50,6 +53,11 @@ const WINDOW: &str = "main";
 
 /// What the commands and events share.
 struct Shell {
+    applications: Arc<applications::Catalog>,
+    app_sync: tokio::sync::Mutex<Option<(u64, String)>>,
+    app_semantic: Mutex<Value>,
+    app_foreground: AtomicUsize,
+    app_last_query: Mutex<Instant>,
     options: Options,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
@@ -248,10 +256,16 @@ fn folder_arguments(settings: &Settings, code_folders: &[String]) -> Vec<String>
 
 /// The panel's and the window's questions for `search-service`.
 #[tauri::command]
-async fn ask(shell: State<'_, Arc<Shell>>, request: Value) -> Result<Value, String> {
+async fn ask(shell: State<'_, Arc<Shell>>, mut request: Value) -> Result<Value, String> {
+    let _foreground = application_commands::Foreground::new(&shell);
     let op = request.get("op").and_then(Value::as_str).unwrap_or_default();
     if !["search", "embed_ahead", "text", "render", "prewarm", "status", "summaries"].contains(&op) {
         return Err(format!("not a question the panel asks: {op}"));
+    }
+    // A query while the model downloads must not permanently poison the helper's encoder state.
+    if !shell.model_ready() {
+        if op == "prewarm" || op == "embed_ahead" { return Ok(json!({"ok":true,"encoder":"stopped"})); }
+        if op == "search" { request["meaning"] = json!(false); }
     }
     shell.search.ask(request).await
 }
@@ -301,6 +315,7 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         }
     };
     json!({
+        "applicationsSupported": applications::Catalog::supported(),
         "offered": offered.iter().map(|folder| folder.display().to_string()).collect::<Vec<_>>(),
         "chosen": shell.folders(),
         "skipped": shell.settings.lock().unwrap().skipped.clone(),
@@ -519,6 +534,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "debugQuery": shell.options.debug_window,
         "debugSettings": shell.options.debug_settings,
         "debugCopy": shell.options.debug_copy,
+        "debugLaunch": shell.options.debug_launch,
     })
 }
 
@@ -642,7 +658,8 @@ fn main() {
             app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration
+            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration,
+            search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -715,7 +732,17 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     for root in &options.roots {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
+    let application_root = options.index_folder().unwrap_or_else(std::env::temp_dir).join("applications");
+    let applications = applications::Catalog::new(application_root, settings.applications.clone(), {
+        let app = handle.clone();
+        move |info| { let _ = app.emit("applications", info); }
+    });
     let shell = Arc::new(Shell {
+        applications,
+        app_sync: tokio::sync::Mutex::new(None),
+        app_semantic: Mutex::new(json!({"state":"preparing","total":0,"embedded":0})),
+        app_foreground: AtomicUsize::new(0),
+        app_last_query: Mutex::new(Instant::now()),
         options,
         settings: Mutex::new(settings),
         settings_path,
@@ -748,6 +775,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         logs,
     });
     app.manage(shell.clone());
+    application_commands::start(&handle, &shell);
     if shell.settings.lock().unwrap().delete_code_index {
         delete_code_index(&shell);
     }
@@ -1204,6 +1232,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
 fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     let settings = shell.settings.lock().unwrap().clone();
     json!({
+        "applications": shell.applications.info(),
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,
@@ -1262,6 +1291,7 @@ fn storage(shell: &Shell) -> Value {
         "index": index.as_ref().map(|folder| folder.display().to_string()),
         "indexBytes": size("index.sqlite"),
         "codeBytes": size("code.sqlite"),
+        "applicationsBytes": size("applications.sqlite"),
         "models": models.map(|folder| folder.display().to_string()),
     })
 }
@@ -1753,6 +1783,11 @@ fn update_line(app: &AppHandle, shell: &Shell) {
 // MARK: The helpers' events
 
 fn search_event(app: &AppHandle, event: Value) {
+    if event["event"] == "encoder" && event["state"] == "ready" {
+        let shell = app.state::<Arc<Shell>>();
+        let mut state = shell.app_semantic.lock().unwrap();
+        state["encoder"] = json!("ready"); state["embedded"] = json!(0); state["state"] = json!("preparing");
+    }
     if cfg!(debug_assertions) {
         println!("search: {event}");
     }

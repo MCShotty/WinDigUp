@@ -245,12 +245,21 @@ jobs:
       - name: The installer
         shell: bash
         run: scripts/check-windows-accelerators.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+      - name: Application launch fixture
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib
+      - name: Installed application discovery and launch
+        shell: pwsh
+        run: scripts/check-windows-applications.ps1
       - name: Swift and Rust policy checks
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter AccelerationTests
+          swift test --filter 'AccelerationTests|ApplicationStoreTests'
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked
+          cargo test --release applications:: --locked

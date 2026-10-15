@@ -29,6 +29,7 @@ const state = {
   hasCode: true,         // code search has folders (the state's hasCode)
   text: "",              // what was searched (without "code:")
   isCode: false,
+  isApps: false,
   strong: [],
   weaker: [],
   groups: [],
@@ -42,6 +43,12 @@ const state = {
   caveat: null,          // why results may be incomplete right now (the shell's status.rs)
 };
 let debugPending = false;
+const applicationSearch = new ApplicationSearch(() => {
+  const ids = rowIDs();
+  if (!state.navigated || !ids.includes(state.selection)) state.selection = ids[0] ?? null;
+  render();
+  if (debugPending && state.isApps && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
+});
 
 // MARK: Searching
 
@@ -52,13 +59,21 @@ function queryChanged() {
   state.navigated = false;
   state.error = null;
   const typed = $query.value.trim();
-  const code = /^code:/i.test(typed);
-  const text = code ? typed.slice(5).trim() : typed;
+  const mode = Apps.parse(typed);
+  const code = mode.code;
+  const text = mode.text;
   state.isCode = code;
+  state.isApps = mode.mode === "apps";
+  applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps));
+  if (state.isApps) {
+    show({ hits: [], strong: 0 }, text, "applications");
+    return;
+  }
   if (!typed || (code && !text)) {
     show({ hits: [], strong: 0 }, text, typed ? "codeHint" : "empty");
     return;
   }
+  show({ hits: [], strong: 0 }, text, "words");
   // Words now. The last word is probably half-typed, so it matches as a prefix.
   ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40 })
     .then((reply) => {
@@ -109,14 +124,15 @@ function failed(error) {
 
 function rowIDs() {
   return [
-    ...state.groups.flatMap((group) => group.rows.map((hit) => hit.path)),
+    ...applicationSearch.hits.map(resultKey),
+    ...state.groups.flatMap((group) => group.rows.map(resultKey)),
     ...(state.weaker.length ? [WEAKER] : []),
-    ...(state.showWeaker ? state.weaker.map((hit) => hit.path) : []),
+    ...(state.showWeaker ? state.weaker.map(resultKey) : []),
   ];
 }
 
 function selectedHit() {
-  return [...state.strong, ...state.weaker].find((hit) => hit.path === state.selection) ?? null;
+  return [...applicationSearch.hits, ...state.strong, ...state.weaker].find((hit) => resultKey(hit) === state.selection) ?? null;
 }
 
 function move(step) {
@@ -141,6 +157,7 @@ function openSelected() {
 
 function revealSelected() {
   const hit = selectedHit();
+  if (isApp(hit)) { if (hit.shortcut) invoke("reveal", { path: hit.shortcut }).catch(failed); return; }
   if (hit) invoke("reveal", { path: hit.path }).catch(failed);
 }
 
@@ -186,9 +203,19 @@ function render() {
 
 function renderList() {
   $list.replaceChildren();
-  const nothing = !state.strong.length && !state.weaker.length;
+  const nothing = !state.strong.length && !state.weaker.length && !applicationSearch.hits.length;
   $list.hidden = nothing;
   if (nothing) return;
+  if (applicationSearch.hits.length) {
+    $list.append(element("div", "group-title", "Apps"));
+    for (const hit of applicationSearch.hits) $list.append(Apps.row(hit, state.selection === resultKey(hit), (key) => {
+      state.selection = key; state.navigated = true; render();
+    }, (hit) => openResult(hit).catch(failed)));
+    if (applicationSearch.total > applicationSearch.hits.length) {
+      const more = element("button", "app-more", `Show all ${applicationSearch.total} matching apps…`);
+      more.onclick = () => openInWindow("apps"); $list.append(more);
+    }
+  }
   for (const group of state.groups) {
     $list.append(element("div", "group-title", group.title));
     for (const hit of group.rows) $list.append(row(hit));
@@ -213,7 +240,7 @@ function renderList() {
 }
 
 function row(hit) {
-  const item = element("div", "row" + (state.selection === hit.path ? " selected" : ""));
+  const item = element("div", "row" + (state.selection === resultKey(hit) ? " selected" : ""));
   item.setAttribute("role", "option");
   item.append(thumbnail(hit));
   const text = element("div", "row-text");
@@ -228,7 +255,7 @@ function row(hit) {
   text.append(title, sub);
   item.append(text);
   item.onclick = () => {
-    state.selection = hit.path;
+    state.selection = resultKey(hit);
     state.navigated = true;
     render();
   };
@@ -252,7 +279,11 @@ function thumbnail(hit) {
 
 function renderPreview() {
   $preview.replaceChildren();
-  if (!state.strong.length && !state.weaker.length) {
+  if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length) {
+    if (state.isApps) {
+      $preview.append(message("Applications", applicationSearch.status()));
+      return;
+    }
     if (state.isCode && !state.hasCode) {
       $preview.append(message("Code search is off", "Choose folders with code in Settings → Code, and DigUp finds "
         + "code by what it does."));
@@ -282,6 +313,7 @@ function renderPreview() {
   }
   const hit = selectedHit();
   if (!hit) return;
+  if (isApp(hit)) { $preview.append(Apps.details(hit, failed)); return; }
   $preview.append(picture(hit), facts(hit));
 }
 
@@ -367,7 +399,8 @@ function facts(hit) {
 function renderFooter() {
   const strong = state.strong.length, weaker = state.weaker.length;
   let summary;
-  if (state.error) summary = `DigUp's helper: ${state.error}`;
+  if (state.error) summary = `DigUp: ${state.error}`;
+  else if (state.isApps) summary = applicationSearch.status();
   else if (state.phase === "words") {
     summary = state.encoder === "starting" ? "Matching words; meaning search is warming up…" : "Matching words…";
   } else if (state.phase === "wordsOnly") summary = "Words only: meaning search isn't available";
@@ -376,7 +409,7 @@ function renderFooter() {
   else if (state.caveat && !state.isCode) summary = state.caveat;
   else summary = `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : "");
   $summary.textContent = summary;
-  $keys.textContent = `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
+  $keys.textContent = isApp(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
 }
 
 // MARK: The big preview (Space, as Quick Look on the Mac)
@@ -388,6 +421,7 @@ document.getElementById("panel").append($big);
 /// Space, once a result is chosen with the arrows or a click: the panel at its tallest with the result over all of
 /// it, a video playing from its moment. Space or Esc puts it away; the arrows go on through the results under it.
 function toggleBig() {
+  if (isApp(selectedHit())) return;
   if (!$big.hidden) return closeBig();
   $big.hidden = false;
   renderBig();
@@ -403,6 +437,7 @@ function closeBig() {
 
 function renderBig() {
   const hit = selectedHit();
+  if (isApp(hit)) return closeBig();
   if (!hit) return closeBig();
   const head = element("div", "head");
   head.append(element("span", "name", nameOf(hit.path)));
@@ -442,6 +477,7 @@ document.addEventListener("keydown", (event) => {
       else invoke("hide_panel").catch(() => {});
       break;
     case " ":
+      if (isApp(selectedHit())) return;
       // After the arrows or a click: the big preview (or the weaker matches' fold). While typing: a space.
       if (event.altKey || event.shiftKey || modifier || !(state.navigated || !$big.hidden) || !state.selection) return;
       event.preventDefault();
@@ -484,7 +520,7 @@ tauri.event.listen("panel-shown", () => {
   // Like Spotlight: the last query, selected.
   $query.focus();
   $query.select();
-  ask({ op: "prewarm" }).catch(() => {});
+  if (!state.isApps) ask({ op: "prewarm" }).catch(() => {});
 });
 
 tauri.event.listen("helper", ({ payload }) => {
@@ -539,7 +575,8 @@ function report() {
       report: {
         query: $query.value,
         phase: state.phase,
-        groups: state.groups.map((group) => ({ title: group.title, rows: group.rows.map((hit) => nameOf(hit.path)) })),
+        groups: [...(applicationSearch.hits.length ? [{title:"Apps", rows:applicationSearch.hits.map(titleOf)}] : []), ...state.groups.map((group) => ({ title: group.title, rows: group.rows.map(titleOf) }))],
+        applications: applicationSearch.hits.map(hit => ({id: hit.id, name: hit.name})),
         weaker: state.weaker.length,
         selected: state.selection && nameOf(state.selection),
         preview: big && {

@@ -43,6 +43,8 @@ pub struct Options {
     pub debug_settings: bool,
     /// Debug runs with `debug_window`: after its report the window copies its selected result, as Ctrl+C does.
     pub debug_copy: bool,
+    /// Installed-app check: launch the selected catalog application, then report the accepted request.
+    pub debug_launch: bool,
     /// A desktop shortcut's command (hotkey.rs): show or hide the panel of the DigUp already running, or start DigUp
     /// with the panel up.
     pub toggle: bool,
@@ -73,6 +75,7 @@ impl Options {
             debug_window: None,
             debug_settings: false,
             debug_copy: false,
+            debug_launch: false,
             toggle: false,
             at_login: false,
             debug_update_check: false,
@@ -99,6 +102,7 @@ impl Options {
                 "--debug-window" => options.debug_window = Some(value()?),
                 "--debug-settings" => options.debug_settings = true,
                 "--debug-copy" => options.debug_copy = true,
+                "--debug-launch" => options.debug_launch = true,
                 "--toggle" => options.toggle = true,
                 "--at-login" => options.at_login = true,
                 "--debug-update-check" => options.debug_update_check = true,

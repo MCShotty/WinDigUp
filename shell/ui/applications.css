@@ -1,0 +1,22 @@
+.app-group { margin: 4px 0 18px; }
+.app-group-title { font-size: 12px; font-weight: 600; color: var(--secondary); padding: 8px 12px; }
+.app-row { display: flex; align-items: center; gap: 11px; min-height: 54px; padding: 8px 12px; border-radius: 7px; cursor: default; }
+.app-row:hover { background: var(--line); }
+.app-row.selected { background: var(--selected, rgba(10,132,255,.2)); }
+.app-row-text { min-width: 0; }
+.app-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-description { color: var(--secondary); font-size: 12px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; }
+.app-row .app-description { white-space: nowrap; }
+.app-icon { flex: none; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-size: 28px; color: var(--secondary); }
+.app-icon img { width: 100%; height: 100%; object-fit: contain; }
+.app-details { padding: 20px; line-height: 1.6; overflow-wrap: anywhere; }
+.app-details > .app-icon { width: 80px; height: 80px; display: flex; margin-bottom: 15px; }
+.app-details .app-name { white-space: normal; font-size: 17px; }
+.app-details button { margin: 8px 8px 0 0; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); color: var(--text); }
+.app-more { margin: 8px 12px; }
+.app-status { padding: 8px 12px; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+.app-editor { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.app-editor label { display: block; margin-top: 8px; }
+.app-editor input[type=text], .app-editor textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+.app-editor textarea { resize: vertical; min-height: 65px; }
+.app-editor button { margin: 8px 8px 0 0; }

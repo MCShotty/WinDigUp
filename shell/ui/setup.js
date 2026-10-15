@@ -372,10 +372,11 @@ function render() {
 }
 
 function renderFooter() {
-  $("next").disabled = page === 1 && !selection.folders().length;
+  $("next").disabled = page === 1 && !selection.folders().length && !(firstTime && info.applicationsSupported && !codeMode);
+  $("apps-start").hidden = !firstTime || !info.applicationsSupported || codeMode;
   let summary = "";
   if (PAGES[page] === "folders") {
-    if (!selection.folders().length) summary = "Choose at least one folder";
+    if (!selection.folders().length) summary = firstTime && info.applicationsSupported ? "Application search works without selecting folders" : "Choose at least one folder";
     else if (estimating > 0 || rows.some((row) => selection.isSearched(row) && !estimates.has(key(row)))) summary = "Looking at your folders…";
     // Turning code search on: what reading the code takes, and its index.
     else if (codeMode && !info.chosen.length) {
@@ -441,6 +442,12 @@ $("next").addEventListener("click", async () => {
   page += 1;
   render();
 });
+
+$("apps-start").onclick = async () => {
+  $("apps-start").disabled = true;
+  try { await invoke("finish_setup"); }
+  catch (error) { $("summary").textContent = String(error); $("apps-start").disabled = false; }
+};
 
 $("back").addEventListener("click", () => {
   if (!firstTime) {
