@@ -61,10 +61,16 @@ import Testing
             return
         }
         let reference = try #require(stored, "no Reference/vectors.json: write it with DIGUP_WRITE_REFERENCE=1")
-        #expect(reference.vectorVersion == LlamaEmbedder.vectorVersion,
+        // v2 moves normalization onto the accelerator. Retain v1's independently captured corpus as the parity
+        // baseline, while the new index fingerprint prevents mixing stored vectors until hardware validation.
+        let acceleratorNormalization = reference.vectorVersion == 1 && LlamaEmbedder.vectorVersion == 2
+        #expect(reference.vectorVersion == LlamaEmbedder.vectorVersion || acceleratorNormalization,
                 "the reference is for vectors \(reference.vectorVersion): write it anew for \(LlamaEmbedder.vectorVersion)")
         #expect(Set(made.keys) == Set(reference.vectors.keys))
         for (name, vector) in made.sorted(by: { $0.key < $1.key }) {
+            #expect(vector.allSatisfy(\.isFinite), "\(name): non-finite accelerator output")
+            let normSquared = vector.reduce(0.0) { $0 + Double($1) * Double($1) }
+            #expect(abs(normSquared - 1) < 0.005, "\(name): accelerator output is not normalized")
             guard let expected = reference.vectors[name] else { continue }
             let cosine = zip(vector, expected).reduce(0) { $0 + $1.0 * $1.1 }
             #expect(cosine >= Self.agreement, """

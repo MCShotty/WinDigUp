@@ -86,8 +86,10 @@ public struct WorkerConfig: Sendable {
               let models = env["DIGUP_OPENVINO_MODELS"], !models.isEmpty else {
             throw WorkerError.notFound("OpenVINO NPU needs a Python environment and exported model bundle in Settings → General.")
         }
-        let script = env["DIGUP_OPENVINO_WORKER"].map { URL(fileURLWithPath: $0) }
-            ?? Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("openvino/digup_openvino.py")
+        guard let script = env["DIGUP_OPENVINO_WORKER"].map({ URL(fileURLWithPath: $0) })
+            ?? Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("openvino/digup_openvino.py") else {
+            throw WorkerError.notFound("Cannot locate the bundled OpenVINO worker; set DIGUP_OPENVINO_WORKER")
+        }
         guard FileManager.default.fileExists(atPath: script.path) else {
             throw WorkerError.notFound("OpenVINO worker missing at \(script.path)")
         }

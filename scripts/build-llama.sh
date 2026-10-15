@@ -4,8 +4,8 @@
 # Metal shaders are embedded and compiled on first use, so no Metal toolchain is needed. CMake comes from PATH, or from
 # a venv in Vendor/ (needs uv). Does nothing when that build is already there; build.sh runs it every time.
 # On Linux and Windows it builds shared libraries instead, with ggml's backends as modules loaded at run
-# time (GGML_BACKEND_DL): the CPU variants always, CUDA when nvcc is found (CUDACXX, or on PATH; CUDA_ARCHS picks the GPU
-# architectures, default native), else Vulkan when its SDK is. LLAMA_SOURCE / LLAMA_BUILD point at an existing clone and
+# time (GGML_BACKEND_DL): CPU variants for host storage, Vulkan for hardware inference. Its SDK is required.
+# LLAMA_SOURCE / LLAMA_BUILD point at an existing clone and
 # build folder. On Windows it runs in Git for Windows' bash inside the MSVC environment (vcvars64) and
 # leaves DLLs with their import libraries.
 set -euo pipefail
@@ -106,7 +106,6 @@ else
     fi
   fi
   case $FLAVOR in
-    cuda) GPU=(-DGGML_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS:-native}") ;;
     vulkan) GPU=(-DGGML_VULKAN=ON) ;;
     *) GPU=() ;;
   esac

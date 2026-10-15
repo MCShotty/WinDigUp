@@ -20,6 +20,7 @@ const notes = {
 };
 
 let info = {};
+let accelerationDirty = false;
 let summaries = null;        // what's indexed under each folder (search-service's summaries)
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
@@ -42,10 +43,13 @@ for (const button of document.querySelectorAll("#tabs button")) button.onclick =
 
 function renderGeneral() {
   const acceleration = info.acceleration || { backend: "vulkan" };
-  $("accelerator").value = acceleration.backend;
-  $("gpu-device").value = acceleration.gpu || "";
-  $("npu-python").value = acceleration.python || "";
-  $("npu-models").value = acceleration.models || "";
+  if (!accelerationDirty) {
+    $("accelerator").value = acceleration.backend;
+    $("gpu-device").value = acceleration.gpu || "";
+    $("npu-python").value = acceleration.python || "";
+    $("npu-models").value = acceleration.models || "";
+  }
+  $("accelerator").querySelector('option[value="metal"]').hidden = !/Mac/.test(navigator.platform);
   showAcceleratorOptions();
   $("login-option").hidden = !info.canOpenAtLogin;
   $("login").checked = info.openAtLogin;
@@ -69,8 +73,10 @@ function showAcceleratorOptions() {
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
 }
-$("accelerator").onchange = showAcceleratorOptions;
+$("accelerator").onchange = () => { accelerationDirty = true; showAcceleratorOptions(); };
+for (const id of ["gpu-device", "npu-python", "npu-models"]) $(id).oninput = () => { accelerationDirty = true; };
 $("apply-accelerator").onclick = async () => {
+  $("problem").hidden = true;
   $("apply-accelerator").disabled = true;
   try {
     await invoke("set_acceleration", { acceleration: {
@@ -412,13 +418,16 @@ $("code-off-go").onclick = async () => {
 
 function renderStorage() {
   const storage = info.storage || {}, model = (info.state || {}).model || {};
-  const states = { ready: "Downloaded", checking: "Checking…", waiting: "Waiting for the network", failed: "The download stopped" };
+  const npu = info.acceleration?.backend === "openvino-npu";
+  const states = { ready: npu ? "Verified on Intel NPU" : "Downloaded", checking: npu ? "Verifying NPU execution…" : "Checking…",
+    waiting: "Waiting for the network", failed: "Model unavailable" };
   $("model-status").textContent = model.state === "downloading"
     ? `Downloading · ${model.total ? Math.floor((100 * model.bytes) / model.total) : 0}%` : states[model.state] || "";
   pathButton($("model-path"), storage.models);
   $("index-size").textContent = bytes(storage.indexBytes || 0) + (storage.codeBytes ? ` (code ${bytes(storage.codeBytes)})` : "");
   pathButton($("index-path"), storage.index);
-  $("version").textContent = `DigUp ${info.version || ""} · EmbeddingGemma 2 by Google (Apache 2.0), run by llama.cpp (MIT).`;
+  $("version").textContent = `DigUp ${info.version || ""} · EmbeddingGemma 2 by Google (Apache 2.0), `
+    + (npu ? "run by OpenVINO on NPU (Apache 2.0)." : "run by llama.cpp on GPU (MIT).");
   $("licenses").hidden = !info.licenses;
 }
 

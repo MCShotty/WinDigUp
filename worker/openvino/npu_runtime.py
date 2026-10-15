@@ -143,7 +143,7 @@ class NPURuntime:
 
     def _vector(self, encoded, features=None, token_id=None):
         vector = self.run(f"text-{self.role}", self._text_inputs(encoded, features, token_id))[0]
-        if vector.shape != (1, 768) or not np.isfinite(vector).all() or not np.any(vector):
+        if vector.shape != (1, 768) or not np.isfinite(vector).all() or abs(np.linalg.norm(vector) - 1) >= 0.005:
             raise RuntimeError("NPU returned an invalid embedding")
         return vector[0]
 

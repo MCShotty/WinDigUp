@@ -1242,15 +1242,20 @@ fn storage(shell: &Shell) -> Value {
         let Some(index) = &index else { return 0 };
         ["", "-wal", "-shm"].iter().filter_map(|end| std::fs::metadata(index.join(format!("{name}{end}"))).ok()).map(|file| file.len()).sum()
     };
-    let models = shell.options.models.clone().or_else(|| {
-        if cfg!(windows) {
-            std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("DigUp").join("Models"))
-        } else {
-            let data = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()).map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-            data.map(|data| data.join("digup").join("Models"))
-        }
-    });
+    let acceleration = shell.settings.lock().unwrap().acceleration.clone();
+    let models = if acceleration.backend == "openvino-npu" {
+        (!acceleration.models.is_empty()).then(|| PathBuf::from(acceleration.models))
+    } else {
+        shell.options.models.clone().or_else(|| {
+            if cfg!(windows) {
+                std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("DigUp").join("Models"))
+            } else {
+                let data = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()).map(PathBuf::from)
+                    .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+                data.map(|data| data.join("digup").join("Models"))
+            }
+        })
+    };
     json!({
         "index": index.as_ref().map(|folder| folder.display().to_string()),
         "indexBytes": size("index.sqlite"),

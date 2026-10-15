@@ -32,3 +32,10 @@ jobs:
         run: |
           node --check shell/ui/settings.js
           bash -n scripts/build-llama.sh scripts/check-windows-accelerators.sh scripts/package-windows.sh
+      - name: Settings in a real browser
+        run: |
+          npm install --prefix /tmp/digup-ui --no-audit --no-fund playwright@1.61.1
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory shell/ui > /tmp/ui-server.log 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome node tests/ui/acceleration.cjs

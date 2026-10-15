@@ -327,7 +327,9 @@ public final class LlamaEmbedder: Embedder {
                 throw WorkerError.failed("no pooled embedding for input \(sequence)")
             }
             let vector = Array(UnsafeBufferPointer(start: pooled, count: embeddingSize))
-            guard vector.allSatisfy(\.isFinite), vector.contains(where: { $0 != 0 }) else {
+            // Validate the device result; never repair or normalize an invalid vector on the host.
+            let normSquared = vector.reduce(0.0) { $0 + Double($1) * Double($1) }
+            guard vector.allSatisfy(\.isFinite), abs(normSquared - 1) < 0.005 else {
                 throw WorkerError.failed("accelerator returned an invalid embedding")
             }
             return vector
@@ -379,10 +381,7 @@ public final class LlamaEmbedder: Embedder {
     }()
 
     #if !os(macOS)
-    /// The threads llama.cpp computes on (what runs on the CPU: all of it on a machine without a GPU): every logical
-    /// processor up to 8, where llama.cpp's default is 4; `DIGUP_THREADS` says otherwise. 43 photos, 2026-10-12: an
-    /// i5-8350U laptop (4 cores, 8 threads) 227 s on 4 threads, 174 s on 8; a Core Ultra 9 285K (8 + 16
-    /// cores) 48 s on 4, 31 s on 8, 29–30 s on 12, 40 s on 24 (its slow cores hold the others back).
+    /// Host preprocessing/orchestration threads. The native execution guard disallows CPU model graph computation.
     static let threads: Int32 = {
         let chosen = ProcessInfo.processInfo.environment["DIGUP_THREADS"].flatMap(Int32.init)
         return max(1, chosen ?? Int32(min(ProcessInfo.processInfo.activeProcessorCount, 8)))

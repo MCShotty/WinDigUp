@@ -44,6 +44,22 @@ def verify_ir(module, inputs, tmp_path, name):
         actual = compiled(feed)
         for i, output in enumerate(compiled.outputs):
             check_parity(actual[output], fixture[f"output-{i}"], name)
+    # A second input guards against a trace accidentally baking sample values or padding into the graph.
+    varied = {key: value.clone() for key, value in inputs.items()}
+    for key, value in varied.items():
+        if key in ("pixel_values", "input_features", "inputs_embeds"):
+            value.mul_(0.3).add_(0.1)
+        elif key == "input_ids":
+            value[:, 1:4] = torch.tensor([12, 7, 6])
+        elif key in ("attention_mask", "input_features_mask"):
+            value[:, value.shape[1] // 2:] = 0
+    with torch.inference_mode():
+        reference = module(*varied.values())
+        if isinstance(reference, torch.Tensor):
+            reference = (reference,)
+    actual = compiled({key: value.numpy() for key, value in varied.items()})
+    for output, expected in zip(compiled.outputs, reference, strict=True):
+        check_parity(actual[output], expected.numpy(), name + "/second-input")
 
 
 def test_text_projection_pooling_normalization_match_source(model, tmp_path):
