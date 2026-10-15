@@ -882,6 +882,12 @@ fn apply_folders(app: &AppHandle) {
         let _ = app.asset_protocol_scope().allow_directory(folder, true);
     }
     let request = folders_request(&shell);
+    let settings = shell.settings.lock().unwrap().clone();
+    let mut args = vec!["search-service".to_string()];
+    args.extend(shell.index_arguments());
+    args.extend(folder_arguments(&settings, &shell.code_folders()));
+    args.extend(folders);
+    shell.search.set_arguments(args);
     let search = shell.clone();
     tauri::async_runtime::spawn(async move {
         let _ = search.search.ask(request).await;

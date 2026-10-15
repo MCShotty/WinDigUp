@@ -31,6 +31,8 @@ pub struct Status {
     /// Chosen folders that aren't there now (an unplugged drive), and ones DigUp can't read: skipped, files kept.
     pub missing: Vec<String>,
     pub unreadable: Vec<String>,
+    /// Failed subtrees from the last completed crawl, kept while another crawl is in progress.
+    pub scan_unreadable: Vec<String>,
     /// The speed check before the first index is running.
     pub measuring: bool,
     /// Indexing is paused (Pause Indexing): nothing is read until it's resumed; search goes on.
@@ -58,8 +60,8 @@ impl Status {
         let previous = (self.activity.clone(), self.searchable, self.pending, self.scan.clone());
         self.last_event_at = Some(time);
         let count = |key: &str| event[key].as_u64().unwrap_or(0);
-        // A rest event's `files` counts unfinished long documents, not the whole index.
-        if event["files"].is_u64() && event["event"] != "rest" {
+        // Only complete count snapshots describe the index. Rest/rescan/pruned events count a subset.
+        if event["files"].is_u64() && matches!(event["event"].as_str(), Some("counts" | "sync" | "idle" | "waiting")) {
             self.files = count("files");
             self.searchable = count("searchable");
             self.pending = count("pending");
@@ -71,7 +73,10 @@ impl Status {
                 self.activity = Activity::Scanning;
                 self.scan = event.clone();
             }
-            "sync" => { self.last_error = None; self.scan = event.clone(); self.activity = if count("new") > 0 || self.pending > 0 {
+            "sync" => {
+                self.scan_unreadable = event["unreadable"].as_array().into_iter().flatten()
+                    .filter_map(Value::as_str).map(String::from).collect();
+                self.last_error = None; self.scan = event.clone(); self.activity = if count("new") > 0 || self.pending > 0 {
                 Activity::Indexing { done: 0, total: count("new").max(self.pending) }
             } else { Activity::Idle }; },
             "file" => {
@@ -163,7 +168,7 @@ impl Status {
             }
             _ => {
                 if self.files == 0 && self.scan["event"] == "sync" && !self.paused {
-                    return if !self.missing.is_empty() || !self.unreadable.is_empty() {
+                    return if !self.missing.is_empty() || !self.unreadable.is_empty() || !self.scan_unreadable.is_empty() {
                         "No files found · some selected folders are unavailable".into()
                     } else { "No supported local files found in the selected folders".into() };
                 }
@@ -216,7 +221,8 @@ impl Status {
             Some("downloading") => {
                 return Some(format!("Matching words only until the model has downloaded ({}%)", (fraction(model) * 100.0) as u64))
             }
-            Some("waiting" | "failed") => return Some("Matching words only: the model isn't downloaded".into()),
+            Some("waiting") => return Some("Matching words only: the model isn't downloaded".into()),
+            Some("failed") => return Some("Matching words only: model inference is unavailable".into()),
             _ => {}
         }
         if let Activity::Indexing { done, total } = self.activity {
@@ -231,6 +237,7 @@ impl Status {
 
     /// What the pages show: the line, the progress, the caveat, and the counts.
     pub fn snapshot(&self, has_folders: bool, model: &Value) -> Value {
+        let unreadable: std::collections::BTreeSet<_> = self.unreadable.iter().chain(&self.scan_unreadable).collect();
         let indexing = match self.activity {
             Activity::Indexing { done, total } => json!({"done": done, "total": total}),
             _ => Value::Null,
@@ -264,7 +271,7 @@ impl Status {
             "lastProgressAt": self.last_progress_at,
             "phaseStartedAt": self.phase_started_at,
             "missing": self.missing,
-            "unreadable": self.unreadable,
+            "unreadable": unreadable,
             "finishing": match self.activity { Activity::Finishing { done, total, files } => json!({"done":done,"total":total,"files":files}), _ => Value::Null },
         })
     }
@@ -276,7 +283,8 @@ fn download_line(model: &Value) -> Option<String> {
         "downloading" => Some(format!("Downloading the model · {}%", (fraction(model) * 100.0) as u64)),
         "checking" => Some("Checking the model download…".into()),
         "waiting" => Some("Model download: waiting for the network".into()),
-        "failed" => Some("⚠︎ The model download stopped".into()),
+        "failed" => Some(format!("⚠︎ {}", model["message"].as_str().filter(|s| !s.is_empty())
+            .unwrap_or("Model inference is unavailable"))),
         _ => None,
     }
 }
@@ -404,5 +412,37 @@ mod tests {
         let snapshot=status.snapshot(true,&json!({"state":"ready"}));
         assert_eq!(snapshot["files"],120);assert_eq!(snapshot["searchable"],100);assert_eq!(snapshot["pending"],20);
         assert_eq!(snapshot["finishing"]["files"],3);
+    }
+
+    #[test]
+    fn maintenance_counts_are_not_index_totals() {
+        let mut status = Status::default();
+        status.apply(&json!({"event":"counts","files":120,"searchable":100,"pending":20,"unfinished":3}));
+        for event in ["rescan", "pruned"] {
+            status.apply(&json!({"event":event,"files":4}));
+            assert_eq!(status.files, 120);
+            assert_eq!(status.searchable, 100);
+            assert_eq!(status.pending, 20);
+        }
+    }
+
+    #[test]
+    fn accelerator_failure_is_not_reported_as_a_missing_download() {
+        let status = Status::default();
+        let model = json!({"state":"failed","message":"No compatible Vulkan device"});
+        assert!(status.line(true, &model).contains("No compatible Vulkan device"));
+        assert!(!status.caveat(&model).unwrap().contains("downloaded"));
+    }
+
+    #[test]
+    fn partial_scan_paths_stay_visible_until_a_successful_rescan() {
+        let mut status = Status::default();
+        let ready = json!({"state":"ready"});
+        status.apply(&json!({"event":"missing","unreadable":["C:/offline"]}));
+        status.apply(&json!({"event":"sync","files":3,"searchable":3,"unreadable":["C:/docs/locked"]}));
+        status.apply(&json!({"event":"scan_progress","visited":1}));
+        assert_eq!(status.snapshot(true, &ready)["unreadable"], json!(["C:/docs/locked","C:/offline"]));
+        status.apply(&json!({"event":"sync","files":3,"searchable":3,"unreadable":[]}));
+        assert_eq!(status.snapshot(true, &ready)["unreadable"], json!(["C:/offline"]));
     }
 }

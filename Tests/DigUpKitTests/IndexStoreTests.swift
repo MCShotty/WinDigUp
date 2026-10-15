@@ -130,6 +130,56 @@ import WinSDK
         #expect(try store.files(under: [drive.path]).count == 1)
     }
 
+    #if !os(Windows)
+    @Test func incompleteScanPreservesUnreadableSubtreesButRemovesRealDeletions() throws {
+        // Run as a normal user: root can read a directory even after chmod(000).
+        guard geteuid() != 0 else { return }
+        let root = URL(fileURLWithPath: FolderSelection.realPath(folder.path)).appendingPathComponent("files")
+        let locked = root.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let kept = locked.appendingPathComponent("kept.txt")
+        let removed = root.appendingPathComponent("removed.txt")
+        try Data("keep this indexed document".utf8).write(to: kept)
+        try Data("this document will be deleted".utf8).write(to: removed)
+        let store = try IndexStore(directory: folder.appendingPathComponent("index"))
+        let indexer = try Indexer(store: store, options: IndexOptions(),
+                                  makeEmbedder: { throw WorkerError.notFound("no model needed to sync") })
+        #expect(try indexer.sync([root]).added == 2)
+        let keptID = try #require(store.files(under: [locked.path]).first?.id)
+        try store.finish(keptID, state: "done")
+        try FileManager.default.removeItem(at: removed)
+        #expect(chmod(locked.path, 0) == 0)
+        defer { _ = chmod(locked.path, 0o755) }
+        let scan = try indexer.sync([root])
+        #expect(scan.removed == 1)
+        let remaining = try store.files(under: [root.path])
+        #expect(remaining.map(\.id) == [keptID])
+        #expect(remaining.first?.state == "done")
+        #expect(chmod(locked.path, 0o755) == 0)
+        #expect(try indexer.sync([root]).unchanged == 1)
+    }
+    #endif
+
+    @Test func renameToAnotherKindMustReindexInsteadOfReusingOldVectors() throws {
+        let root = folder.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let before = root.appendingPathComponent("photo.jpg")
+        let after = root.appendingPathComponent("notes.txt")
+        try Data("same bytes, different interpretation".utf8).write(to: before)
+        let store = try IndexStore(directory: folder.appendingPathComponent("index"))
+        let indexer = try Indexer(store: store, options: IndexOptions(),
+                                  makeEmbedder: { throw WorkerError.notFound("no model needed to sync") })
+        #expect(try indexer.sync([root]).added == 1)
+        let oldID = try #require(store.files(under: [root.path]).first?.id)
+        try store.finish(oldID, state: "done")
+        try FileManager.default.moveItem(at: before, to: after)
+        let scan = try indexer.sync([root])
+        let changed = try #require(store.files(under: [root.path]).first)
+        #expect(scan.moved == 0)
+        #expect(changed.kind == .doc)
+        #expect(changed.state == "pending")
+    }
+
     @Test func syncFindsTheRowsOfAFolderSpelledAnotherWay() throws {
         // The walk stores paths as the disk spells them, and on a Mac these folders are chosen spelled otherwise twice
         // over: under /var where the disk says /private/var (the temporary folder), and with a name the disk keeps

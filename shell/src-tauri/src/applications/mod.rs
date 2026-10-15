@@ -224,8 +224,12 @@ impl Catalog {
         self.enabled() && self.options.read().unwrap().semantic_enabled
     }
     pub fn info(&self) -> Value {
+        // Every reader takes options before the snapshot, as rebuild does. Reversing this order
+        // can deadlock with a queued settings writer on writer-preferring platforms.
+        let options = self.options.read().unwrap();
+        let enabled = (Self::supported() || cfg!(test)) && options.enabled;
         let s = self.snapshot.read().unwrap();
-        json!({"supported":Self::supported(), "enabled":self.enabled(), "semanticEnabled":self.semantic_enabled(),
+        json!({"supported":Self::supported(), "enabled":enabled, "semanticEnabled":enabled && options.semantic_enabled,
             "count":s.hits.iter().filter(|h| !h.hidden).count(), "totalCount":s.hits.len(),
             "hiddenCount":s.hits.iter().filter(|h| h.hidden).count(), "revision":s.revision,
             "refreshing":self.refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})
@@ -482,8 +486,9 @@ impl Catalog {
         words
     }
     pub fn documents(&self) -> Value {
+        let semantic_enabled = self.semantic_enabled();
         let s = self.snapshot.read().unwrap();
-        let docs: Vec<Value> = if self.semantic_enabled() {
+        let docs: Vec<Value> = if semantic_enabled {
             s.hits
                 .iter()
                 .filter(|h| !h.hidden)
@@ -649,6 +654,32 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn waiting_for_options_never_locks_the_catalog_snapshot() {
+        // rebuild acquires options before the snapshot. Taking those locks in the reverse order
+        // deadlocks when a settings writer queues between two readers on a writer-preferring RwLock.
+        let catalog = Catalog::new(std::env::temp_dir().join(format!("digup-locks-{}", std::process::id())), Options::default(), |_| {});
+        for documents in [false, true] {
+            let options = catalog.options.write().unwrap();
+            let copy = catalog.clone();
+            let (started, ready) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                started.send(()).unwrap();
+                if documents { copy.documents() } else { copy.info() }
+            });
+            ready.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            let mut blocked = false;
+            for _ in 0..100 {
+                blocked |= catalog.snapshot.try_write().is_err();
+                if blocked { break; }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            drop(options);
+            reader.join().unwrap();
+            assert!(!blocked, "a settings-blocked reader held the catalog snapshot (documents={documents})");
+        }
     }
 
     #[test]

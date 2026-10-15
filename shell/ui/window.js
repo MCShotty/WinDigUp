@@ -49,6 +49,7 @@ const state = {
   generation: 0,
   timer: null,
   error: null,
+  fileError: null,
   info: { folders: [], hotkey: null, hasCode: false },
   app: {},              // indexing and the model, from the shell (status.rs): line, progress, caveat, counts
   indexed: null,        // files indexed of each kind (the home)
@@ -90,6 +91,7 @@ function run() {
   clearTimeout(state.timer);
   state.navigated = false;
   state.error = null;
+  state.fileError = null;
   state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = null;
   const typed = state.query.trim();
   const mode = Apps.parse(typed, state.filter);
@@ -137,6 +139,7 @@ function run() {
       if (generation !== state.generation) return;
       state.filesPending = false;
       state.error = String(error);
+      state.fileError = String(error);
       render();
     }
   }, TYPING_PAUSE);
@@ -230,9 +233,10 @@ function renderContent() {
   if (isAppsMode()) $content.append(applicationGroup());
   else {
     if (applicationSearch.hits.length) $content.append(applicationGroup());
-    if (!state.info.folders.length) $content.append(chooseFolders());
+    if (!state.info.folders.length && !isCode()) $content.append(chooseFolders());
     else if (!state.query.trim()) $content.append(home());
     else if (state.codePhase) $content.append(codeHintOrOff());
+    else if (state.fileError) $content.append(fileSearchFailure());
     else if (!state.hasResults || state.filesPending) $content.append(centered(element("div", "spinner")));
     else if (!state.ranked.length && !state.weaker.length) $content.append(nothingFound());
     else if (isCode()) $content.append(codeList());
@@ -507,6 +511,14 @@ function failed(error) {
 }
 
 // MARK: What shows instead of results
+
+function fileSearchFailure() {
+  const box = element("div", "center");
+  const retry = element("button", "", "Retry file search");
+  retry.onclick = () => run();
+  box.append(element("h2", "", "File search unavailable"), element("p", "", state.fileError), retry);
+  return box;
+}
 
 /// Nothing typed yet: the app's mark, a pointer to the field above, examples to click (each with the kind it finds),
 /// what's indexed, and the shortcut. A click anywhere else puts the cursor in the field.
@@ -1084,7 +1096,6 @@ function updatePreviewButton() {
 
 document.addEventListener("keydown", (event) => {
   if (event.isComposing) return;   // an input method is composing: its keys
-  if (event.target.closest(".app-launch")) return;
   if (document.querySelector(".activity-report[open]") || event.target.closest(".activity-view")) return;
   if (event.key === "Escape" && state.activityOpen) { event.preventDefault(); closeActivity(); return; }
   const modifier = isMac ? event.metaKey : event.ctrlKey;
@@ -1094,6 +1105,9 @@ document.addEventListener("keydown", (event) => {
     hideMenu();
     return;
   }
+  // Enter/Space/arrows belong to the focused control, including menu items,
+  // pagination and media controls. Only the query/body drive result navigation.
+  if (event.target !== $query && event.target.closest("button, a, input, textarea, select, summary, video, audio, [contenteditable]")) return;
   if (modifier && !event.altKey && !event.shiftKey) {
     const number = Number(event.key);
     if (number >= 1 && number <= 6) {

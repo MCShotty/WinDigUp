@@ -164,6 +164,7 @@ final class DirectoryWalk {
     private var pending: [Entry]   // what's next, last first
     private var opened: URL?     // the folder just returned: its contents come next, unless skipped
     private(set) var currentIsDirectory = false
+    private(set) var unreadable = Set<String>()
 
     init(_ root: URL, keys: [URLResourceKey]) {
         pending = []
@@ -192,7 +193,15 @@ final class DirectoryWalk {
         let handle = pattern.withCString(encodedAs: UTF16.self) {
             FindFirstFileExW($0, FindExInfoBasic, &data, FindExSearchNameMatch, nil, 0)
         }
-        guard let handle, handle != INVALID_HANDLE_VALUE else { return [] }
+        guard let handle, handle != INVALID_HANDLE_VALUE else {
+            // An empty directory has no matches. Access denied, a disconnected share, or another I/O error
+            // says nothing about whether its previously indexed files still exist.
+            let error = GetLastError()
+            if error != DWORD(ERROR_FILE_NOT_FOUND) && error != DWORD(ERROR_NO_MORE_FILES) {
+                unreadable.insert(folder.path)
+            }
+            return []
+        }
         defer { FindClose(handle) }
         var entries: [Entry] = []
         repeat {
@@ -209,6 +218,7 @@ final class DirectoryWalk {
                 entries.append(Entry(url: folder.appendingPathComponent(name, isDirectory: directory), directory: directory))
             }
         } while FindNextFileW(handle, &data)
+        if GetLastError() != DWORD(ERROR_NO_MORE_FILES) { unreadable.insert(folder.path) }
         return entries
     }
 }

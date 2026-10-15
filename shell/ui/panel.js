@@ -79,7 +79,7 @@ function queryChanged() {
     .then((reply) => {
       if (generation === state.generation && state.finalGeneration !== generation) show(reply, text, "words");
     })
-    .catch(failed);
+    .catch(error => { if (generation === state.generation && state.finalGeneration !== generation) failed(error); });
   // The meaning is embedded now, so its vector is ready when typing pauses: the pause is the whole wait.
   ask({ op: "embed_ahead", q: text, code }).catch(() => {});
   state.timer = setTimeout(() => {
@@ -90,7 +90,7 @@ function queryChanged() {
         show(reply, text, reply.meaning ? "meaning" : "wordsOnly");
         if (debugPending) report();
       })
-      .catch(failed);
+      .catch(error => { if (generation === state.generation) failed(error); });
   }, TYPING_PAUSE);
 }
 
@@ -470,6 +470,8 @@ $query.addEventListener("input", queryChanged);
 
 document.addEventListener("keydown", (event) => {
   if (event.isComposing) return; // an input method is composing: its keys
+  if (event.key !== "Escape" && event.target !== $query
+      && event.target.closest("button, a, input, textarea, select, summary, video, audio, [contenteditable]")) return;
   const modifier = isMac ? event.metaKey : event.ctrlKey;
   switch (event.key) {
     case "Escape":
