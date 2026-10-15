@@ -35,8 +35,22 @@ jobs:
             $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/artifacts" | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0) { throw 'Could not read package artifacts' }
             if ($artifacts.artifacts | Where-Object { $_.name -eq 'DigUp-windows-x64' -and -not $_.expired }) {
+              # Packages checks out a PR merge ref. Verify that actual checkout, rather than trusting head_sha alone.
+              $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/jobs" | ConvertFrom-Json
+              if ($LASTEXITCODE -ne 0) { throw 'Could not read package jobs' }
+              $job = $jobs.jobs | Where-Object { $_.name -eq 'windows' -and $_.status -eq 'completed' } | Select-Object -First 1
+              if (-not $job) { continue }
+              $log = (gh api "repos/$env:GITHUB_REPOSITORY/actions/jobs/$($job.id)/logs") -join "`n"
+              if ($LASTEXITCODE -ne 0) { continue }
+              $checkout = [regex]::Match($log, 'log -1 --format=%H[^\r\n]*\r?\n[^\r\n]*?([0-9a-f]{40})')
+              if (-not $checkout.Success) { continue }
+              $source = $checkout.Groups[1].Value
+              git fetch --quiet --no-tags origin $source
+              if ($LASTEXITCODE -ne 0) { continue }
+              $changed = @(git diff --name-only $source HEAD)
+              if ($LASTEXITCODE -ne 0 -or @($changed | Where-Object { $_ -notin $allowed }).Count) { continue }
               "run=$($run.id)" >> $env:GITHUB_OUTPUT
-              "Installer source: $($run.head_sha); test source: $(git rev-parse HEAD)" >> $env:GITHUB_STEP_SUMMARY
+              "Installer checkout: $source; test source: $(git rev-parse HEAD)" >> $env:GITHUB_STEP_SUMMARY
               break
             }
           }
