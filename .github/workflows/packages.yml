@@ -200,26 +200,36 @@ jobs:
           "$temp/vulkansdk.exe" --root "C:\\VulkanSDK\\$version" --accept-licenses --default-answer --confirm-command install
           echo "VULKAN_SDK=C:\\VulkanSDK\\$version" >> "$GITHUB_ENV"
           echo "C:\\VulkanSDK\\$version\\Bin" >> "$GITHUB_PATH"
-      - name: Build
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llama
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp/LICENSE
+            Vendor/llama.cpp/licenses
+          key: llama-windows-vulkan-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Native libraries
         shell: bash
         run: |
-          # MSVC's tools before Git's: Git's /usr/bin/link (coreutils) would stand in for link.exe.
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.llama.outputs.cache-hit != 'true'
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp/LICENSE
+            Vendor/llama.cpp/licenses
+          key: llama-windows-vulkan-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Build
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/package-windows.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      - name: Swift and Rust policy checks
-        shell: bash
-        run: |
-          export PATH="$(dirname "$(command -v cl)"):$PATH"
-          # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
-          export PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter AccelerationTests
-          cd shell/src-tauri
-          cargo test acceleration::tests --locked
       - name: Native CPU rejection
         shell: bash
         run: |
@@ -235,3 +245,12 @@ jobs:
       - name: The installer
         shell: bash
         run: scripts/check-windows-accelerators.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+      - name: Swift and Rust policy checks
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
+          export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
+          swift test --filter AccelerationTests
+          cd shell/src-tauri
+          cargo test --release acceleration::tests --locked

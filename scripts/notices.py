@@ -144,8 +144,8 @@ def main():
         "Face on first launch.",
         "",
         section("DigUp", need(ROOT / "LICENSE")),
-        section("llama.cpp and ggml (https://github.com/ggml-org/llama.cpp), the embedding runtime, with one small "
-                "change in scripts/llama.cpp-no-logits.patch",
+        section("llama.cpp and ggml (https://github.com/ggml-org/llama.cpp), the embedding runtime, with output-memory and "
+                "accelerator-only patches in scripts/llama.cpp-*.patch",
                 need(llama / "LICENSE"),
                 *[f"{path.name}:\n\n{read(path)}" for path in sorted((llama / "licenses").glob("*")) if path.is_file()]),
         section("Vulkan headers (https://github.com/KhronosGroup/Vulkan-Headers), compiled into ggml's Vulkan backend",

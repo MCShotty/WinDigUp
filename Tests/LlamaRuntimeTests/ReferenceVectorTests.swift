@@ -68,7 +68,8 @@ import Testing
                 "the reference is for vectors \(reference.vectorVersion): write it anew for \(LlamaEmbedder.vectorVersion)")
         #expect(Set(made.keys) == Set(reference.vectors.keys))
         for (name, vector) in made.sorted(by: { $0.key < $1.key }) {
-            #expect(vector.allSatisfy(\.isFinite), "\(name): non-finite accelerator output")
+            let finite = vector.allSatisfy { $0.isFinite }
+            #expect(finite, "\(name): non-finite accelerator output")
             let normSquared = vector.reduce(0.0) { $0 + Double($1) * Double($1) }
             #expect(abs(normSquared - 1) < 0.005, "\(name): accelerator output is not normalized")
             guard let expected = reference.vectors[name] else { continue }
