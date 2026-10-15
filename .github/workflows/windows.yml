@@ -21,6 +21,13 @@ jobs:
           dotnet-version: '8.0.x'
       - run: dotnet run --project windows/WinDigUp.Core.Tests -c Release
       - run: dotnet publish windows/WinDigUp/WinDigUp.csproj -c Release -p:Platform=x64 --self-contained true -o windows/artifacts/WinUI
+      - name: Launch the published WinUI application
+        run: ./scripts/test-windows-launch.ps1 -PackageDirectory ./windows/artifacts/WinUI
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: WinUI-launch-diagnostics
+          path: ${{ runner.temp }}/WinDigUp-launch
       - uses: actions/upload-artifact@v4
         with:
           name: WinUI-build
@@ -134,10 +141,16 @@ jobs:
         with:
           name: DigUp-Windows-helper-${{ matrix.backend }}
           path: package/WinDigUp
-      - name: Verify packaged helper and backend without the development toolchain
+      - name: Verify packaged app, helper and backend without the development toolchain
         shell: pwsh
         run: |
           ./scripts/verify-windows-package.ps1 -PackageDirectory ./package/WinDigUp -Backend ${{ matrix.backend }}
+          ./scripts/test-windows-launch.ps1 -PackageDirectory ./package/WinDigUp
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: WinUI-launch-diagnostics-${{ matrix.backend }}
+          path: ${{ runner.temp }}/WinDigUp-launch
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
