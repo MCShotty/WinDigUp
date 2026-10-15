@@ -8,6 +8,7 @@ const Apps = {
   supported: /Win/.test(navigator.platform),
   enabled: /Win/.test(navigator.platform),
   iconCache: new Map(),
+  observedIcons: new Set(),
   launching: new Set(),
   parse(query, filter = null) {
     const typed = query.trim();
@@ -25,26 +26,55 @@ const Apps = {
     finally { this.launching.delete(hit.id); }
   },
   icon(hit, size = 64) {
-    const holder = element("span", "app-icon"); holder.textContent = "▦"; holder.setAttribute("aria-hidden", "true");
+    const holder = element("span", "app-icon"); holder.setAttribute("aria-hidden", "true");
+    const fallback = element("img", "app-generic"); fallback.src = "app-generic.svg"; fallback.alt = ""; holder.append(fallback);
     const key = `${hit.id}:${hit.iconRevision || ""}:${size}`;
-    if (!this.iconCache.has(key)) {
-      const promise = invoke("app_icon", { appId: hit.id, size }).then(fileURL);
-      this.iconCache.set(key, promise);
+    const load = () => {
+      if (!this.iconCache.has(key)) {
+        this.iconCache.set(key, invoke("app_icon", { appId: hit.id, size }).then(fileURL));
+        if (this.iconCache.size > 256) this.iconCache.delete(this.iconCache.keys().next().value);
+      }
+      this.iconCache.get(key).then(src => {
+        if (!holder.isConnected) return;
+        const image = element("img"); image.alt = ""; image.src = src;
+        image.onload = () => holder.replaceChildren(image);
+      }).catch(() => {});
+    };
+    if (typeof IntersectionObserver === "undefined") load();
+    else {
+      this.iconObserver ||= new IntersectionObserver(entries => {
+        for (const entry of entries) if(entry.isIntersecting) {
+          this.iconObserver.unobserve(entry.target); this.observedIcons.delete(entry.target); entry.target.loadIcon?.();
+        }
+      }, {rootMargin:"80px"});
+      holder.loadIcon = load; this.observedIcons.add(holder); this.iconObserver.observe(holder);
+      if (!this.pruneIcons) this.pruneIcons = requestAnimationFrame(() => {
+        this.pruneIcons = null;
+        for (const icon of this.observedIcons) if(!icon.isConnected) { this.iconObserver.unobserve(icon);this.observedIcons.delete(icon); }
+      });
     }
-    this.iconCache.get(key).then((src) => {
-      const image = element("img"); image.alt = ""; image.src = src; holder.replaceChildren(image);
-    }).catch(() => { this.iconCache.delete(key); });
     return holder;
   },
-  row(hit, selected, select, launch) {
+  row(hit, selected, select, launch, expanded = false) {
     const row = element("div", "app-row" + (selected ? " selected" : ""));
     row.title = hit.shortcut || "Registered Windows application";
-    row.dataset.resultKey = resultKey(hit); row.setAttribute("role", "option");
+    row.dataset.resultKey = resultKey(hit); row.setAttribute("role", expanded ? "row" : "option");
     row.setAttribute("aria-selected", String(selected));
     row.setAttribute("aria-label", `Application, ${hit.name}`);
     const text = element("div", "app-row-text");
-    text.append(element("div", "app-name", hit.name), element("div", "app-description", hit.description || hit.publisher || "Application"));
-    row.append(this.icon(hit), text);
+    text.append(element("div", "app-name", hit.name));
+    if (expanded && hit.publisher) text.append(element("div", "app-publisher", hit.publisher));
+    text.append(element("div", "app-description", hit.purpose || hit.description || hit.publisher || "Windows application"));
+    const icon = this.icon(hit); row.append(icon, text);
+    if (expanded) {
+      row.classList.add("app-row-expanded"); icon.setAttribute("role","gridcell"); text.setAttribute("role","gridcell");
+      const reason = element("span", "app-match-reason", hit.reason === "semantic" ? "Purpose match" : ""); reason.setAttribute("role","gridcell"); row.append(reason);
+      const actions = element("span", "app-row-actions"); actions.setAttribute("role","gridcell");
+      const button = element("button", "app-launch", "Launch"); button.setAttribute("aria-label",`Launch ${hit.name}`);
+      button.disabled = this.launching.has(hit.id); button.tabIndex = selected ? 0 : -1;
+      button.onclick = async event => { event.stopPropagation(); select(resultKey(hit)); button.disabled=true; try { await launch(hit); } finally { button.disabled=false; } };
+      actions.append(button); row.append(actions);
+    }
     row.onmousedown = (e) => { if (e.button === 0) e.preventDefault(); };
     row.onclick = () => select(resultKey(hit)); row.ondblclick = () => launch(hit);
     return row;
@@ -53,7 +83,8 @@ const Apps = {
     const box = element("div", "app-details");
     box.append(this.icon(hit, 128), element("div", "app-name", hit.name));
     if (hit.publisher) box.append(element("div", "app-description", hit.publisher));
-    if (hit.description) box.append(element("p", "", hit.description));
+    if (hit.purpose || hit.description) box.append(element("p", "", hit.purpose || hit.description));
+    if (hit.aliases?.length) box.append(element("p", "app-description", `Aliases: ${hit.aliases.join(", ")}`));
     box.append(element("p", "app-description", hit.shortcut || "Registered with Windows"));
     box.append(element("p", "app-description", hit.reason === "semantic" ? "Matches what this application does" : "Matches the application name or alias"));
     const launch = element("button", "primary", "Launch");
@@ -79,7 +110,7 @@ class ApplicationSearch {
         this.semantic = payload;
         clearTimeout(this.refreshTimer);
         this.refreshTimer = setTimeout(() => {
-          this.changed(); if (this.text) this.request(true, true, false, Math.max(this.limit, this.hits.length));
+          this.changed(); if (this.text && payload.encoder === "ready") this.request(true, true, false, Math.max(this.limit, this.hits.length));
         }, 250);
       }).then((stop) => this.unlisten.push(stop));
     }
@@ -149,9 +180,13 @@ class ApplicationSearch {
     if (this.catalog.enabled === false) return "Application search is off. Enable it in Settings → Apps.";
     const sourceErrors = Object.values(this.catalog.sourceErrors || {});
     if (sourceErrors.length && !this.total) return `Windows applications could not refresh: ${sourceErrors.join("; ")}`;
-    if (this.semantic.state === "unavailable") return `App names available; purpose matching unavailable${this.semantic.message ? `: ${this.semantic.message}` : ""}`;
-    if (this.semantic.state === "preparing") return this.semantic.total ? `Preparing app purpose matching: ${this.semantic.embedded || 0} of ${this.semantic.total}` : "App names available; preparing purpose matching…";
+    if (this.semantic.state === "unavailable") return "Name search available · Purpose matching unavailable";
+    if (this.semantic.state === "preparing" && this.text) return "Name search available · Purpose matching preparing";
     if (this.catalog.refreshing) return "Refreshing installed applications…";
     return `${this.total} ${this.total === 1 ? "application" : "applications"}`;
+  }
+  purposeLabel() {
+    return this.semantic.state === "disabled" ? "Purpose matching off" : this.semantic.state === "ready" ? "Purpose matching ready"
+      : this.semantic.state === "unavailable" ? "Purpose matching unavailable" : "Purpose matching preparing";
   }
 }

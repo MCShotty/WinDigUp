@@ -56,19 +56,22 @@ pub async fn search_apps(
     limit: Option<usize>,
     offset: Option<usize>,
     include_hidden: Option<bool>,
+    visibility: Option<String>,
     passive: Option<bool>,
 ) -> Result<Value, String> {
     if q.chars().count() > 4096 {
         return Err("Application query is too long.".into());
     }
     let started = Instant::now();
+    let visibility = visibility.as_deref().unwrap_or(if include_hidden.unwrap_or(false) { "all" } else { "visible" });
+    if !matches!(visibility, "visible" | "hidden" | "all") { return Err("Unknown application visibility filter.".into()); }
     if !passive.unwrap_or(false) {
         *shell.app_last_query.lock().unwrap() = Instant::now();
     }
     shell.applications.refresh_if_stale();
     let mut hits = shell
         .applications
-        .search(q.trim(), include_hidden.unwrap_or(false));
+        .search(q.trim(), visibility != "visible");
     let mut semantic = if shell.applications.semantic_enabled() {
         shell.app_semantic.lock().unwrap().clone()
     } else {
@@ -138,13 +141,7 @@ pub async fn search_apps(
         }
         *shell.app_semantic.lock().unwrap() = semantic.clone();
     }
-    let total = hits.len();
-    let offset = offset.unwrap_or(0).min(20_000);
-    let hits: Vec<_> = hits
-        .into_iter()
-        .skip(offset)
-        .take(limit.unwrap_or(6).clamp(1, 100))
-        .collect();
+    let (hits, total, offset) = crate::applications::page_hits(hits, visibility, offset.unwrap_or(0), limit.unwrap_or(6));
     Ok(
         json!({"hits":hits,"total":total,"offset":offset,"generation":generation.unwrap_or(0),
         "catalog":shell.applications.info(),"semantic":semantic,"ms":started.elapsed().as_secs_f64()*1000.0}),

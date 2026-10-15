@@ -165,14 +165,16 @@
     <section class="tab" id="apps" role="tabpanel" hidden>
       <label class="option"><input type="checkbox" id="apps-enabled"><span class="text"><span class="name">Include installed applications</span><span class="info">Find and launch the applications registered with Windows.</span></span></label>
       <label class="option"><input type="checkbox" id="apps-semantic"><span class="text"><span class="name">Match applications by purpose</span><span class="info">Describe what you want to do. Uses the selected inference device; name matching works while the model is unavailable.</span></span></label>
-      <p id="apps-status" class="note" aria-live="polite"></p>
-      <button id="apps-refresh">Refresh applications</button>
-      <button id="apps-prepare">Prepare purpose matching</button>
-      <button class="link" id="apps-diagnostics">Activity and diagnostics…</button>
-      <label for="apps-filter">Find an application to customize</label>
-      <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">
-      <div id="apps-editors"></div>
-      <button id="apps-more" hidden>Show more applications</button>
+      <div id="apps-status" class="apps-settings-status" aria-label="Application availability"><p id="apps-catalog-status"></p><p id="apps-purpose-status"></p></div>
+      <div class="apps-settings-actions"><button id="apps-refresh">Refresh applications</button>
+        <button id="apps-prepare">Prepare purpose matching</button><button class="link" id="apps-diagnostics">Activity and diagnostics…</button></div>
+      <div class="apps-catalog-tools"><label for="apps-filter">Find an application to customize</label>
+        <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">
+        <label for="apps-visibility">Show</label><select id="apps-visibility" class="field"><option value="visible">Visible</option><option value="hidden">Hidden</option><option value="all">All</option></select></div>
+      <p id="apps-drafts" class="note" role="status"></p>
+      <div class="apps-settings-layout"><div class="apps-catalog-pane"><div id="apps-list" role="listbox" aria-label="Applications to customize"></div>
+        <button id="apps-more" hidden>Show more applications</button><p id="apps-list-count" class="note"></p></div>
+        <div id="apps-editors" aria-label="Selected application settings"></div></div>
     </section>
 
     <section class="tab" id="storage" role="tabpanel" hidden>

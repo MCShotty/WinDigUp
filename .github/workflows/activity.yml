@@ -1,0 +1,42 @@
+name: Activity and Apps UI
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-and-browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Native activity, catalog and transport contracts
+        run: cargo test --manifest-path tests/applications/native/Cargo.toml --locked
+      - name: Actual-page browser regressions
+        env:
+          DIGUP_ACTIVITY_SCREENSHOTS: ${{ runner.temp }}/activity-screenshots
+          DIGUP_EDITOR_SCREENSHOT: ${{ runner.temp }}/activity-screenshots/apps-editor.png
+        run: |
+          npm install --prefix /tmp/digup-ui --no-audit --no-fund playwright@1.61.1
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory shell/ui > /tmp/ui-server.log 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          export NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome
+          node --check shell/ui/activity.js
+          node --check shell/ui/applications-settings.js
+          node tests/ui/acceleration.cjs
+          node tests/ui/applications.cjs
+          node tests/ui/activity.cjs
+          node tests/ui/apps-editor.cjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: activity-browser-evidence
+          path: ${{ runner.temp }}/activity-screenshots
+          if-no-files-found: ignore
+  windows-shell:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Type check native Tauri commands, report export and Windows integration
+        run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked

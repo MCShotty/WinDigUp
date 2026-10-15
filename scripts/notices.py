@@ -144,6 +144,8 @@ def main():
         "Face on first launch.",
         "",
         section("DigUp", need(ROOT / "LICENSE")),
+        section("Fluent UI System Icons (https://github.com/microsoft/fluentui-system-icons), generic application icon",
+                need(ROOT / "shell/ui/fluent-icons-LICENSE.txt")),
         section("llama.cpp and ggml (https://github.com/ggml-org/llama.cpp), the embedding runtime, with output-memory and "
                 "accelerator-only patches in scripts/llama.cpp-*.patch",
                 need(llama / "LICENSE"),
