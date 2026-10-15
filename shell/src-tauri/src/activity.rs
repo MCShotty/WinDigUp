@@ -47,6 +47,10 @@ pub fn snapshot(input: Input) -> Value {
     let mut purpose = if semantic.is_object() { semantic.clone() } else { json!({}) };
     purpose["encoder"] = json!(encoder);
     if encoder == "stopped" && purpose["state"] == "ready" { purpose["state"] = json!("preparing"); }
+    if catalog["enabled"] == false || catalog["semanticEnabled"] == false { purpose["state"]=json!("disabled"); }
+    else if state["model"]["state"] == "failed" { purpose["state"]=json!("unavailable");purpose["message"]=state["model"]["message"].clone(); }
+    else if state["model"]["state"] != "ready" { purpose["state"]=json!("preparing"); }
+    let inference_error = if state["model"]["state"] == "failed" { &state["model"]["message"] } else { &runtime["encoder"]["message"] };
     json!({
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
         "files":{"schemaVersion":1,"phase":phase,"line":state["line"],
@@ -59,7 +63,7 @@ pub fn snapshot(input: Input) -> Value {
             "scheduledAt":state["heldUntil"],"blockedBy":blocked_by,"paused":state["paused"],"canIndexNow":has_folders && state["busy"] == false},
         "applications":{"schemaVersion":1,"catalog":catalog,"purpose":purpose,"lastProgressAt":runtime["applicationUpdatedAt"]},
         "inference":{"schemaVersion":1,"configured":configured,"verified":verified,"encoder":encoder,
-            "encoderUpdatedAt":runtime["encoder"]["updatedAt"],"error":runtime["encoder"]["message"],
+            "encoderUpdatedAt":runtime["encoder"]["updatedAt"],"error":inference_error,
             "model":state["model"],"checking":state["measuring"] == true},
         "helpers":{"schemaVersion":1,"index":helpers["index"],"search":helpers["search"]},"events":events,
     })
@@ -116,5 +120,10 @@ mod tests {
         assert_eq!(report["applications"]["catalog"]["count"],663);
         assert!(report["inference"]["verified"].is_null());
         assert_eq!(report["inference"]["configured"]["backend"],"openvino-npu");
+        let blocked=fixture(json!({"activity":"idle","model":{"state":"failed","message":"accelerator unavailable"}}));
+        assert_eq!(blocked["applications"]["catalog"]["count"],663);
+        assert_eq!(blocked["applications"]["purpose"]["state"],"unavailable");
+        assert_eq!(blocked["applications"]["purpose"]["embedded"],663);
+        assert_eq!(blocked["inference"]["error"],"accelerator unavailable");
     }
 }

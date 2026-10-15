@@ -299,7 +299,7 @@ window.ActivityUI = (() => {
       const verified = inference.verified?.device;
       put("device", verified || "Device not verified yet");
       put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}`);
-      put("encoder", `Model files: ${inference.model?.state === "ready" ? "available" : inference.model?.state || "unknown"} · Encoder: ${inference.encoder}`);
+      put("encoder", `${inference.model?.state === "ready" ? "Model files: available" : `Model status: ${inference.model?.state || "unknown"}`} · Encoder: ${inference.encoder}`);
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
       put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),
