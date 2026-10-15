@@ -532,6 +532,10 @@ tauri.event.listen("helper", ({ payload }) => {
   }
 });
 
+tauri.event.listen("model", ({ payload }) => {
+  if (payload.state === "ready" && !state.isApps) ask({ op: "prewarm" }).catch(() => {});
+});
+
 /// Indexing and the model, from the shell: a badge beside the field while results may be incomplete ("Indexing 42%"),
 /// as the Mac's panel has, with its progress as a ring.
 function showState(app) {

@@ -13,6 +13,7 @@ async function setup(page, platform='Win32') {
     window.calls=[]; window.listeners={}; window.fileMode='ready'; window.catalogEnabled=true;
     const all=Array.from({length:150},(_,i)=>({...photo,id:`app:${i.toString(16).padStart(64,'0')}`,name:`Application ${String(i).padStart(3,'0')}`}));
     const model={state:'failed',message:'No accelerator available'};
+    window.setupInfo={offered:[],chosen:[],skipped:[],codeOffered:[],hotkey:'Ctrl+Shift+Space',shortcut:{method:'grab',command:''},setUp:false,applicationsSupported:true,model,state:{model}};
     const settings={applications:{supported:platform==='Win32',enabled:true,semanticEnabled:true,count:150,sourceErrors:{}},
       acceleration:{backend:'amd-vulkan',gpu:'',python:'',models:''},hotkey:'Ctrl+Shift+Space',shortcut:{method:'grab',command:''},
       folders:['C:/docs'],skipped:[],skipTypes:[],code:{folders:[],skipped:[],editors:[],editor:'default'},state:{model},
@@ -24,16 +25,19 @@ async function setup(page, platform='Win32') {
       window.calls.push({command,args});
       if(command==='window_info')return {folders:['C:/docs'],hotkey:'Ctrl+Shift+Space',hasCode:true,state:{model},debugQuery:null};
       if(command==='settings_info')return settings;
-      if(command==='setup_info')return {offered:[],chosen:[],skipped:[],codeOffered:[],hotkey:'Ctrl+Shift+Space',shortcut:{method:'grab',command:''},setUp:false,applicationsSupported:true,model,state:{model}};
+      if(command==='setup_info')return window.setupInfo;
+      if(command==='estimate')return args.folders.map(folder=>({folder,files:{doc:1},seconds:0,calibrated:false,subfolders:[]}));
+      if(command==='apply_setup_folders' && window.setupSaveError)throw window.setupSaveError;
       if(command==='app_state')return {model};
       if(command==='debug_query')return null;
       if(command==='app_icon')throw 'No icon in fixture';
       if(command==='search_apps'){
         const q=args.q.toLowerCase();
         if(args.meaning)await new Promise(r=>setTimeout(r,700));
-        const matches=!q?all:q.includes('photo')?[photo,...(args.meaning?[{...semantic,reason:'semantic'}]:[])]:q==='portrait'?[semantic]:q==='retouch'&&args.meaning?[{...semantic,reason:'semantic'}]:[];
+        const meaning=args.meaning&&!window.holdPurpose;
+        const matches=!q?all:q.includes('photo')?[photo,...(meaning?[{...semantic,reason:'semantic'}]:[])]:q==='portrait'?[semantic]:q==='retouch'&&meaning?[{...semantic,reason:'semantic'}]:[];
         return {generation:args.generation,hits:window.catalogEnabled?matches.slice(args.offset||0,(args.offset||0)+args.limit):[],total:window.catalogEnabled?matches.length:0,
-          catalog:{enabled:window.catalogEnabled,supported:true,revision:'fixture'},semantic:{state:args.meaning?'ready':'preparing',total:2,embedded:args.meaning?2:0}};
+          catalog:{enabled:window.catalogEnabled,supported:true,revision:'fixture'},semantic:{state:meaning?'ready':'preparing',total:2,embedded:meaning?2:0}};
       }
       if(command==='launch_app'){if(window.launchFailure)throw {code:'launch_failed',message:'Application launch was refused'};return {accepted:true};}
       if(command==='refresh_apps')return settings.applications;
@@ -64,6 +68,20 @@ async function setup(page, platform='Win32') {
   await setup(page);
   await page.goto(base+'/index.html');
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='app_state'));
+  await page.evaluate(()=>{window.calls=[];window.emit('model',{state:'ready'});});
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='ask'&&c.args.request.op==='prewarm'),null,{timeout:2000});
+  await page.evaluate(()=>{window.holdPurpose=true;window.calls=[];});
+  await page.fill('#query','apps: retouch');
+  await page.waitForTimeout(950);
+  assert.equal(await page.locator('.app-row').count(),0);
+  await page.evaluate(()=>{window.holdPurpose=false;window.emit('model',{state:'ready'});});
+  await page.waitForSelector('.app-row');
+  assert.match(await page.locator('.app-row').first().textContent(),/Portrait Editor/);
+  await page.fill('#query','apps:');
+  await page.waitForSelector('.app-row');
+  await page.evaluate(()=>{window.calls=[];window.emit('model',{state:'ready'});});
+  await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='ask')),false,'Empty application listing woke the model');
   await page.evaluate(()=>{window.fileMode='blocked';window.calls=[];});
   await page.fill('#query','photo');
   await page.waitForSelector('.app-row');
@@ -160,6 +178,35 @@ async function setup(page, platform='Win32') {
   await page.waitForFunction(()=>!document.querySelector('#apps-start').hidden);
   await page.getByRole('button',{name:'Open app launcher now'}).click();
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='finish_setup'));
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='apply_setup_folders')),false,'Welcome launcher shortcut opted into folders without reviewing them');
+
+  // Leaving directly from the folder page must save edits before completing setup.
+  await page.reload();
+  await page.waitForFunction(()=>!document.querySelector('#apps-start').hidden);
+  await page.evaluate(()=>{
+    selection.chosen=['C:/Users/Test/Documents','D:/Photos العربية'];
+    selection.skipped=['C:/Users/Test/Documents/Private'];
+    page=1;render();window.calls=[];
+  });
+  await page.getByRole('button',{name:'Open app launcher now'}).click();
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='finish_setup'));
+  const setupCalls=await page.evaluate(()=>window.calls.filter(c=>['apply_setup_folders','finish_setup'].includes(c.command)));
+  assert.deepEqual(setupCalls.map(c=>c.command),['apply_setup_folders','finish_setup']);
+  assert.deepEqual(setupCalls[0].args,{folders:['C:\\Users\\Test\\Documents','D:\\Photos العربية'],skipped:['C:\\Users\\Test\\Documents\\Private']});
+  await page.reload();
+  await page.waitForFunction(()=>!document.querySelector('#apps-start').hidden);
+  await page.evaluate(()=>{selection.chosen=['C:/docs'];page=1;render();window.calls=[];window.setupSaveError='Could not save folder selection';});
+  await page.getByRole('button',{name:'Open app launcher now'}).click();
+  await page.waitForFunction(()=>document.querySelector('#summary').textContent==='Could not save folder selection');
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='finish_setup')),false);
+  assert.equal(await page.locator('#apps-start').isEnabled(),true);
+  await page.reload();
+  await page.waitForFunction(()=>!document.querySelector('#apps-start').hidden);
+  await page.evaluate(()=>{info.codeOffered=['D:/Projects'];PAGES=['welcome','folders','code','shortcut','ready'];codeChosen.add('D:/Projects');page=2;render();window.calls=[];});
+  await page.getByRole('button',{name:'Open app launcher now'}).click();
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='finish_setup'));
+  assert.deepEqual(await page.evaluate(()=>window.calls.filter(c=>['apply_setup_folders','set_code_folders','finish_setup'].includes(c.command)).map(c=>c.command)),['apply_setup_folders','set_code_folders','finish_setup']);
+  assert.deepEqual(await page.evaluate(()=>window.calls.find(c=>c.command==='set_code_folders').args),{folders:['D:\\Projects'],skipped:[]});
 
   const linux=await browser.newPage();linux.on('pageerror',e=>errors.push(e.message));await setup(linux,'Linux x86_64');
   await linux.goto(base+'/window.html');await linux.waitForSelector('.chip');

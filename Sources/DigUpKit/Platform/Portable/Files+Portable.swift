@@ -157,12 +157,14 @@ enum FileSystem {
 /// exactly the folder just returned. Hidden files (the attribute, or a name starting with a dot, as on a Mac) are left
 /// out, and folders that can't be read are passed over.
 final class DirectoryWalk {
-    private let keys: [URLResourceKey]
-    private var pending: [URL]   // what's next, last first
+    private struct Entry {
+        let url: URL
+        let directory: Bool
+    }
+    private var pending: [Entry]   // what's next, last first
     private var opened: URL?     // the folder just returned: its contents come next, unless skipped
 
     init(_ root: URL, keys: [URLResourceKey]) {
-        self.keys = keys
         pending = []
         pending = contents(of: root).reversed()
     }
@@ -173,16 +175,39 @@ final class DirectoryWalk {
             opened = nil
         }
         guard let next = pending.popLast() else { return nil }
-        if (try? next.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { opened = next }
-        return next
+        if next.directory { opened = next.url }
+        return next.url
     }
 
     func skipDescendants() { opened = nil }
 
-    private func contents(of folder: URL) -> [URL] {
-        let found = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys,
-                                                                  options: [.skipsHiddenFiles])) ?? []
-        return found.filter { !$0.lastPathComponent.hasPrefix(".") }
+    private func contents(of folder: URL) -> [Entry] {
+        // Inspect reparse tags without resolving them. Foundation's directory resource values follow junctions,
+        // so a junction back to a parent made this depth-first walk expand the same tree repeatedly.
+        let native = folder.path.replacingOccurrences(of: "/", with: "\\")
+        let pattern = native + (native.hasSuffix("\\") ? "*" : "\\*")
+        var data = WIN32_FIND_DATAW()
+        let handle = pattern.withCString(encodedAs: UTF16.self) {
+            FindFirstFileExW($0, FindExInfoBasic, &data, FindExSearchNameMatch, nil, 0)
+        }
+        guard let handle, handle != INVALID_HANDLE_VALUE else { return [] }
+        defer { FindClose(handle) }
+        var entries: [Entry] = []
+        repeat {
+            let name = withUnsafePointer(to: &data.cFileName) {
+                $0.withMemoryRebound(to: WCHAR.self, capacity: 260) { String(decodingCString: $0, as: UTF16.self) }
+            }
+            let attributes = data.dwFileAttributes
+            let directory = attributes & DWORD(FILE_ATTRIBUTE_DIRECTORY) != 0
+            let link = attributes & DWORD(FILE_ATTRIBUTE_REPARSE_POINT) != 0
+                && (data.dwReserved0 == 0xA000_000C || data.dwReserved0 == 0xA000_0003)
+            // A root deliberately chosen by the user is opened once. Child symlinks/junctions are never followed.
+            // Other reparse tags (including hydrated OneDrive files) keep their existing treatment in FileSystem.info.
+            if !name.hasPrefix("."), attributes & DWORD(FILE_ATTRIBUTE_HIDDEN) == 0, !link {
+                entries.append(Entry(url: folder.appendingPathComponent(name, isDirectory: directory), directory: directory))
+            }
+        } while FindNextFileW(handle, &data)
+        return entries
     }
 }
 #endif

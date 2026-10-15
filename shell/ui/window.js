@@ -1144,6 +1144,11 @@ tauri.event.listen("state", ({ payload }) => {
   if (payload.searchable !== before.searchable || payload.files !== before.files) loadIndexed();
 });
 
+// The first prewarm can arrive before download/verification completes. Resume when weights become usable.
+tauri.event.listen("model", ({ payload }) => {
+  if (payload.state === "ready" && !isAppsMode()) ask({ op: "prewarm" }).catch(() => {});
+});
+
 // The panel handed its search over (Ctrl+O, "Show all…"): this window was already open.
 tauri.event.listen("window-search", ({ payload }) => {
   state.filter = payload.kind || null;

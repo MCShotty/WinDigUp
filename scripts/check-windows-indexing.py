@@ -24,6 +24,8 @@ def main():
         (documents / "recipe.txt").write_text(
             "Lemon cake recipe. Cream butter and sugar, add three eggs, flour and the zest of two lemons. "
             "Bake the cake for forty minutes at 180 degrees, then pour warm lemon syrup over it.", encoding="utf-8")
+        # Junctions need no developer-mode symlink privilege. A directory cycle must never be followed.
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(documents / "Loop"), str(documents)], check=True)
         bundle = root / "synthetic-bundle"
         bundle.mkdir()
         (bundle / "manifest.json").write_text("{}", encoding="utf-8")
@@ -33,7 +35,16 @@ def main():
                 "python": sys.executable, "models": str(bundle)}}), encoding="utf-8")
         env = os.environ.copy()
         env.update(DIGUP_APP_TEST_LOG=str(root / "synthetic-requests.jsonl"),
+            DIGUP_ACCELERATOR="openvino-npu", DIGUP_OPENVINO_PYTHON=sys.executable, DIGUP_OPENVINO_MODELS=str(bundle),
             DIGUP_OPENVINO_WORKER=str(Path(__file__).resolve().parents[1] / "tests/applications/synthetic-worker.py"))
+        # Test the scanner independently of the desktop scheduler, then start setup with a separate fresh index.
+        helper = args.app.resolve().parent / "helper" / "digup.exe"
+        direct = subprocess.run([str(helper), "index", str(documents), "--index", str(root / "direct"), "--limit", "1"],
+            env=env, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=30)
+        assert direct.returncode == 0, direct.stdout + direct.stderr
+        with sqlite3.connect(root / "direct" / "openvino-npu" / "index.sqlite") as db:
+            rows = db.execute("SELECT path, state FROM files").fetchall()
+            assert len(rows) == 1 and rows[0][1] == "done", f"Direct scan followed a junction or failed: {rows}"
         command = [str(args.app.resolve()), "--index", str(root / "index"), "--settings", str(settings),
             "--offer", str(documents), "--hotkey", "Ctrl+Alt+Shift+D", "--debug-setup",
             "--debug-query", "lemon cake recipe", "--debug-quit"]
@@ -56,8 +67,9 @@ def main():
         with sqlite3.connect(effective / "index.sqlite") as db:
             rows = db.execute("SELECT path, state FROM files").fetchall()
             assert any(path.endswith("recipe.txt") and state == "done" for path, state in rows), rows
+            assert len(rows) == 1, f"Junction cycle was crawled: {rows}"
         saved = json.loads(settings.read_text(encoding="utf-8"))
-        assert saved["folders"] == [str(documents)] and saved["setUp"], saved
+        assert [Path(path) for path in saved["folders"]] == [documents] and saved["setUp"], saved
     print("PASS: installed setup, readiness handoff, Unicode folder scan, indexing and rendered file result (synthetic unit vectors; no inference)")
 
 

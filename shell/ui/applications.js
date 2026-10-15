@@ -83,6 +83,10 @@ class ApplicationSearch {
         }, 250);
       }).then((stop) => this.unlisten.push(stop));
     }
+    tauri.event.listen("model", ({ payload }) => {
+      // A purpose query made while the download was pending needs a new semantic phase after readiness.
+      if (payload.state === "ready" && this.active && this.text) this.refresh();
+    }).then((stop) => this.unlisten.push(stop));
   }
   begin(text, active) {
     this.epoch++; clearTimeout(this.timer); clearTimeout(this.refreshTimer);

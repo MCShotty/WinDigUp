@@ -215,6 +215,7 @@ final class IndexService: @unchecked Sendable {
             lock.withLock { yieldAt = Date() + max(took, 2) }
         }
         do {
+            emit(["event": "scanning", "code": part.code])
             let summary = try part.indexer.sync(availableRoots(part))
             if summary.queued.count <= newFilesLimit { newFiles.formUnion(summary.queued) }
             emitCounts("sync", [

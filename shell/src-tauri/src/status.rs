@@ -8,6 +8,7 @@ pub enum Activity {
     /// The index helper hasn't reported yet.
     #[default]
     Starting,
+    Scanning,
     Idle,
     /// A pass over new or changed files: `done` of `total`.
     Indexing { done: u64, total: u64 },
@@ -52,9 +53,10 @@ impl Status {
             self.unfinished = count("unfinished");
         }
         match event["event"].as_str().unwrap_or_default() {
-            "sync" if count("new") > 0 => self.activity = Activity::Indexing { done: 0, total: count("new") },
-            // A sync after a failure: the helper works again.
-            "sync" if matches!(self.activity, Activity::Failed(_)) => self.activity = Activity::Idle,
+            "scanning" => self.activity = Activity::Scanning,
+            "sync" => self.activity = if count("new") > 0 || self.pending > 0 {
+                Activity::Indexing { done: 0, total: count("new").max(self.pending) }
+            } else { Activity::Idle },
             "file" => {
                 self.activity = Activity::Indexing { done: count("done"), total: count("total") };
                 // The counts come with a sync; each file read since leaves "waiting".
@@ -77,7 +79,7 @@ impl Status {
             "error" if event["fatal"] == true => self.activity = Activity::Failed("Indexing stopped".into()),
             // The helper is gone: whatever it was doing is over.
             "exit" | "ended" => {
-                if matches!(self.activity, Activity::Starting | Activity::Indexing { .. } | Activity::Finishing { .. }) {
+                if matches!(self.activity, Activity::Starting | Activity::Scanning | Activity::Indexing { .. } | Activity::Finishing { .. }) {
                     self.activity = Activity::Idle;
                 }
             }
@@ -103,6 +105,7 @@ impl Status {
         match self.activity {
             // Held or paused, no index helper runs to say it has started: what's indexed stands.
             Activity::Starting if !self.paused && self.held_until.is_none() => "Starting…".into(),
+            Activity::Scanning => "Scanning folders…".into(),
             Activity::Indexing { done, total } => format!("Indexing {}% · {} of {}", percent(done, total), number(done), number(total)),
             Activity::Finishing { done, total, files } => {
                 let which = if files > 0 { format!("{} long {}", number(files), plural(files, "file", "files")) } else { "long files".into() };
@@ -144,7 +147,7 @@ impl Status {
     /// Something is under way or can't start: Index Now has nothing to add.
     pub fn busy(&self, model: &Value) -> bool {
         model["state"] != "ready" || self.measuring || self.paused || self.held_until.is_some()
-            || matches!(self.activity, Activity::Indexing { .. } | Activity::Finishing { .. })
+            || matches!(self.activity, Activity::Scanning | Activity::Indexing { .. } | Activity::Finishing { .. })
     }
 
     /// 0…1 while something is under way (the download, then an indexing pass or the rest of long files).
@@ -201,6 +204,7 @@ impl Status {
             "busy": self.busy(model),
             "activity": match self.activity {
                 Activity::Starting => "starting",
+                Activity::Scanning => "scanning",
                 Activity::Idle => "idle",
                 Activity::Indexing { .. } => "indexing",
                 Activity::Finishing { .. } => "finishing",
@@ -259,6 +263,10 @@ mod tests {
         let mut status = Status::default();
         assert_eq!(status.line(false, &ready), "No folders chosen yet");
         assert_eq!(status.line(true, &ready), "Starting…");
+        status.apply(&json!({"event":"scanning"}));
+        assert_eq!(status.line(true, &ready), "Scanning folders…");
+        assert_eq!(status.snapshot(true, &ready)["activity"], "scanning");
+        assert!(status.busy(&ready));
         assert_eq!(status.line(true, &json!({"state": "downloading", "bytes": 432.0, "total": 865.0})),
                    "Downloading the model · 49%");
         status.apply(&json!({"event": "sync", "new": 306, "files": 306, "searchable": 0, "pending": 306}));

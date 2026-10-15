@@ -445,8 +445,21 @@ $("next").addEventListener("click", async () => {
 
 $("apps-start").onclick = async () => {
   $("apps-start").disabled = true;
-  try { await invoke("finish_setup"); }
+  $("next").disabled = true;
+  $("back").disabled = true;
+  try {
+    // The welcome page hasn't offered a folder choice yet. Once it has, keep every choice made before leaving.
+    if (page >= PAGES.indexOf("folders")) {
+      await invoke("apply_setup_folders", { folders: selection.folders().map(native), skipped: selection.skips().map(native) });
+    }
+    const codePage = PAGES.indexOf("code");
+    if (codePage >= 0 && page >= codePage) {
+      await invoke("set_code_folders", { folders: [...codeChosen].map(native), skipped: [] });
+    }
+    await invoke("finish_setup");
+  }
   catch (error) { $("summary").textContent = String(error); $("apps-start").disabled = false; }
+  finally { $("next").disabled = false; $("back").disabled = false; }
 };
 
 $("back").addEventListener("click", () => {

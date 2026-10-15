@@ -321,6 +321,7 @@ func index(_ args: Arguments) throws {
     try store.readAgainOnce()   // what older indexes couldn't read: scanned pages' words, SVGs
     try indexer.checkModel()
     let folders = try args.folders()
+    print("Scanning \(folders.count) \(folders.count == 1 ? "folder" : "folders")…")
     let sync = try indexer.sync(folders)
     print("index: \(tilde(store.file.path))")
     print("sync: \(sync.added) new · \(sync.changed) changed · \(sync.moved) moved · \(sync.removed) removed · \(sync.unchanged) unchanged")

@@ -829,6 +829,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         }
     });
     let mut download = vec!["download-model".to_string()];
+    download.extend(shell.index_arguments());
     if let Some(models) = &shell.options.models {
         download.extend(["--to".to_string(), models.display().to_string()]);
     }

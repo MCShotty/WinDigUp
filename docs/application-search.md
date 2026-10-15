@@ -7,7 +7,13 @@ the remaining matches. Ctrl+8 selects the Apps filter. Existing file/code filter
 
 Names and aliases work without model files, selected folders, an accelerator or a running file-search helper. On first
 launch, **Open app launcher now** completes setup without choosing folders or waiting for a model. The existing model
-download can continue in the background. File search can be configured later.
+download can continue in the background. Folder and code choices already made are saved before opening the launcher.
+File search can also be configured later.
+
+The Windows file scanner skips child directory junctions and symbolic links, so a link back to a parent cannot keep
+the first scan running repeatedly. While files are being discovered, the status says **Scanning folders…**. If the
+launcher opened while model verification was pending, it resumes encoder warm-up and purpose queries when the model
+becomes ready. Empty `apps:` listings still run without inference.
 
 ## Windows supplies the catalog
 
@@ -82,7 +88,7 @@ reply IDs and a restart. Native app-name requests and shutdown remain independen
 fixture checks that annotations survive recovery/reinstallation and icon changes leave embedding text unchanged.
 
 The UI checks run the actual panel, window, Settings and setup pages in Chromium. They cover a blocked helper,
-application-only routing, name/semantic merging, stable selection, pagination, launch IDs, file-only actions and Linux
+application-only routing, name/semantic merging, model-ready resumption, saved setup choices, stable selection, pagination, launch IDs, file-only actions and Linux
 behavior. The Windows installer check compiles a disposable GUI target, registers its own Start menu shortcut,
 launches it from the installed DigUp window, verifies Unicode arguments/working directory, and checks that it survives
 DigUp exiting. It cleans up its own shortcut and process. Packaged-app activation still needs a real Windows check.
