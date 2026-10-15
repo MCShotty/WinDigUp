@@ -222,6 +222,7 @@ function chip(title, icon, count, selected, action, number) {
 }
 
 function renderContent() {
+  const focusedLaunch = document.activeElement.closest?.(".app-row")?.dataset.resultKey;
   const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
   state.renderedGeneration = state.generation;
   thumbnails.disconnect();
@@ -238,6 +239,7 @@ function renderContent() {
     else $content.append(grid());
   }
   $content.scrollTop = scroll;
+  if(focusedLaunch) ($content.querySelector(`[data-result-key="${CSS.escape(focusedLaunch)}"] .app-launch`) || $query).focus({preventScroll:true});
 }
 
 function applicationGroup() {
@@ -632,11 +634,13 @@ let playing = null;   // the audio of the selected result, while it plays
 function renderSide() {
   stopPlaying();
   if (state.activityOpen) {
+    $side.removeAttribute("aria-live");
     $side.hidden = false;
     if (!activityHost.isConnected) $side.replaceChildren(activityHost);
     activityView.show();
     return;
   }
+  $side.setAttribute("aria-live", "polite");
   const hit = state.hasResults && !state.codePhase && hasQuery() ? selectedHit() : null;
   $side.hidden = !state.showsPreview || !hit;
   $side.replaceChildren();

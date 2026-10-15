@@ -58,7 +58,8 @@ impl Status {
         let previous = (self.activity.clone(), self.searchable, self.pending, self.scan.clone());
         self.last_event_at = Some(time);
         let count = |key: &str| event[key].as_u64().unwrap_or(0);
-        if event["files"].is_u64() {
+        // A rest event's `files` counts unfinished long documents, not the whole index.
+        if event["files"].is_u64() && event["event"] != "rest" {
             self.files = count("files");
             self.searchable = count("searchable");
             self.pending = count("pending");
@@ -112,10 +113,11 @@ impl Status {
         }
         // Identical heartbeats are contact, not progress. A new path/stage or a changed
         // counter is evidence of work; no wall-clock stall diagnosis is inferred here.
-        if previous != (self.activity.clone(), self.searchable, self.pending, self.scan.clone()) {
+        if !matches!(event["event"].as_str(), Some("error" | "ended" | "exit" | "started"))
+            && previous != (self.activity.clone(), self.searchable, self.pending, self.scan.clone()) {
             self.last_progress_at = Some(time);
         }
-        if std::mem::discriminant(&previous.0) != std::mem::discriminant(&self.activity)
+        if event["event"] == "started" || std::mem::discriminant(&previous.0) != std::mem::discriminant(&self.activity)
             || previous.3["stage"] != self.scan["stage"] {
             self.phase_started_at = Some(time);
         }
@@ -390,5 +392,17 @@ mod tests {
         assert_eq!(status.last_progress_at,Some(30.0));
         status.apply_at(&json!({"event":"file","code":true}),40.0);
         assert_eq!(status.last_event_at,Some(30.0));
+        status.apply_at(&json!({"event":"error","message":"worker failed"}),50.0);
+        assert_eq!(status.last_progress_at,Some(30.0));
+    }
+
+    #[test]
+    fn finishing_long_files_does_not_erase_catalog_counts() {
+        let mut status=Status::default();
+        status.apply(&json!({"event":"counts","files":120,"searchable":100,"pending":20,"unfinished":3}));
+        status.apply(&json!({"event":"rest","done":4,"total":20,"files":3}));
+        let snapshot=status.snapshot(true,&json!({"state":"ready"}));
+        assert_eq!(snapshot["files"],120);assert_eq!(snapshot["searchable"],100);assert_eq!(snapshot["pending"],20);
+        assert_eq!(snapshot["finishing"]["files"],3);
     }
 }

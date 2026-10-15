@@ -171,8 +171,9 @@ function renderStatus() {
   $("status-bar").hidden = state.progress == null;
   $("status-fill").style.width = `${Math.round(100 * (state.progress || 0))}%`;
   const scanning = state.activity === "scanning" || state.scan?.event === "scan_progress" && state.activity !== "idle";
-  const parts = scanning ? [state.searchable ? `${state.searchable.toLocaleString()} files remain searchable` : "Preparing the first file index"]
-    : [`${(state.searchable || 0).toLocaleString()} of ${(state.files || 0).toLocaleString()} files searchable`];
+  const preparing = scanning || !state.files && !state.searchable && (state.activity === "starting" || state.measuring || state.model?.state !== "ready");
+  const parts = preparing ? [state.searchable ? `${state.searchable.toLocaleString()} files remain searchable` : "Preparing the first file index"]
+    : [state.files ? `${(state.searchable || 0).toLocaleString()} of ${state.files.toLocaleString()} files searchable` : "No searchable local files"];
   $("status-bar").hidden = !scanning && state.progress == null;
   $("status-bar").classList.toggle("busy", scanning);
   if (state.pending) parts.push(`${state.pending.toLocaleString()} waiting`);
@@ -571,9 +572,13 @@ async function start() {
   if (info.debug) {
     const report = await invoke("indexing_diagnostics");
     const diagnostics = JSON.parse(report.split("\n\n--- ")[0]);
+    const activity = await invoke("activity_snapshot");
+    activityView.update(activity, "");
     invoke("debug_report", { report: { settings: true, hotkey: info.hotkey, openAtLogin: info.openAtLogin,
                                        canOpenAtLogin: info.canOpenAtLogin, folders: info.folders,
                                        diagnosticBuild: diagnostics.build, diagnosticBlocker: diagnostics.blockedBy,
+                                       activitySchema: activity.schemaVersion, activityPhase: activity.files.phase,
+                                       activityRendered: Boolean(activityView.get("phase").textContent),
                                        accelerator: $("accelerator").value, cpuOption: Boolean($("accelerator").querySelector('option[value="cpu"]')) } }).catch(() => {});
   }
   const asked = new URLSearchParams(location.search).get("tab");   // dev snapshots: ?tab=folders

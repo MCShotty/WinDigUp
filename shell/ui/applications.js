@@ -23,7 +23,12 @@ const Apps = {
     this.launching.add(hit.id);
     try { return await invoke("launch_app", { appId: hit.id }); }
     catch (error) { throw new Error(error?.message || String(error)); }
-    finally { this.launching.delete(hit.id); }
+    finally {
+      this.launching.delete(hit.id);
+      for(const row of document.querySelectorAll(`[data-result-key="${CSS.escape(hit.id)}"]`)) {
+        const button=row.querySelector(".app-launch");if(button)button.disabled=false;
+      }
+    }
   },
   icon(hit, size = 64) {
     const holder = element("span", "app-icon"); holder.setAttribute("aria-hidden", "true");
@@ -105,8 +110,17 @@ class ApplicationSearch {
     this.unlisten = [];
     for (const name of ["applications", "applications-progress"]) {
       tauri.event.listen(name, ({ payload }) => {
+        if (name === "applications") {
+          this.catalog=payload; Apps.enabled=payload.enabled !== false;
+          if(!Apps.enabled) {
+            this.epoch++;this.active=false;this.hits=[];this.total=0;this.semantic={state:"disabled"};
+            clearTimeout(this.timer);clearTimeout(this.refreshTimer);this.changed();return;
+          }
+          this.active=Boolean(this.requestedActive);
+          if(this.active)this.refresh();else this.changed();
+          return;
+        }
         if (!this.active) return;
-        if (name === "applications") { this.refresh(); return; }
         this.semantic = payload;
         clearTimeout(this.refreshTimer);
         this.refreshTimer = setTimeout(() => {
@@ -121,7 +135,7 @@ class ApplicationSearch {
   }
   begin(text, active) {
     this.epoch++; clearTimeout(this.timer); clearTimeout(this.refreshTimer);
-    this.text = text; this.active = active && Apps.supported; this.hits = []; this.total = 0; this.offset = 0;
+    this.text = text; this.requestedActive=active && Apps.supported;this.active=this.requestedActive && Apps.enabled; this.hits = []; this.total = 0; this.offset = 0;
     this.finalEpoch = -1; this.error = null;
     if (!this.active) return;
     this.request(false);
@@ -162,6 +176,7 @@ class ApplicationSearch {
       this.hits = append ? [...this.hits, ...hits.filter(h => !this.hits.some(old => old.id === h.id))] : hits;
       this.total = reply.total || 0; this.semantic = reply.semantic || {}; this.catalog = reply.catalog || {};
       Apps.enabled = this.catalog.enabled !== false;
+      if(!Apps.enabled){this.active=false;clearTimeout(this.timer);clearTimeout(this.refreshTimer);}
       this.error = null; this.changed();
     } catch (error) {
       if (epoch !== this.epoch) return;

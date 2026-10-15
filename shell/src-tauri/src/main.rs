@@ -1296,17 +1296,27 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     })
 }
 
-/// Works even when the helper is blocked. Local log tails and in-memory state only; no inference or folder crawl.
+/// In-memory activity only: no inference requests, log reads or directory enumeration.
 #[tauri::command]
-fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Value {
-    activity::snapshot(activity::Input {
-        state: shell.snapshot(), catalog: shell.applications.info(),
-        semantic: shell.app_semantic.lock().unwrap().clone(),
-        configured: serde_json::to_value(shell.settings.lock().unwrap().acceleration.clone()).unwrap_or_default(),
-        helpers: json!({"index":shell.index.snapshot(),"search":shell.search.snapshot()}),
-        runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
-        has_folders: !shell.folders().is_empty(), blocked_by: indexing_blocker(&shell),
-    })
+async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    let shell = shell.inner().clone();
+    // Settings saves can briefly own a shared lock; even that wait stays off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        // End each guard at its own statement. Struct-field temporaries could otherwise keep
+        // the settings guard alive while folders()/indexing_blocker() tries to acquire it again.
+        let state = shell.snapshot();
+        let semantic = shell.app_semantic.lock().unwrap().clone();
+        let configured = shell.settings.lock().unwrap().acceleration.clone();
+        let catalog = shell.applications.info();
+        let has_folders = !shell.folders().is_empty();
+        let blocked_by = indexing_blocker(&shell);
+        activity::snapshot(activity::Input {
+            state, catalog, semantic, configured: serde_json::to_value(configured).unwrap_or_default(),
+            helpers: json!({"index":shell.index.snapshot(),"search":shell.search.snapshot()}),
+            runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
+            has_folders, blocked_by,
+        })
+    }).await.map_err(|error| error.to_string())
 }
 
 /// Export exactly the report the person previewed, to a location chosen by the native Save As dialog.
@@ -1888,6 +1898,9 @@ fn search_event(app: &AppHandle, event: Value) {
         if event["state"] == "ready" { state["embedded"] = json!(0); state["state"] = json!("preparing"); }
         else if event["state"] == "unavailable" { state["state"]=json!("unavailable"); state["message"]=event["error"].clone(); }
         else { state["state"]=json!("preparing"); }
+        let updated = state.clone();
+        drop(state);
+        let _ = app.emit("applications-progress", updated);
     }
     if cfg!(debug_assertions) {
         println!("search: {event}");

@@ -77,6 +77,10 @@ const {setup, photo, semantic} = require('./application-fixtures.cjs');
   await page.locator('.app-row').first().click();
   assert.match(await page.locator('#side').textContent(),/Launch/);
   assert.equal(await page.locator('#side video, #side audio, #side .frame').count(),0);
+  await page.locator('.app-row.selected .app-launch').focus();
+  await page.evaluate(()=>window.emit('applications-progress',{state:'preparing',encoder:'ready',total:2,embedded:1}));
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(()=>document.activeElement.matches('.app-launch')),true,'Semantic progress lost Launch-button focus');
   if(process.env.DIGUP_APP_SCREENSHOT)await page.screenshot({path:process.env.DIGUP_APP_SCREENSHOT});
 
   await page.evaluate(()=>{window.calls=[];window.launchFailure=true;});
@@ -104,6 +108,12 @@ const {setup, photo, semantic} = require('./application-fixtures.cjs');
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='open_path'));
   await page.waitForFunction(()=>document.querySelector('.app-row')?.textContent.includes('Portrait Editor'));
   assert.equal(await page.locator('.cell.selected').count(),1,'Keyboard activation did not preserve selection after semantic results');
+  await page.fill('#query','photo');await page.waitForSelector('.app-row');
+  await page.evaluate(()=>{window.catalogEnabled=false;window.emit('applications',{supported:true,enabled:false});});
+  await page.waitForFunction(()=>document.querySelectorAll('.app-row').length===0);
+  assert.equal(await page.getByRole('button',{name:/^Apps/}).count(),0);
+  await page.evaluate(()=>{window.catalogEnabled=true;window.emit('applications',{supported:true,enabled:true});});
+  await page.waitForSelector('.app-row');
 
   await page.goto(base+'/settings.html?tab=apps');
   await page.waitForFunction(()=>document.querySelectorAll('.app-settings-row').length===100);

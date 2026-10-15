@@ -4,6 +4,7 @@ window.ActivityUI = (() => {
   const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
   const listeners = new Set();
   let latest = null, unavailable = "", pending = false, refreshTimer = null, poll = null;
+  let viewId = 0;
   const node = (tag, cls, text) => {
     const el = document.createElement(tag); if (cls) el.className = cls;
     if (text != null) el.textContent = text; return el;
@@ -18,7 +19,7 @@ window.ActivityUI = (() => {
   const phases = {
     not_configured: "Choose folders to search", starting: "Preparing file indexing", discovering: "Discovering files",
     preparing_queue: "Preparing the indexing queue", indexing: "Indexing files", finishing: "Finishing long files",
-    idle: "File index up to date", scheduled: "Indexing is scheduled", pausing: "Pausing indexing…", paused: "Indexing paused",
+    idle: "File index ready", waiting: "Files waiting to be indexed", stopped: "File worker stopped", scheduled: "Indexing is scheduled", pausing: "Pausing indexing…", paused: "Indexing paused",
     failed: "File indexing needs attention", unavailable: "File inference unavailable", checking_accelerator: "Checking the accelerator",
     preparing_model: "Preparing the model",
   };
@@ -112,10 +113,10 @@ window.ActivityUI = (() => {
       copyButton.disabled = exportButton.disabled = false;
       copyButton.onclick = () => copy(field.value, field, message);
       exportButton.onclick = async () => {
-        exportButton.disabled = true;
-        try { const result = await invoke("export_diagnostics", { report: field.value }); message.textContent = result?.saved ? "Report exported." : "Export cancelled."; }
-        catch (error) { message.textContent = error?.message || String(error); }
-        finally { exportButton.disabled = false; }
+        exportButton.disabled = checkbox.disabled = copyButton.disabled = true;
+        try { const result = await invoke("export_diagnostics", { report: field.value }); if(generation === reportGeneration)message.textContent = result?.saved ? "Report exported." : "Export cancelled."; }
+        catch (error) { if(generation === reportGeneration)message.textContent = error?.message || String(error); }
+        finally { if(generation === reportGeneration)exportButton.disabled = checkbox.disabled = copyButton.disabled = false; }
       };
     } catch (error) { if (generation === reportGeneration) field.value = error?.message || String(error); }
   }
@@ -173,6 +174,7 @@ window.ActivityUI = (() => {
           <p data-key="health-detail" class="activity-error"></p>
           <div class="activity-actions activity-recovery"><button data-key="retry" type="button">Index now</button>
             <button data-key="refresh-apps" type="button">Refresh apps</button><button data-key="prepare" type="button">Prepare purpose matching</button>
+            <button data-key="folders" type="button">Folder settings</button>
             <button data-key="acceleration" type="button">Accelerator settings</button></div>
           <h3 class="activity-event-title">Recent events</h3><ol data-key="events" class="activity-events"></ol>
           <details class="activity-technical"><summary>Technical details</summary>
@@ -185,6 +187,12 @@ window.ActivityUI = (() => {
       this.get = key => host.querySelector(`[data-key="${key}"]`);
       this.get("close").hidden = !options.onClose;
       this.get("close").onclick = () => options.onClose?.();
+      const prefix=`activity-view-${++viewId}`;
+      for(const button of host.querySelectorAll("[data-tab]")){
+        const pane=host.querySelector(`[data-pane="${button.dataset.tab}"]`);
+        button.id=`${prefix}-${button.dataset.tab}`;pane.id=`${button.id}-pane`;
+        button.setAttribute("aria-controls",pane.id);pane.setAttribute("aria-labelledby",button.id);
+      }
       for (const button of host.querySelectorAll("[data-tab]")) button.onclick = () => this.setTab(button.dataset.tab);
       host.querySelector(".activity-tabs").onkeydown = event => {
         const tabs=[...host.querySelectorAll("[data-tab]")], current=tabs.indexOf(event.target);
@@ -201,6 +209,7 @@ window.ActivityUI = (() => {
       this.get("retry").onclick = () => this.action("index_now");
       this.get("refresh-apps").onclick = () => this.action("refresh_apps");
       this.get("prepare").onclick = () => this.action("prepare_apps");
+      this.get("folders").onclick = () => options.onSettings ? options.onSettings("folders") : invoke("open_settings", { tab:"folders" });
       this.get("acceleration").onclick = () => options.onSettings ? options.onSettings("general") : invoke("open_settings", { tab: "general" });
     }
     show(tab = this.tab) { this.setTab(tab); this.stop ||= subscribe((s, error) => this.update(s, error)); }
@@ -222,7 +231,8 @@ window.ActivityUI = (() => {
     update(snapshot, error) {
       this.snapshot = snapshot;
       this.get("connection").hidden = !error;
-      this.get("connection").textContent = error ? `Activity status unavailable: ${error}${snapshot ? " Showing the last received snapshot." : ""}` : "";
+      const connection = error ? `Activity status unavailable: ${error}${snapshot ? " Showing the last received snapshot." : ""}` : "";
+      if(this.get("connection").textContent !== connection)this.get("connection").textContent=connection;
       this.get("loading").hidden = Boolean(snapshot) || Boolean(error);
       if (!snapshot) return;
       this.setTab(this.tab);
@@ -236,11 +246,14 @@ window.ActivityUI = (() => {
         preparing_queue: "Applying exclusions and reconciling supported files with the index.",
         not_configured: "Apps work without folders. Choose folders in Settings to add file search.",
         indexing: "Reading eligible files and preparing searchable content on your selected accelerator.",
+        waiting: "Files are queued, but no file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
         finishing: "Reading the remaining pages and chunks of long files. Partial content is already searchable.",
         scheduled: `Existing results remain searchable. Indexing resumes from ${f.scheduledAt || "the scheduled time"}.`,
         paused: "Existing results and application launching remain available.", pausing: "Waiting for the file worker to stop. Search remains available.",
-        idle: f.knownFiles ? "The current pass has finished. DigUp watches your selected folders for changes." : "No supported files are in the index. Review folders and exclusions below.",
+        idle: f.unfinished ? "Partial content is searchable. Long documents still have pages or chunks to finish."
+          : f.knownFiles ? "The current pass has finished. DigUp watches your selected folders for changes." : "No supported files are in the index. Review folders and exclusions below.",
         failed: "The last file operation failed. Review diagnostics for the error and recovery actions.",
+        stopped: "Discovery stopped before the queue was prepared. Existing results remain searchable; choose Index now in Diagnostics to retry.",
         checking_accelerator: "Running the hardware speed check before file indexing starts.",
         preparing_model: "File indexing is waiting for model files. Application names and launching remain available.",
         unavailable: "The selected accelerator cannot run inference. Application names and launching remain available.",
@@ -254,7 +267,7 @@ window.ActivityUI = (() => {
       if (known) { meter.setAttribute("aria-valuemin", "0"); meter.setAttribute("aria-valuemax", String(f.total)); meter.setAttribute("aria-valuenow", String(f.done)); }
       meter.setAttribute("aria-valuetext", known ? `${number(f.done)} of ${number(f.total)}` : "Working; total not known yet");
       put("progress-label", known ? `${number(f.done)} of ${number(f.total)} ${f.phase === "finishing" ? "pages and chunks" : "files"}` : meter.hidden ? "" : "Total not known yet");
-      const stage = f.phase === "idle" ? 2 : ["indexing", "finishing"].includes(f.phase) ? 1 : 0;
+      const stage = f.phase === "idle" ? 2 : ["indexing", "finishing", "waiting"].includes(f.phase) ? 1 : 0;
       this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { el.classList.toggle("current", i === stage); el.setAttribute("aria-current", i === stage ? "step" : "false"); });
       this.host.querySelector(".activity-stages").hidden = ["not_configured", "failed", "unavailable", "preparing_model"].includes(f.phase);
       put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
@@ -278,6 +291,7 @@ window.ActivityUI = (() => {
       const encoderIdle = purpose.encoder === "stopped" || !purpose.encoder;
       const complete = typeof purpose.total === "number" && purpose.embedded === purpose.total;
       const purposeState = !catalog.enabled || !catalog.semanticEnabled ? "Off" : purpose.state === "unavailable" ? "Unavailable"
+        : typeof purpose.total !== "number" ? (encoderIdle ? "Not started · Encoder idle" : "Preparing")
         : complete && !encoderIdle && purpose.encoder !== "unavailable" ? `${number(purpose.embedded)} / ${number(purpose.total)} ready`
         : `${number(purpose.embedded)} / ${number(purpose.total)} prepared${encoderIdle ? " · Encoder idle" : ""}`;
       put("catalog", catalogState); put("purpose", purposeState);
@@ -288,7 +302,8 @@ window.ActivityUI = (() => {
       put("encoder", `Model files: ${inference.model?.state === "ready" ? "available" : inference.model?.state || "unknown"} · Encoder: ${inference.encoder}`);
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
-      put("health-detail", [f.error, ...sourceErrors, purpose.message, inference.error].filter(Boolean).join("\n"));
+      put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),
+        ...(f.unreadable || []).map(path=>`Folder unreadable: ${shortPath(path)}`), ...sourceErrors, purpose.message, inference.error].filter(Boolean).join("\n"));
       this.get("retry").disabled = Boolean(this.busy) || !f.canIndexNow;
       this.get("refresh-apps").disabled = Boolean(this.busy) || !catalog.enabled || Boolean(catalog.refreshing);
       this.get("refresh-apps").hidden = catalog.supported === false;
@@ -302,7 +317,7 @@ window.ActivityUI = (() => {
       const list=this.get("events"); list.replaceChildren();
       for (const entry of events.slice(0, 20)) {
         const event=entry.event || {}, item=node("li");
-        const label = event.message || event.error || (event.event === "encoder" ? `Query encoder ${event.state}` : event.event === "sync" ? "File queue reconciled" : event.event || (entry.source === "applications" ? `Purpose matching ${event.state || "updated"}` : entry.source));
+        const label = event.message || event.error || event.note || (event.event === "encoder" ? `Query encoder ${event.state}` : event.event === "sync" ? "File queue reconciled" : event.event || (entry.source === "applications" ? `Purpose matching ${event.state || "updated"}` : entry.source));
         item.append(node("span", "activity-event-source", entry.source), node("span", "", String(label).slice(0, 400)), node("time", "", ago(entry.time)));
         list.append(item);
       }

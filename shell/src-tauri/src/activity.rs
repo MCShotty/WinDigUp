@@ -30,7 +30,10 @@ pub fn snapshot(input: Input) -> Value {
                 Some("cleanup" | "checking_index") => "starting",
                 _ => "discovering",
             },
-            "indexing" => "indexing", "finishing" => "finishing", "idle" => "idle", _ => "starting",
+            "indexing" => "indexing", "finishing" => "finishing",
+            "idle" if !active && scan["event"] == "scan_progress" => "stopped",
+            "idle" if state["pending"].as_u64().unwrap_or(0) > 0 => "waiting",
+            "idle" => "idle", _ => "starting",
         }};
     let work = if phase == "finishing" { &state["finishing"] } else { &state["indexing"] };
     let total = work["total"].as_u64().filter(|n| *n > 0);
@@ -41,7 +44,7 @@ pub fn snapshot(input: Input) -> Value {
         else { runtime["verified"].clone() };
     let encoder = if helpers["search"]["running"] == false { "stopped" }
         else { runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown") };
-    let mut purpose = semantic.clone();
+    let mut purpose = if semantic.is_object() { semantic.clone() } else { json!({}) };
     purpose["encoder"] = json!(encoder);
     if encoder == "stopped" && purpose["state"] == "ready" { purpose["state"] = json!("preparing"); }
     json!({
@@ -95,6 +98,8 @@ mod tests {
         s.apply(&json!({"event":"sync","files":25,"searchable":17,"pending":8,"new":8}));
         let report=fixture(s.snapshot(true,&ready));
         assert_eq!(report["files"]["total"],8);
+        s.apply(&json!({"event":"idle","files":25,"searchable":17,"pending":8}));
+        assert_eq!(fixture(s.snapshot(true,&ready))["files"]["phase"],"waiting");
         s.paused=true;
         assert_eq!(fixture(s.snapshot(true,&ready))["files"]["phase"],"pausing");
     }

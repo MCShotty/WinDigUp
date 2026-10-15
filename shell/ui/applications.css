@@ -2,7 +2,7 @@
 .app-group-title { font-size: 12px; font-weight: 600; color: var(--secondary); padding: 8px 12px; }
 .app-row { display: flex; align-items: center; gap: 11px; min-height: 54px; padding: 8px 12px; border-radius: 7px; cursor: default; }
 .app-row:hover { background: var(--line); }
-.app-row.selected { background: color-mix(in srgb, var(--moss,#356652) 12%, var(--surface)); }
+.app-row.selected { background: color-mix(in srgb, var(--moss,#356652) 8%, var(--surface)); }
 .app-row-text { min-width: 0; }
 .app-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-description { color: var(--secondary); font-size: 12px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; }
@@ -23,22 +23,22 @@
 
 /* The launcher and its editor share the app's moss accent; file previews keep their existing presentation. */
 body.apps-mode { --accent:var(--moss); }
-body.apps-mode .top { padding:22px 24px 16px; }
+body.apps-mode .top { padding:28px 24px 16px; }
 body.apps-mode .bar, body.apps-mode .field { min-height:44px; }
 body.apps-mode .field { background:var(--surface); border:1px solid var(--line); }
-body.apps-mode #content { padding:18px 24px; }
+body.apps-mode #content { padding:38px 24px 18px; }
 .app-group-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:4px 12px 8px; }
 .app-group-heading .app-group-title { margin:0; padding:0; font-size:14px; color:var(--text); }
-body.apps-mode .app-group-heading { padding:0 0 4px; margin-top:6px; }
+body.apps-mode .app-group-heading { padding:0 0 4px; margin-top:18px; }
 body.apps-mode .app-group-title { font-size:23px; font-weight:650; }
 .app-group-count, .app-purpose-state, .app-catalog-note { color:var(--secondary); font-size:14px; }
 .app-purpose-state { margin-left:auto; font-size:12px; }
-.app-catalog-note { margin:0 0 18px; }
-.app-row-expanded { display:grid; grid-template-columns:40px minmax(0,1fr) auto auto; gap:16px; min-height:84px; border-radius:0; border-bottom:1px solid var(--line); padding:14px 16px; border-left:3px solid transparent; }
+.app-catalog-note { margin:0 0 22px; }
+.app-row-expanded { display:grid; grid-template-columns:40px minmax(0,1fr) auto auto; gap:16px; min-height:92px; border-radius:0; border-bottom:1px solid var(--line); padding:18px; border-left:3px solid transparent; }
 .app-row-expanded.selected { border-left-color:var(--moss); }
 .app-row-expanded .app-icon { width:40px; height:40px; }
-.app-row-expanded .app-name { font-size:15px; line-height:1.45; }
-.app-row-expanded .app-publisher, .app-row-expanded .app-description { color:var(--secondary); font-size:13px; line-height:1.45; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-row-expanded .app-name { font-size:16px; line-height:1.45; }
+.app-row-expanded .app-publisher, .app-row-expanded .app-description { color:var(--secondary); font-size:14px; line-height:1.45; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .app-match-reason { color:var(--secondary); font-size:12px; }
 .app-row-actions { visibility:hidden; }
 .app-row.selected .app-row-actions { visibility:visible; }

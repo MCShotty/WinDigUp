@@ -67,11 +67,16 @@
 .activity-redaction input { accent-color:var(--moss); }
 .activity-report textarea { width:100%; height:45vh; resize:vertical; padding:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface); color:var(--text); font:12px/1.5 ui-monospace,Consolas,monospace; user-select:text; }
 .activity-report .primary { background:var(--moss); color:white; }
-body.activity-open #side { width:min(490px,40vw); max-width:none; min-width:380px; padding:0; background:var(--surface); }
+body.activity-open { display:grid; grid-template-columns:minmax(0,1fr) min(490px,36vw); grid-template-rows:auto minmax(0,1fr) auto; }
+body.activity-open > .top { grid-column:1; grid-row:1; }
+body.activity-open > .split { display:contents; }
+body.activity-open #content { grid-column:1; grid-row:2; }
+body.activity-open > .status { grid-column:1; grid-row:3; }
+body.activity-open #side { grid-column:2; grid-row:1 / -1; width:auto; max-width:none; min-width:0; padding:0; background:var(--surface); }
 body.activity-open #side[hidden] { display:none; }
 body.activity-open .activity-view { min-height:100%; }
 body.activity-open #side { overflow-y:auto; }
-@media (max-width:960px) { body.activity-open #content { display:none; } body.activity-open #side { flex:1; width:100%; min-width:0; border-left:0; } }
+@media (max-width:960px) { body.activity-open { grid-template-columns:minmax(0,1fr); } body.activity-open #content { display:none; } body.activity-open #side { grid-column:1; grid-row:2; width:100%; min-width:0; border-left:0; } }
 @media (max-width:540px) { .activity-view { padding:20px 16px; } .activity-metrics strong { font-size:24px; } .activity-location { align-items:flex-start; flex-direction:column; } .activity-report { padding:16px; } }
 @media (prefers-reduced-motion:reduce) { .activity-meter.indeterminate span { animation:none; transform:translateX(225%); } }
 @media (forced-colors:active) { .activity-meter { border:1px solid CanvasText; } .activity-meter span { background:Highlight; } .activity-stages li.current { border-color:Highlight; } }

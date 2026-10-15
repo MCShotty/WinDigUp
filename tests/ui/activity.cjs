@@ -52,6 +52,7 @@ let browser;
   assert.equal(await page.locator('.activity-meter').getAttribute('aria-valuenow'),null);
   assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='indexing_diagnostics'||c.command==='ask')),false);
   assert.equal(await page.locator('#side .app-details').count(),0);
+  assert.equal(await page.locator('#side').getAttribute('aria-live'),null,'Counters inherited a live preview region');
   await page.press('#query','Enter');
   assert.equal(await page.evaluate(()=>window.calls.some(c=>c.command==='launch_app')),true);
   await page.locator('[data-tab="diagnostics"]').click();
@@ -92,6 +93,12 @@ let browser;
   assert.match(await page.locator('[data-key="health-detail"]').textContent(),/database is locked/);
   assert.match(await page.locator('[data-key="health-detail"]').textContent(),/access denied/);
   assert.match(await page.locator('[data-key="health-catalog"]').textContent(),/663/);
+  await page.locator('[data-tab="overview"]').click();
+  for(const [phase,title] of [['waiting','Files waiting to be indexed'],['scheduled','Indexing is scheduled'],['unavailable','File inference unavailable'],['finishing','Finishing long files'],['stopped','File worker stopped'],['not_configured','Choose folders to search']]){
+    await page.evaluate(async({phase})=>{Object.assign(window.fixtureActivity.files,{phase,error:null,scheduledAt:'01:00',done:4,total:phase==='finishing'?20:null});await ActivityUI.refresh();},{phase});
+    assert.equal(await page.locator('[data-key="phase"]').textContent(),title);
+    assert.match(await page.locator('[data-key="catalog"]').textContent(),/663/);
+  }
   await page.locator('[data-key="close"]').click();
   assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('activity-open')),false);
   assert.equal(await page.locator('#side .app-details').count(),1);

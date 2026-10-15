@@ -17,11 +17,13 @@ function renderApplications(statusOnly = false) {
   document.getElementById("apps-semantic").disabled = appOptionsPending || !catalog.enabled;
   const issues = Object.values(catalog.sourceErrors || {});
   const complete = typeof semantic.total === "number" && semantic.embedded === semantic.total;
+  const prepared = typeof semantic.total === "number" && typeof semantic.embedded === "number"
+    ? `${semantic.embedded.toLocaleString()} of ${semantic.total.toLocaleString()} prepared` : "Preparation has not reported a total yet";
   const purpose = !catalog.enabled || !catalog.semanticEnabled ? "Purpose matching off."
     : model.state === "failed" || semantic.state === "unavailable" ? `Purpose matching unavailable: ${semantic.message || model.message || "check the selected accelerator"}`
     : model.state && model.state !== "ready" ? "Purpose matching is waiting for the selected accelerator."
     : complete ? `${semantic.embedded.toLocaleString()} of ${semantic.total.toLocaleString()} prepared${semantic.encoder === "ready" ? " · Ready" : " · Encoder idle; a purpose search starts it"}`
-    : `${(semantic.embedded || 0).toLocaleString()} of ${(semantic.total || 0).toLocaleString()} prepared${semantic.encoder === "stopped" || !semantic.encoder ? " · Purpose matching idle" : " · Preparing"}`;
+    : `${prepared}${semantic.encoder === "stopped" || !semantic.encoder ? " · Purpose matching idle" : " · Preparing"}`;
   document.getElementById("apps-catalog-status").textContent = !catalog.enabled ? "Application discovery off. Your annotations are kept."
     : `${(catalog.count || 0).toLocaleString()} apps available by name${catalog.refreshing ? " · Refreshing Windows catalog…" : " · Launch through Windows"}${issues.length ? ` · Some sources could not refresh: ${issues.join("; ")}` : ""}`;
   document.getElementById("apps-purpose-status").textContent = purpose;
