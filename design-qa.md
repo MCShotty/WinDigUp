@@ -71,6 +71,8 @@ capture reports zero page exceptions and zero console errors/warnings. Exercised
 - On-demand logs, report preview, redaction, clipboard fallback and exact export payload.
 - One Apps editor, cross-selection/filter/focus drafts, caret preservation, save,
   revert/reset, Unicode limits, native visibility pagination and stale search replies.
+- Catalog refresh across a loaded-page boundary retains the selected app and draft;
+  native anchor offsets request the additional bounded page only when needed.
 - Existing mixed/file/code routing, file previews, launch errors, pagination, disabled
   discovery, setup access, accelerator-settings drafts and Linux Apps-control behavior.
 

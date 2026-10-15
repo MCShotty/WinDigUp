@@ -104,8 +104,8 @@ const Apps = {
 };
 
 class ApplicationSearch {
-  constructor(changed, limit = 6) {
-    this.changed = changed; this.limit = limit; this.hits = []; this.total = 0;
+  constructor(changed, limit = 6, selected = null) {
+    this.changed = changed; this.selected = selected; this.limit = limit; this.hits = []; this.total = 0;
     this.semantic = { state: "preparing" }; this.catalog = {}; this.epoch = 0; this.offset = 0; this.active = false;
     this.unlisten = [];
     for (const name of ["applications", "applications-progress"]) {
@@ -159,13 +159,16 @@ class ApplicationSearch {
     if (meaning) this.semanticBusy = true;
     const epoch = this.epoch;
     try {
-      const page = (offset, limit) => invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive });
+      const page = (offset, limit) => invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive,
+        anchorId: passive && !append ? this.selected?.() : null });
       const reply = await page(append ? this.hits.length : 0, this.limit);
       if (epoch !== this.epoch || reply.generation !== epoch) return;
       if (append && this.catalog.revision && reply.catalog?.revision !== this.catalog.revision) { this.refresh(); return; }
       const hits = reply.hits || [];
-      while (!append && hits.length < wanted && hits.length < reply.total) {
-        const next = await page(hits.length, Math.min(this.limit, wanted - hits.length));
+      const anchored = !append && passive && Number.isInteger(reply.anchorOffset)
+        ? Math.min(20_100,Math.max(wanted,Math.ceil((reply.anchorOffset+1)/this.limit)*this.limit)) : wanted;
+      while (!append && hits.length < anchored && hits.length < reply.total) {
+        const next = await page(hits.length, Math.min(this.limit, anchored - hits.length));
         if (epoch !== this.epoch || next.generation !== epoch) return;
         if (next.catalog?.revision !== reply.catalog?.revision) { this.refresh(); return; }
         if (!next.hits?.length) break;

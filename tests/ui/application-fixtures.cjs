@@ -40,10 +40,11 @@ async function setup(page, platform='Win32') {
         const q=args.q.toLowerCase();
         if(args.meaning)await new Promise(r=>setTimeout(r,700));
         const meaning=args.meaning&&!window.holdPurpose;
-        const baseMatches=!q?[...all,hiddenApp]:q.includes('photo')?[photo,...(meaning?[{...semantic,reason:'semantic'}]:[])]:q==='portrait'?[semantic]:q==='retouch'&&meaning?[{...semantic,reason:'semantic'}]:[...all,hiddenApp].filter(h=>h.name.toLowerCase().includes(q)||overrides[h.id]?.aliases?.some(a=>a.toLowerCase().includes(q)));
+        const catalog=[...(window.catalogInsertion?[{...photo,id:`app:${'a'.repeat(64)}`,name:'A new application'}]:[]),...all,hiddenApp];
+        const baseMatches=!q?catalog:q.includes('photo')?[photo,...(meaning?[{...semantic,reason:'semantic'}]:[])]:q==='portrait'?[semantic]:q==='retouch'&&meaning?[{...semantic,reason:'semantic'}]:catalog.filter(h=>h.name.toLowerCase().includes(q)||overrides[h.id]?.aliases?.some(a=>a.toLowerCase().includes(q)));
         const visibility=args.visibility||(args.includeHidden?'all':'visible');
         const matches=baseMatches.map(h=>({...h,...overrides[h.id]})).filter(h=>visibility==='hidden'?h.hidden:visibility==='visible'?!h.hidden:true);
-        return {generation:args.generation,hits:window.catalogEnabled?matches.slice(args.offset||0,(args.offset||0)+args.limit):[],total:window.catalogEnabled?matches.length:0,
+        return {generation:args.generation,anchorOffset:args.anchorId?matches.findIndex(h=>h.id===args.anchorId):null,hits:window.catalogEnabled?matches.slice(args.offset||0,(args.offset||0)+args.limit):[],total:window.catalogEnabled?matches.length:0,
           catalog:{enabled:window.catalogEnabled,supported:true,semanticEnabled:settings.applications.semanticEnabled,revision:'fixture',count:150},semantic:{state:meaning?'ready':'preparing',total:2,embedded:meaning?2:0}};
       }
       if(command==='launch_app'){if(window.launchFailure)throw {code:'launch_failed',message:'Application launch was refused'};return {accepted:true};}

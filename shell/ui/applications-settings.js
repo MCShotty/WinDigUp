@@ -49,15 +49,19 @@ async function loadApplicationSettings(append = false) {
   if (!appSettingsInfo.supported) return;
   const query = document.getElementById("apps-filter").value, visibility = document.getElementById("apps-visibility").value;
   const signature = `${query}\0${visibility}`;
-  const wanted = signature === appSettingsSignature ? Math.max(100, appSettingsHits.length) : 100;
+  const sameFilter=signature === appSettingsSignature;
+  const wanted = sameFilter ? Math.max(100, appSettingsHits.length) : 100;
   appSettingsSignature = signature;
   const generation = ++appSettingsGeneration;
   try {
-    const getPage = offset => invoke("search_apps", { q: query, meaning: false, generation, limit:100, offset, includeHidden:true, visibility });
+    const getPage = offset => invoke("search_apps", { q: query, meaning: false, generation, limit:100, offset, includeHidden:true, visibility,
+      anchorId: sameFilter ? appSettingsSelected : null });
     const reply = await getPage(append ? appSettingsOffset : 0);
     if (generation !== appSettingsGeneration || reply.generation !== generation) return;
     const hits = reply.hits || [];
-    while (!append && hits.length < wanted && hits.length < reply.total) {
+    const anchored = sameFilter && Number.isInteger(reply.anchorOffset)
+      ? Math.min(20_100,Math.max(wanted,Math.ceil((reply.anchorOffset+1)/100)*100)) : wanted;
+    while (!append && hits.length < anchored && hits.length < reply.total) {
       const next = await getPage(hits.length);
       if (generation !== appSettingsGeneration) return;
       if (next.catalog?.revision !== reply.catalog?.revision) { clearTimeout(appSettingsTimer);appSettingsTimer=setTimeout(()=>loadApplicationSettings(),150);return; }

@@ -57,6 +57,7 @@ pub async fn search_apps(
     offset: Option<usize>,
     include_hidden: Option<bool>,
     visibility: Option<String>,
+    anchor_id: Option<String>,
     passive: Option<bool>,
 ) -> Result<Value, String> {
     if q.chars().count() > 4096 {
@@ -141,9 +142,10 @@ pub async fn search_apps(
         }
         *shell.app_semantic.lock().unwrap() = semantic.clone();
     }
+    let anchor_offset = crate::applications::anchor_offset(&hits, visibility, anchor_id.as_deref());
     let (hits, total, offset) = crate::applications::page_hits(hits, visibility, offset.unwrap_or(0), limit.unwrap_or(6));
     Ok(
-        json!({"hits":hits,"total":total,"offset":offset,"generation":generation.unwrap_or(0),
+        json!({"hits":hits,"total":total,"offset":offset,"anchorOffset":anchor_offset,"generation":generation.unwrap_or(0),
         "catalog":shell.applications.info(),"semantic":semantic,"ms":started.elapsed().as_secs_f64()*1000.0}),
     )
 }

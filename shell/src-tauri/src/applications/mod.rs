@@ -24,6 +24,12 @@ pub fn page_hits(mut hits: Vec<Hit>, visibility: &str, offset: usize, limit: usi
     (hits.into_iter().skip(offset).take(limit.clamp(1,100)).collect(),total,offset)
 }
 
+pub fn anchor_offset(hits: &[Hit], visibility: &str, id: Option<&str>) -> Option<usize> {
+    let id=id?;
+    hits.iter().filter(|hit| visibility == "all" || hit.hidden == (visibility == "hidden"))
+        .position(|hit| hit.id == id)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Options {
@@ -654,6 +660,8 @@ mod tests {
         let catalog=Catalog::new(root.clone(),options,|_|{});catalog.publish_source("fixture",Ok(records));
         let (hidden,total,_)=page_hits(catalog.search("",true),"hidden",0,100);
         assert_eq!(total,1);assert_eq!(hidden[0].name,"App 204");
+        assert_eq!(anchor_offset(&catalog.search("",true),"all",Some(&hidden[0].id)),Some(204));
+        assert_eq!(anchor_offset(&catalog.search("",true),"visible",Some(&hidden[0].id)),None);
         let (visible,total,offset)=page_hits(catalog.search("",true),"visible",200,100);
         assert_eq!(total,204);assert_eq!(visible.len(),4);assert_eq!(offset,200);
         assert!(visible.iter().all(|hit|!hit.hidden));

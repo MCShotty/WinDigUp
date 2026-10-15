@@ -73,7 +73,7 @@ const applicationSearch = new ApplicationSearch(() => {
   if (!state.navigated || !shown.some(hit => resultKey(hit) === state.selection)) state.selection = shown.length ? resultKey(shown[0]) : null;
   render();
   if (debugPending && isAppsMode() && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
-}, 100);
+}, 100, () => isAppsMode() ? state.selection : null);
 
 // MARK: Searching
 
