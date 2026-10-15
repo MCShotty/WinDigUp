@@ -44,6 +44,7 @@ const state = {
   selection: null,      // a result's path
   showWeaker: false,
   showsPreview: true,
+  activityOpen: false,
   navigated: false,     // the selection was moved by the arrow keys or a click since the last edit: ← → move it then
   generation: 0,
   timer: null,
@@ -53,6 +54,18 @@ const state = {
   indexed: null,        // files indexed of each kind (the home)
 };
 let debugPending = false;
+const activityHost = document.createElement("section");
+let activityReturnFocus = null;
+const activityView = new ActivityUI.View(activityHost, { onClose: closeActivity });
+function showActivity(tab = "overview") {
+  if (!state.activityOpen) activityReturnFocus = document.activeElement;
+  state.activityOpen = true; document.body.classList.add("activity-open");
+  renderSide(); activityView.show(tab); activityView.get("close").focus();
+}
+function closeActivity() {
+  activityView.hide(); state.activityOpen = false; document.body.classList.remove("activity-open"); renderSide();
+  (activityReturnFocus?.isConnected ? activityReturnFocus : $query).focus();
+}
 const applicationSearch = new ApplicationSearch(() => {
   state.counts.apps = applicationSearch.total;
   if (applicationSearch.hits.length || isAppsMode()) state.hasResults = true;
@@ -601,6 +614,12 @@ let playing = null;   // the audio of the selected result, while it plays
 
 function renderSide() {
   stopPlaying();
+  if (state.activityOpen) {
+    $side.hidden = false;
+    if (!activityHost.isConnected) $side.replaceChildren(activityHost);
+    activityView.show();
+    return;
+  }
   const hit = state.hasResults && !state.codePhase && hasQuery() ? selectedHit() : null;
   $side.hidden = !state.showsPreview || !hit;
   $side.replaceChildren();
@@ -919,7 +938,7 @@ function actions(hit) {
 
 function renderStatus() {
   const app = state.app;
-  $("status-line").textContent = app.line || "";
+  $("status-line").textContent = app.line || "Activity";
   const ring = $("ring");
   ring.hidden = app.progress == null;
   if (app.progress != null) {
@@ -992,6 +1011,7 @@ function showMainMenu() {
   const button = $("more").getBoundingClientRect();
   const folders = state.info.folders.length > 0, paused = state.app.paused === true;
   showMenu(button.right - 200, button.bottom + 4, [
+    ["Activity and Diagnostics…", () => showActivity()],
     ["Choose Folders…", () => invoke("choose_folders").catch(failed)],
     ["Index Now", () => invoke("index_now").catch(failed), null, folders && state.app.busy === false],
     [paused ? "Resume Indexing" : "Pause Indexing", () => invoke("pause_indexing", { paused: !paused }).catch(failed),
@@ -1030,7 +1050,7 @@ $("settings").onclick = () => invoke("open_settings").catch(failed);
 $("settings").title = `Settings (${MOD},)`;
 $("more").onmousedown = (event) => event.preventDefault();
 $("more").onclick = () => ($menu.hidden ? showMainMenu() : hideMenu());
-$("status-line").onclick = () => invoke("choose_folders").catch(failed);
+$("status-line").onclick = () => showActivity();
 $("update").onclick = () => invoke("offer_update").catch(failed);
 $kinds.onmousedown = (event) => event.preventDefault();
 
@@ -1043,6 +1063,8 @@ function updatePreviewButton() {
 
 document.addEventListener("keydown", (event) => {
   if (event.isComposing) return;   // an input method is composing: its keys
+  if (document.querySelector(".activity-report[open]") || event.target.closest(".activity-view")) return;
+  if (event.key === "Escape" && state.activityOpen) { event.preventDefault(); closeActivity(); return; }
   const modifier = isMac ? event.metaKey : event.ctrlKey;
   const plain = !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey;
   if (!$menu.hidden && event.key === "Escape") {

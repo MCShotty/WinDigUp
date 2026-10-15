@@ -39,7 +39,11 @@ pub fn snapshot(input: Input) -> Value {
         && semantic["device"].as_str().is_some_and(|s| !s.is_empty());
     let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"]}) }
         else { runtime["verified"].clone() };
-    let encoder = runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown");
+    let encoder = if helpers["search"]["running"] == false { "stopped" }
+        else { runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown") };
+    let mut purpose = semantic.clone();
+    purpose["encoder"] = json!(encoder);
+    if encoder == "stopped" && purpose["state"] == "ready" { purpose["state"] = json!("preparing"); }
     json!({
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
         "files":{"schemaVersion":1,"phase":phase,"line":state["line"],
@@ -50,7 +54,7 @@ pub fn snapshot(input: Input) -> Value {
             "missing":state["missing"],"unreadable":state["unreadable"],"error":state["lastError"],
             "lastEventAt":state["lastEventAt"],"lastProgressAt":state["lastProgressAt"],"phaseStartedAt":state["phaseStartedAt"],
             "scheduledAt":state["heldUntil"],"blockedBy":blocked_by,"paused":state["paused"],"canIndexNow":has_folders && state["busy"] == false},
-        "applications":{"schemaVersion":1,"catalog":catalog,"purpose":semantic,"lastProgressAt":runtime["applicationUpdatedAt"]},
+        "applications":{"schemaVersion":1,"catalog":catalog,"purpose":purpose,"lastProgressAt":runtime["applicationUpdatedAt"]},
         "inference":{"schemaVersion":1,"configured":configured,"verified":verified,"encoder":encoder,
             "encoderUpdatedAt":runtime["encoder"]["updatedAt"],"error":runtime["encoder"]["message"],
             "model":state["model"],"checking":state["measuring"] == true},

@@ -559,9 +559,9 @@ fn open_window(app: AppHandle, shell: State<'_, Arc<Shell>>, query: String, kind
 }
 
 #[tauri::command]
-fn open_settings(app: AppHandle) {
-    later(&app, |app| {
-        let _ = show_settings(app);
+fn open_settings(app: AppHandle, tab: Option<String>) {
+    later(&app, move |app| {
+        let _ = show_settings_at(app, tab.as_deref());
     });
 }
 
@@ -1231,13 +1231,20 @@ fn show_setup(app: &AppHandle) -> tauri::Result<()> {
 
 /// Settings: opening at login, centering the panel (where the desktop places windows), and where the shortcut is.
 fn show_settings(app: &AppHandle) -> tauri::Result<()> {
+    show_settings_at(app, None)
+}
+
+fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
+    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "storage"));
     if let Some(window) = app.get_webview_window("settings") {
+        if let Some(tab) = tab { let _ = window.emit("settings-tab", tab); }
         let _ = window.show();
         let _ = window.set_focus();
         return Ok(());
     }
     let options = &app.state::<Arc<Shell>>().options;
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    let url = tab.map(|tab| format!("settings.html?tab={tab}")).unwrap_or_else(|| "settings.html".into());
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("DigUp Settings")
         .inner_size(660.0, 620.0)
         .resizable(false)
@@ -1874,10 +1881,13 @@ fn update_line(app: &AppHandle, shell: &Shell) {
 
 fn search_event(app: &AppHandle, event: Value) {
     app.state::<Arc<Shell>>().diagnostics.record("search", event.clone());
-    if event["event"] == "encoder" && event["state"] == "ready" {
+    if event["event"] == "encoder" {
         let shell = app.state::<Arc<Shell>>();
         let mut state = shell.app_semantic.lock().unwrap();
-        state["encoder"] = json!("ready"); state["embedded"] = json!(0); state["state"] = json!("preparing");
+        state["encoder"] = event["state"].clone();
+        if event["state"] == "ready" { state["embedded"] = json!(0); state["state"] = json!("preparing"); }
+        else if event["state"] == "unavailable" { state["state"]=json!("unavailable"); state["message"]=event["error"].clone(); }
+        else { state["state"]=json!("preparing"); }
     }
     if cfg!(debug_assertions) {
         println!("search: {event}");
