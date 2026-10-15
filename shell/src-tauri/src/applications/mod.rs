@@ -16,6 +16,20 @@ pub fn digest(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
+/// Filter before counting and pagination; a hidden match beyond page one must remain discoverable in Settings.
+pub fn page_hits(mut hits: Vec<Hit>, visibility: &str, offset: usize, limit: usize) -> (Vec<Hit>, usize, usize) {
+    hits.retain(|hit| visibility == "all" || hit.hidden == (visibility == "hidden"));
+    let total=hits.len();
+    let offset=offset.min(20_000);
+    (hits.into_iter().skip(offset).take(limit.clamp(1,100)).collect(),total,offset)
+}
+
+pub fn anchor_offset(hits: &[Hit], visibility: &str, id: Option<&str>) -> Option<usize> {
+    let id=id?;
+    hits.iter().filter(|hit| visibility == "all" || hit.hidden == (visibility == "hidden"))
+        .position(|hit| hit.id == id)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Options {
@@ -212,7 +226,8 @@ impl Catalog {
     pub fn info(&self) -> Value {
         let s = self.snapshot.read().unwrap();
         json!({"supported":Self::supported(), "enabled":self.enabled(), "semanticEnabled":self.semantic_enabled(),
-            "count":s.hits.iter().filter(|h| !h.hidden).count(), "revision":s.revision,
+            "count":s.hits.iter().filter(|h| !h.hidden).count(), "totalCount":s.hits.len(),
+            "hiddenCount":s.hits.iter().filter(|h| h.hidden).count(), "revision":s.revision,
             "refreshing":self.refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})
     }
     pub fn configure(self: &Arc<Self>, options: Options) {
@@ -634,6 +649,25 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn visibility_counts_and_pages_are_filtered_before_the_limit() {
+        let root=std::env::temp_dir().join(format!("digup-visibility-{}",std::process::id()));
+        let records=(0..205).map(|n|record(&format!("App {n:03}"),&format!("id-{n}"))).collect::<Vec<_>>();
+        let mut options=Options {enabled:true,..Options::default()};
+        options.overrides.insert(records[204].id.clone(),Override {hidden:true,..Override::default()});
+        let catalog=Catalog::new(root.clone(),options,|_|{});catalog.publish_source("fixture",Ok(records));
+        let (hidden,total,_)=page_hits(catalog.search("",true),"hidden",0,100);
+        assert_eq!(total,1);assert_eq!(hidden[0].name,"App 204");
+        assert_eq!(anchor_offset(&catalog.search("",true),"all",Some(&hidden[0].id)),Some(204));
+        assert_eq!(anchor_offset(&catalog.search("",true),"visible",Some(&hidden[0].id)),None);
+        let (visible,total,offset)=page_hits(catalog.search("",true),"visible",200,100);
+        assert_eq!(total,204);assert_eq!(visible.len(),4);assert_eq!(offset,200);
+        assert!(visible.iter().all(|hit|!hit.hidden));
+        let (all,total,_)=page_hits(catalog.search("",true),"all",0,999);
+        assert_eq!(all.len(),100);assert_eq!(total,205);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn name_publication_retains_metadata_until_optional_enrichment_finishes() {

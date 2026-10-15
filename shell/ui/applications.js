@@ -8,6 +8,7 @@ const Apps = {
   supported: /Win/.test(navigator.platform),
   enabled: /Win/.test(navigator.platform),
   iconCache: new Map(),
+  observedIcons: new Set(),
   launching: new Set(),
   parse(query, filter = null) {
     const typed = query.trim();
@@ -22,29 +23,63 @@ const Apps = {
     this.launching.add(hit.id);
     try { return await invoke("launch_app", { appId: hit.id }); }
     catch (error) { throw new Error(error?.message || String(error)); }
-    finally { this.launching.delete(hit.id); }
+    finally {
+      this.launching.delete(hit.id);
+      for(const row of document.querySelectorAll(`[data-result-key="${CSS.escape(hit.id)}"]`)) {
+        const button=row.querySelector(".app-launch");if(button)button.disabled=false;
+      }
+    }
   },
   icon(hit, size = 64) {
-    const holder = element("span", "app-icon"); holder.textContent = "▦"; holder.setAttribute("aria-hidden", "true");
+    const holder = element("span", "app-icon"); holder.setAttribute("aria-hidden", "true");
+    const fallback = element("img", "app-generic"); fallback.src = "app-generic.svg"; fallback.alt = ""; holder.append(fallback);
     const key = `${hit.id}:${hit.iconRevision || ""}:${size}`;
-    if (!this.iconCache.has(key)) {
-      const promise = invoke("app_icon", { appId: hit.id, size }).then(fileURL);
-      this.iconCache.set(key, promise);
+    const load = () => {
+      if (!this.iconCache.has(key)) {
+        this.iconCache.set(key, invoke("app_icon", { appId: hit.id, size }).then(fileURL));
+        if (this.iconCache.size > 256) this.iconCache.delete(this.iconCache.keys().next().value);
+      }
+      this.iconCache.get(key).then(src => {
+        if (!holder.isConnected) return;
+        const image = element("img"); image.alt = ""; image.src = src;
+        image.onload = () => holder.replaceChildren(image);
+      }).catch(() => {});
+    };
+    if (typeof IntersectionObserver === "undefined") load();
+    else {
+      this.iconObserver ||= new IntersectionObserver(entries => {
+        for (const entry of entries) if(entry.isIntersecting) {
+          this.iconObserver.unobserve(entry.target); this.observedIcons.delete(entry.target); entry.target.loadIcon?.();
+        }
+      }, {rootMargin:"80px"});
+      holder.loadIcon = load; this.observedIcons.add(holder); this.iconObserver.observe(holder);
+      if (!this.pruneIcons) this.pruneIcons = requestAnimationFrame(() => {
+        this.pruneIcons = null;
+        for (const icon of this.observedIcons) if(!icon.isConnected) { this.iconObserver.unobserve(icon);this.observedIcons.delete(icon); }
+      });
     }
-    this.iconCache.get(key).then((src) => {
-      const image = element("img"); image.alt = ""; image.src = src; holder.replaceChildren(image);
-    }).catch(() => { this.iconCache.delete(key); });
     return holder;
   },
-  row(hit, selected, select, launch) {
+  row(hit, selected, select, launch, expanded = false) {
     const row = element("div", "app-row" + (selected ? " selected" : ""));
     row.title = hit.shortcut || "Registered Windows application";
-    row.dataset.resultKey = resultKey(hit); row.setAttribute("role", "option");
+    row.dataset.resultKey = resultKey(hit); row.setAttribute("role", expanded ? "row" : "option");
     row.setAttribute("aria-selected", String(selected));
     row.setAttribute("aria-label", `Application, ${hit.name}`);
     const text = element("div", "app-row-text");
-    text.append(element("div", "app-name", hit.name), element("div", "app-description", hit.description || hit.publisher || "Application"));
-    row.append(this.icon(hit), text);
+    text.append(element("div", "app-name", hit.name));
+    if (expanded && hit.publisher) text.append(element("div", "app-publisher", hit.publisher));
+    text.append(element("div", "app-description", hit.purpose || hit.description || hit.publisher || "Windows application"));
+    const icon = this.icon(hit); row.append(icon, text);
+    if (expanded) {
+      row.classList.add("app-row-expanded"); icon.setAttribute("role","gridcell"); text.setAttribute("role","gridcell");
+      const reason = element("span", "app-match-reason", hit.reason === "semantic" ? "Purpose match" : ""); reason.setAttribute("role","gridcell"); row.append(reason);
+      const actions = element("span", "app-row-actions"); actions.setAttribute("role","gridcell");
+      const button = element("button", "app-launch", "Launch"); button.setAttribute("aria-label",`Launch ${hit.name}`);
+      button.disabled = this.launching.has(hit.id); button.tabIndex = selected ? 0 : -1;
+      button.onclick = async event => { event.stopPropagation(); select(resultKey(hit)); button.disabled=true; try { await launch(hit); } finally { button.disabled=false; } };
+      actions.append(button); row.append(actions);
+    }
     row.onmousedown = (e) => { if (e.button === 0) e.preventDefault(); };
     row.onclick = () => select(resultKey(hit)); row.ondblclick = () => launch(hit);
     return row;
@@ -53,7 +88,8 @@ const Apps = {
     const box = element("div", "app-details");
     box.append(this.icon(hit, 128), element("div", "app-name", hit.name));
     if (hit.publisher) box.append(element("div", "app-description", hit.publisher));
-    if (hit.description) box.append(element("p", "", hit.description));
+    if (hit.purpose || hit.description) box.append(element("p", "", hit.purpose || hit.description));
+    if (hit.aliases?.length) box.append(element("p", "app-description", `Aliases: ${hit.aliases.join(", ")}`));
     box.append(element("p", "app-description", hit.shortcut || "Registered with Windows"));
     box.append(element("p", "app-description", hit.reason === "semantic" ? "Matches what this application does" : "Matches the application name or alias"));
     const launch = element("button", "primary", "Launch");
@@ -68,18 +104,27 @@ const Apps = {
 };
 
 class ApplicationSearch {
-  constructor(changed, limit = 6) {
-    this.changed = changed; this.limit = limit; this.hits = []; this.total = 0;
+  constructor(changed, limit = 6, selected = null) {
+    this.changed = changed; this.selected = selected; this.limit = limit; this.hits = []; this.total = 0;
     this.semantic = { state: "preparing" }; this.catalog = {}; this.epoch = 0; this.offset = 0; this.active = false;
     this.unlisten = [];
     for (const name of ["applications", "applications-progress"]) {
       tauri.event.listen(name, ({ payload }) => {
+        if (name === "applications") {
+          this.catalog=payload; Apps.enabled=payload.enabled !== false;
+          if(!Apps.enabled) {
+            this.epoch++;this.active=false;this.hits=[];this.total=0;this.semantic={state:"disabled"};
+            clearTimeout(this.timer);clearTimeout(this.refreshTimer);this.changed();return;
+          }
+          this.active=Boolean(this.requestedActive);
+          if(this.active)this.refresh();else this.changed();
+          return;
+        }
         if (!this.active) return;
-        if (name === "applications") { this.refresh(); return; }
         this.semantic = payload;
         clearTimeout(this.refreshTimer);
         this.refreshTimer = setTimeout(() => {
-          this.changed(); if (this.text) this.request(true, true, false, Math.max(this.limit, this.hits.length));
+          this.changed(); if (this.text && payload.encoder === "ready") this.request(true, true, false, Math.max(this.limit, this.hits.length));
         }, 250);
       }).then((stop) => this.unlisten.push(stop));
     }
@@ -90,7 +135,7 @@ class ApplicationSearch {
   }
   begin(text, active) {
     this.epoch++; clearTimeout(this.timer); clearTimeout(this.refreshTimer);
-    this.text = text; this.active = active && Apps.supported; this.hits = []; this.total = 0; this.offset = 0;
+    this.text = text; this.requestedActive=active && Apps.supported;this.active=this.requestedActive && Apps.enabled; this.hits = []; this.total = 0; this.offset = 0;
     this.finalEpoch = -1; this.error = null;
     if (!this.active) return;
     this.request(false);
@@ -114,13 +159,16 @@ class ApplicationSearch {
     if (meaning) this.semanticBusy = true;
     const epoch = this.epoch;
     try {
-      const page = (offset, limit) => invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive });
+      const page = (offset, limit) => invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive,
+        anchorId: passive && !append ? this.selected?.() : null });
       const reply = await page(append ? this.hits.length : 0, this.limit);
       if (epoch !== this.epoch || reply.generation !== epoch) return;
       if (append && this.catalog.revision && reply.catalog?.revision !== this.catalog.revision) { this.refresh(); return; }
       const hits = reply.hits || [];
-      while (!append && hits.length < wanted && hits.length < reply.total) {
-        const next = await page(hits.length, Math.min(this.limit, wanted - hits.length));
+      const anchored = !append && passive && Number.isInteger(reply.anchorOffset)
+        ? Math.min(20_100,Math.max(wanted,Math.ceil((reply.anchorOffset+1)/this.limit)*this.limit)) : wanted;
+      while (!append && hits.length < anchored && hits.length < reply.total) {
+        const next = await page(hits.length, Math.min(this.limit, anchored - hits.length));
         if (epoch !== this.epoch || next.generation !== epoch) return;
         if (next.catalog?.revision !== reply.catalog?.revision) { this.refresh(); return; }
         if (!next.hits?.length) break;
@@ -131,6 +179,7 @@ class ApplicationSearch {
       this.hits = append ? [...this.hits, ...hits.filter(h => !this.hits.some(old => old.id === h.id))] : hits;
       this.total = reply.total || 0; this.semantic = reply.semantic || {}; this.catalog = reply.catalog || {};
       Apps.enabled = this.catalog.enabled !== false;
+      if(!Apps.enabled){this.active=false;clearTimeout(this.timer);clearTimeout(this.refreshTimer);}
       this.error = null; this.changed();
     } catch (error) {
       if (epoch !== this.epoch) return;
@@ -149,9 +198,13 @@ class ApplicationSearch {
     if (this.catalog.enabled === false) return "Application search is off. Enable it in Settings → Apps.";
     const sourceErrors = Object.values(this.catalog.sourceErrors || {});
     if (sourceErrors.length && !this.total) return `Windows applications could not refresh: ${sourceErrors.join("; ")}`;
-    if (this.semantic.state === "unavailable") return `App names available; purpose matching unavailable${this.semantic.message ? `: ${this.semantic.message}` : ""}`;
-    if (this.semantic.state === "preparing") return this.semantic.total ? `Preparing app purpose matching: ${this.semantic.embedded || 0} of ${this.semantic.total}` : "App names available; preparing purpose matching…";
+    if (this.semantic.state === "unavailable") return "Name search available · Purpose matching unavailable";
+    if (this.semantic.state === "preparing" && this.text) return "Name search available · Purpose matching preparing";
     if (this.catalog.refreshing) return "Refreshing installed applications…";
     return `${this.total} ${this.total === 1 ? "application" : "applications"}`;
+  }
+  purposeLabel() {
+    return this.semantic.state === "disabled" ? "Purpose matching off" : this.semantic.state === "ready" ? "Purpose matching ready"
+      : this.semantic.state === "unavailable" ? "Purpose matching unavailable" : "Purpose matching preparing";
   }
 }

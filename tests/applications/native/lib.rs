@@ -13,6 +13,8 @@ pub mod helper;
 pub mod status;
 #[path = "../../../shell/src-tauri/src/diagnostics.rs"]
 pub mod diagnostics;
+#[path = "../../../shell/src-tauri/src/activity.rs"]
+pub mod activity;
 
 #[cfg(test)]
 mod tests {

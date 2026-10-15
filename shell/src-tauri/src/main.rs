@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod acceleration;
+mod activity;
 mod applications;
 mod application_commands;
 mod clipboard;
@@ -229,7 +230,8 @@ impl Shell {
     /// What the pages show about indexing and the model (status.rs).
     fn snapshot(&self) -> Value {
         let model = self.model_state.lock().unwrap().clone();
-        let mut snapshot = self.status.lock().unwrap().snapshot(!self.folders().is_empty(), &model);
+        let has_folders = !self.folders().is_empty();
+        let mut snapshot = self.status.lock().unwrap().snapshot(has_folders, &model);
         snapshot["hasCode"] = json!(!self.code_folders().is_empty());
         snapshot["update"] = self.updates.snapshot();
         snapshot
@@ -557,9 +559,9 @@ fn open_window(app: AppHandle, shell: State<'_, Arc<Shell>>, query: String, kind
 }
 
 #[tauri::command]
-fn open_settings(app: AppHandle) {
-    later(&app, |app| {
-        let _ = show_settings(app);
+fn open_settings(app: AppHandle, tab: Option<String>) {
+    later(&app, move |app| {
+        let _ = show_settings_at(app, tab.as_deref());
     });
 }
 
@@ -657,7 +659,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
             panel_area, settings_info, set_open_at_login, set_center_panel, debug_query, debug_report, window_info,
-            app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
+            app_state, activity_snapshot, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration,
@@ -1229,13 +1231,20 @@ fn show_setup(app: &AppHandle) -> tauri::Result<()> {
 
 /// Settings: opening at login, centering the panel (where the desktop places windows), and where the shortcut is.
 fn show_settings(app: &AppHandle) -> tauri::Result<()> {
+    show_settings_at(app, None)
+}
+
+fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
+    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "storage"));
     if let Some(window) = app.get_webview_window("settings") {
+        if let Some(tab) = tab { let _ = window.emit("settings-tab", tab); }
         let _ = window.show();
         let _ = window.set_focus();
         return Ok(());
     }
     let options = &app.state::<Arc<Shell>>().options;
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    let url = tab.map(|tab| format!("settings.html?tab={tab}")).unwrap_or_else(|| "settings.html".into());
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("DigUp Settings")
         .inner_size(660.0, 620.0)
         .resizable(false)
@@ -1287,7 +1296,44 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     })
 }
 
-/// Works even when the helper is blocked. Local log tails and in-memory state only; no inference or folder crawl.
+/// In-memory activity only: no inference requests, log reads or directory enumeration.
+#[tauri::command]
+async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    let shell = shell.inner().clone();
+    // Settings saves can briefly own a shared lock; even that wait stays off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        // End each guard at its own statement. Struct-field temporaries could otherwise keep
+        // the settings guard alive while folders()/indexing_blocker() tries to acquire it again.
+        let state = shell.snapshot();
+        let semantic = shell.app_semantic.lock().unwrap().clone();
+        let configured = shell.settings.lock().unwrap().acceleration.clone();
+        let catalog = shell.applications.info();
+        let has_folders = !shell.folders().is_empty();
+        let blocked_by = indexing_blocker(&shell);
+        activity::snapshot(activity::Input {
+            state, catalog, semantic, configured: serde_json::to_value(configured).unwrap_or_default(),
+            helpers: json!({"index":shell.index.snapshot(),"search":shell.search.snapshot()}),
+            runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
+            has_folders, blocked_by,
+        })
+    }).await.map_err(|error| error.to_string())
+}
+
+/// Export exactly the report the person previewed, to a location chosen by the native Save As dialog.
+#[tauri::command]
+async fn export_diagnostics(app: AppHandle, report: String) -> Result<Value, String> {
+    if report.len() > 524_288 { return Err("The diagnostic report is too large to export.".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let chosen = app.dialog().file().set_title("Export DigUp diagnostic report")
+            .set_file_name("digup-diagnostics.txt").add_filter("Text report", &["txt"]).blocking_save_file();
+        let Some(chosen) = chosen else { return Ok(json!({"saved":false})); };
+        let path = chosen.into_path().map_err(|error| error.to_string())?;
+        std::fs::write(&path, report).map_err(|error| error.to_string())?;
+        Ok(json!({"saved":true}))
+    }).await.map_err(|error| error.to_string())?
+}
+
+/// Expensive log tails are kept behind an explicit request, separate from activity_snapshot.
 #[tauri::command]
 async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<String, String> {
     let shell = shell.inner().clone();
@@ -1844,10 +1890,17 @@ fn update_line(app: &AppHandle, shell: &Shell) {
 // MARK: The helpers' events
 
 fn search_event(app: &AppHandle, event: Value) {
-    if event["event"] == "encoder" && event["state"] == "ready" {
+    app.state::<Arc<Shell>>().diagnostics.record("search", event.clone());
+    if event["event"] == "encoder" {
         let shell = app.state::<Arc<Shell>>();
         let mut state = shell.app_semantic.lock().unwrap();
-        state["encoder"] = json!("ready"); state["embedded"] = json!(0); state["state"] = json!("preparing");
+        state["encoder"] = event["state"].clone();
+        if event["state"] == "ready" { state["embedded"] = json!(0); state["state"] = json!("preparing"); }
+        else if event["state"] == "unavailable" { state["state"]=json!("unavailable"); state["message"]=event["error"].clone(); }
+        else { state["state"]=json!("preparing"); }
+        let updated = state.clone();
+        drop(state);
+        let _ = app.emit("applications-progress", updated);
     }
     if cfg!(debug_assertions) {
         println!("search: {event}");

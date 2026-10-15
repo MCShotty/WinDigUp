@@ -44,6 +44,7 @@ const state = {
   selection: null,      // a result's path
   showWeaker: false,
   showsPreview: true,
+  activityOpen: false,
   navigated: false,     // the selection was moved by the arrow keys or a click since the last edit: ← → move it then
   generation: 0,
   timer: null,
@@ -53,6 +54,18 @@ const state = {
   indexed: null,        // files indexed of each kind (the home)
 };
 let debugPending = false;
+const activityHost = document.createElement("section");
+let activityReturnFocus = null;
+const activityView = new ActivityUI.View(activityHost, { onClose: closeActivity });
+function showActivity(tab = "overview") {
+  if (!state.activityOpen) activityReturnFocus = document.activeElement;
+  state.activityOpen = true; document.body.classList.add("activity-open");
+  renderSide(); activityView.show(tab); activityView.get("close").focus();
+}
+function closeActivity() {
+  activityView.hide(); state.activityOpen = false; document.body.classList.remove("activity-open"); renderSide();
+  (activityReturnFocus?.isConnected ? activityReturnFocus : $query).focus();
+}
 const applicationSearch = new ApplicationSearch(() => {
   state.counts.apps = applicationSearch.total;
   if (applicationSearch.hits.length || isAppsMode()) state.hasResults = true;
@@ -60,7 +73,7 @@ const applicationSearch = new ApplicationSearch(() => {
   if (!state.navigated || !shown.some(hit => resultKey(hit) === state.selection)) state.selection = shown.length ? resultKey(shown[0]) : null;
   render();
   if (debugPending && isAppsMode() && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
-}, 100);
+}, 100, () => isAppsMode() ? state.selection : null);
 
 // MARK: Searching
 
@@ -177,7 +190,8 @@ function render() {
 function renderBar() {
   const code = isCode();
   $("glass").innerHTML = code ? ICONS.code : SEARCH_ICON;
-  $query.placeholder = state.filter === "code" ? "Describe the code: “retry a request with backoff”, a name in it…"
+  document.body.classList.toggle("apps-mode", isAppsMode());
+  $query.placeholder = isAppsMode() ? "Search apps by name or what they do…" : state.filter === "code" ? "Describe the code: “retry a request with backoff”, a name in it…"
     : state.info.hasCode ? "Describe it: “zebra in a video”, “code: retry with backoff”…"
     : "Describe it: “receipt from the hardware store”, “zebra in a video”…";
   $kinds.replaceChildren();
@@ -208,6 +222,7 @@ function chip(title, icon, count, selected, action, number) {
 }
 
 function renderContent() {
+  const focusedLaunch = document.activeElement.closest?.(".app-row")?.dataset.resultKey;
   const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
   state.renderedGeneration = state.generation;
   thumbnails.disconnect();
@@ -224,25 +239,39 @@ function renderContent() {
     else $content.append(grid());
   }
   $content.scrollTop = scroll;
+  if(focusedLaunch) ($content.querySelector(`[data-result-key="${CSS.escape(focusedLaunch)}"] .app-launch`) || $query).focus({preventScroll:true});
 }
 
 function applicationGroup() {
   const box = element("section", "app-group"); box.setAttribute("aria-label", "Applications");
-  box.append(element("div", "app-group-title", "Apps"));
+  const heading=element("div", "app-group-heading");
+  heading.append(element("h2", "app-group-title", "Apps"));
+  if(isAppsMode()) {
+    heading.append(element("span", "app-group-count", `${applicationSearch.total.toLocaleString()} ${state.text ? "matches" : "applications"}`),
+      element("span", "app-purpose-state", applicationSearch.purposeLabel()));
+  }
+  box.append(heading);
+  if(isAppsMode()) box.append(element("p", "app-catalog-note", "Installed on this PC · Launch through Windows"));
+  const list=element("div", "app-results"); list.setAttribute("role","grid"); list.setAttribute("aria-label","Matching applications");
   for (const hit of applicationSearch.hits) {
-    const row = Apps.row(hit, state.selection === resultKey(hit), select, open);
+    const row = Apps.row(hit, state.selection === resultKey(hit), select, open, true);
     row.oncontextmenu = (event) => {
       event.preventDefault(); select(resultKey(hit));
       showMenu(event.clientX, event.clientY, [["Launch", () => open(hit)],
         ...(hit.shortcut ? [["Show shortcut location", () => reveal(hit)]] : [])]);
     };
-    box.append(row);
+    list.append(row);
   }
+  box.append(list);
   if (applicationSearch.total > applicationSearch.hits.length) {
     const more = element("button", "app-more", isAppsMode() ? "Show more applications" : `Show all ${applicationSearch.total} matching apps…`);
     more.onclick = () => isAppsMode() ? applicationSearch.more() : setFilter("apps"); box.append(more);
   }
-  box.append(element("div", "app-status", applicationSearch.status()));
+  if(!applicationSearch.hits.length || applicationSearch.error) box.append(element("div", "app-status", applicationSearch.status()));
+  if(isAppsMode()) {
+    const manage=element("button","app-manage","Manage apps…"); manage.onclick=()=>invoke("open_settings",{tab:"apps"}).catch(failed); box.append(manage);
+    box.append(element("p","app-keyboard-help","↑ ↓ Select · Enter Launch · Ctrl+8 Apps"));
+  }
   return box;
 }
 
@@ -438,7 +467,10 @@ function wire(item, hit) {
 function select(path) {
   state.selection = path;
   state.navigated = true;
-  for (const item of $content.querySelectorAll("[data-result-key]")) item.classList.toggle("selected", item.dataset.resultKey === path);
+  for (const item of $content.querySelectorAll("[data-result-key]")) {
+    const selected=item.dataset.resultKey === path; item.classList.toggle("selected", selected);item.setAttribute("aria-selected",String(selected));
+    const launch=item.querySelector(".app-launch");if(launch)launch.tabIndex=selected?0:-1;
+  }
   $content.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
   renderSide();
   if (!$big.hidden) renderBig();
@@ -461,7 +493,7 @@ function columns() {
 
 function open(hit) {
   state.selection = resultKey(hit); state.navigated = true;
-  openResult(hit).catch(failed);
+  return openResult(hit).catch(failed);
 }
 
 function reveal(hit) {
@@ -601,6 +633,14 @@ let playing = null;   // the audio of the selected result, while it plays
 
 function renderSide() {
   stopPlaying();
+  if (state.activityOpen) {
+    $side.removeAttribute("aria-live");
+    $side.hidden = false;
+    if (!activityHost.isConnected) $side.replaceChildren(activityHost);
+    activityView.show();
+    return;
+  }
+  $side.setAttribute("aria-live", "polite");
   const hit = state.hasResults && !state.codePhase && hasQuery() ? selectedHit() : null;
   $side.hidden = !state.showsPreview || !hit;
   $side.replaceChildren();
@@ -919,7 +959,7 @@ function actions(hit) {
 
 function renderStatus() {
   const app = state.app;
-  $("status-line").textContent = app.line || "";
+  $("status-line").textContent = app.line || "Activity";
   const ring = $("ring");
   ring.hidden = app.progress == null;
   if (app.progress != null) {
@@ -992,6 +1032,7 @@ function showMainMenu() {
   const button = $("more").getBoundingClientRect();
   const folders = state.info.folders.length > 0, paused = state.app.paused === true;
   showMenu(button.right - 200, button.bottom + 4, [
+    ["Activity and Diagnostics…", () => showActivity()],
     ["Choose Folders…", () => invoke("choose_folders").catch(failed)],
     ["Index Now", () => invoke("index_now").catch(failed), null, folders && state.app.busy === false],
     [paused ? "Resume Indexing" : "Pause Indexing", () => invoke("pause_indexing", { paused: !paused }).catch(failed),
@@ -1030,7 +1071,7 @@ $("settings").onclick = () => invoke("open_settings").catch(failed);
 $("settings").title = `Settings (${MOD},)`;
 $("more").onmousedown = (event) => event.preventDefault();
 $("more").onclick = () => ($menu.hidden ? showMainMenu() : hideMenu());
-$("status-line").onclick = () => invoke("choose_folders").catch(failed);
+$("status-line").onclick = () => showActivity();
 $("update").onclick = () => invoke("offer_update").catch(failed);
 $kinds.onmousedown = (event) => event.preventDefault();
 
@@ -1043,6 +1084,9 @@ function updatePreviewButton() {
 
 document.addEventListener("keydown", (event) => {
   if (event.isComposing) return;   // an input method is composing: its keys
+  if (event.target.closest(".app-launch")) return;
+  if (document.querySelector(".activity-report[open]") || event.target.closest(".activity-view")) return;
+  if (event.key === "Escape" && state.activityOpen) { event.preventDefault(); closeActivity(); return; }
   const modifier = isMac ? event.metaKey : event.ctrlKey;
   const plain = !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey;
   if (!$menu.hidden && event.key === "Escape") {

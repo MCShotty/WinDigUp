@@ -387,7 +387,8 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             encoderState = "ready"
             encoderError = nil
             write(["event": "encoder", "state": "ready", "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
-                  "source": worker.info.vectorSource])
+                  "source": worker.info.vectorSource, "device": worker.info.device ?? "",
+                  "execution_policy": worker.info.executionPolicy ?? ""])
             return worker
         } catch {
             encoderState = "unavailable"

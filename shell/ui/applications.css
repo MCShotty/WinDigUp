@@ -2,7 +2,7 @@
 .app-group-title { font-size: 12px; font-weight: 600; color: var(--secondary); padding: 8px 12px; }
 .app-row { display: flex; align-items: center; gap: 11px; min-height: 54px; padding: 8px 12px; border-radius: 7px; cursor: default; }
 .app-row:hover { background: var(--line); }
-.app-row.selected { background: var(--selected, rgba(10,132,255,.2)); }
+.app-row.selected { background: color-mix(in srgb, var(--moss,#356652) 8%, var(--surface)); }
 .app-row-text { min-width: 0; }
 .app-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-description { color: var(--secondary); font-size: 12px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; }
@@ -20,3 +20,64 @@
 .app-editor input[type=text], .app-editor textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
 .app-editor textarea { resize: vertical; min-height: 65px; }
 .app-editor button { margin: 8px 8px 0 0; }
+
+/* The launcher and its editor share the app's moss accent; file previews keep their existing presentation. */
+body.apps-mode { --accent:var(--moss); }
+body.apps-mode .top { padding:28px 24px 16px; }
+body.apps-mode .bar, body.apps-mode .field { min-height:44px; }
+body.apps-mode .field { background:var(--surface); border:1px solid var(--line); }
+body.apps-mode #content { padding:38px 24px 18px; }
+.app-group-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:4px 12px 8px; }
+.app-group-heading .app-group-title { margin:0; padding:0; font-size:14px; color:var(--text); }
+body.apps-mode .app-group-heading { padding:0 0 4px; margin-top:18px; }
+body.apps-mode .app-group-title { font-size:23px; font-weight:650; }
+.app-group-count, .app-purpose-state, .app-catalog-note { color:var(--secondary); font-size:14px; }
+.app-purpose-state { margin-left:auto; font-size:12px; }
+.app-catalog-note { margin:0 0 22px; }
+.app-row-expanded { display:grid; grid-template-columns:40px minmax(0,1fr) auto auto; gap:16px; min-height:92px; border-radius:0; border-bottom:1px solid var(--line); padding:18px; border-left:3px solid transparent; }
+.app-row-expanded.selected { border-left-color:var(--moss); }
+.app-row-expanded .app-icon { width:40px; height:40px; }
+.app-row-expanded .app-name { font-size:16px; line-height:1.45; }
+.app-row-expanded .app-publisher, .app-row-expanded .app-description { color:var(--secondary); font-size:14px; line-height:1.45; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-match-reason { color:var(--secondary); font-size:12px; }
+.app-row-actions { visibility:hidden; }
+.app-row.selected .app-row-actions { visibility:visible; }
+.app-launch, .app-details button.primary { font:inherit; font-size:14px; padding:8px 14px; border:0; border-radius:7px; background:var(--moss); color:#fff; cursor:pointer; }
+.app-launch:disabled { opacity:.5; }
+.app-launch:focus-visible, .app-settings-row:focus-visible, .app-manage:focus-visible { outline:2px solid var(--moss); outline-offset:3px; }
+.app-manage { background:none; color:var(--leaf-text,var(--moss)); text-decoration:underline; border:0; padding:0; margin:22px 0 0; font:inherit; font-size:14px; cursor:pointer; }
+.app-keyboard-help { color:var(--secondary); font-size:12px; margin:12px 0; }
+.apps-settings-status { margin:18px 0 12px; font-size:13px; line-height:1.5; }
+.apps-settings-status p { margin:4px 0; }
+#apps-purpose-status { color:var(--secondary); }
+.apps-settings-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.apps-settings-actions .link { padding:6px 0; }
+.apps-catalog-tools { display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; row-gap:6px; margin-top:24px; }
+.apps-catalog-tools label[for=apps-filter] { grid-column:1; grid-row:1; }
+.apps-catalog-tools #apps-filter { grid-column:1; grid-row:2; }
+.apps-catalog-tools label[for=apps-visibility] { grid-column:2; grid-row:1; }
+.apps-catalog-tools #apps-visibility { grid-column:2; grid-row:2; min-width:100px; width:100%; }
+.apps-settings-layout { display:grid; grid-template-columns:minmax(180px, .8fr) minmax(0,1.2fr); gap:24px; margin:14px 0 20px; align-items:start; }
+.apps-catalog-pane { min-width:0; }
+#apps-list { max-height:430px; overflow-y:auto; padding:2px 4px 2px 2px; }
+.app-settings-row { display:flex; flex-direction:column; text-align:left; gap:2px; border:0; border-radius:6px; padding:10px; width:100%; color:var(--text); background:transparent; font-size:13px; }
+.app-settings-row .app-name { max-width:100%; }
+.app-settings-row:hover { background:var(--line); }
+.app-settings-row[aria-selected=true] { background:color-mix(in srgb,var(--moss) 12%,var(--surface)); }
+.app-draft-mark, .app-visibility-note { font-size:11px; color:var(--secondary); }
+.app-draft-mark { color:var(--ember); }
+#apps-editors { min-width:0; padding-left:24px; border-left:1px solid var(--line); }
+#apps-editors .app-editor { padding:0; border:0; }
+#apps-editors .app-editor-name { font-size:17px; text-transform:none; color:var(--text); letter-spacing:0; margin:0 0 4px; overflow-wrap:anywhere; }
+.app-editor-purpose { font-size:13px; line-height:1.5; }
+.app-editor label { font-size:13px; }
+.app-editor label textarea { display:block; margin-top:6px; font-size:14px; }
+.app-editor .app-hidden-option { display:flex; align-items:center; gap:8px; margin:16px 0; }
+.app-hidden-option input { accent-color:var(--moss); margin:0; }
+.app-editor .apps-settings-actions { margin-top:14px; }
+.app-editor .apps-settings-actions button { margin:0; }
+.app-editor-message { font-size:13px; color:var(--secondary); overflow-wrap:anywhere; }
+@media (max-width:1100px) { .app-match-reason { display:none; } .app-row-expanded { grid-template-columns:40px minmax(0,1fr) auto; gap:12px; } }
+@media (max-width:540px) { .apps-settings-layout { grid-template-columns:1fr; } #apps-list { max-height:220px; } #apps-editors { border-left:0; border-top:1px solid var(--line); padding:18px 0 0; } .app-purpose-state { width:100%; margin-left:0; } }
+@media (prefers-color-scheme:dark) { .app-generic { filter:invert(.75); } }
+@media (forced-colors:active) { .app-row.selected, .app-settings-row[aria-selected=true] { outline:2px solid Highlight; } }

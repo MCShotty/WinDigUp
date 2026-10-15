@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8">
   <title>DigUp</title>
+  <link rel="icon" href="icon.png">
   <link rel="stylesheet" href="window.css">
   <link rel="stylesheet" href="applications.css">
+  <link rel="stylesheet" href="activity.css">
 </head>
 <body>
   <header class="top">
@@ -26,7 +28,7 @@
         <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>
       </button>
     </div>
-    <nav class="kinds" id="kinds" aria-label="Kinds of files"></nav>
+    <nav class="kinds" id="kinds" aria-label="Search categories"></nav>
   </header>
 
   <div class="split">
@@ -36,7 +38,7 @@
 
   <footer class="status">
     <span class="ring" id="ring" hidden></span>
-    <button class="status-line" id="status-line" title="Folders and indexing"></button>
+    <button class="status-line" id="status-line" title="Open Activity and diagnostics" aria-label="Open Activity and diagnostics"></button>
     <span class="spacer"></span>
     <span class="count" id="count"></span>
     <button class="update" id="update" title="See what's new and update" hidden></button>
@@ -45,6 +47,7 @@
   <div class="menu" id="menu" role="menu" hidden></div>
   <script src="results.js"></script>
   <script src="applications.js"></script>
+  <script src="activity.js"></script>
   <script src="window.js"></script>
 </body>
 </html>

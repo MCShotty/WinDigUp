@@ -25,10 +25,13 @@ let summaries = null;        // what's indexed under each folder (search-service
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
 let removingCode = null;     // the code folder whose removal is being confirmed
+const activityView = new ActivityUI.View($("settings-activity"), { onSettings: tab => showTab(tab) });
 
 // MARK: Tabs
 
 function showTab(name) {
+  if (!["activity", "general", "folders", "code", "apps", "storage"].includes(name)) name = "general";
+  if (name === "activity") activityView.show(); else activityView.hide();
   for (const button of document.querySelectorAll("#tabs button")) {
     button.setAttribute("aria-selected", String(button.dataset.tab === name));
   }
@@ -167,10 +170,20 @@ function renderStatus() {
   $("status-line").textContent = state.line || "";
   $("status-bar").hidden = state.progress == null;
   $("status-fill").style.width = `${Math.round(100 * (state.progress || 0))}%`;
-  const parts = [`${(state.searchable || 0).toLocaleString()} of ${(state.files || 0).toLocaleString()} files searchable`];
+  const scanning = state.activity === "scanning" || state.scan?.event === "scan_progress" && state.activity !== "idle";
+  const preparing = scanning || !state.files && !state.searchable && (state.activity === "starting" || state.measuring || state.model?.state !== "ready");
+  const parts = preparing ? [state.searchable ? `${state.searchable.toLocaleString()} files remain searchable` : "Preparing the first file index"]
+    : [state.files ? `${(state.searchable || 0).toLocaleString()} of ${state.files.toLocaleString()} files searchable` : "No searchable local files"];
+  $("status-bar").hidden = !scanning && state.progress == null;
+  $("status-bar").classList.toggle("busy", scanning);
   if (state.pending) parts.push(`${state.pending.toLocaleString()} waiting`);
   if (state.unfinished) parts.push(`${state.unfinished.toLocaleString()} long ${state.unfinished === 1 ? "file" : "files"} to finish`);
   const scan = state.scan || {};
+  if (scanning) {
+    if (scan.visited != null) parts.push(`${scan.visited.toLocaleString()} entries checked`);
+    if (scan.candidates != null) parts.push(`${scan.candidates.toLocaleString()} candidates so far`);
+    parts.push("Eligible totals are known after discovery");
+  }
   if (scan.path) parts.push(shown(scan.path));
   if (scan.event === "sync") {
     if (scan.visited != null) parts.push(`${scan.visited.toLocaleString()} entries checked`);
@@ -191,31 +204,8 @@ $("index-now").onclick = async () => {
   finally { renderStatus(); }
 };
 
-async function showIndexingDiagnostics() {
-  const dialog = $("index-diagnostics-dialog");
-  $("index-diagnostics-text").value = "Reading local indexing status…";
-  $("index-diagnostics-message").textContent = "";
-  $("index-diagnostics-copy").disabled = true;
-  if (!dialog.open) dialog.showModal();
-  try {
-    $("index-diagnostics-text").value = await invoke("indexing_diagnostics");
-    $("index-diagnostics-copy").disabled = false;
-  } catch (error) {
-    $("index-diagnostics-text").value = String(error?.message || error);
-  }
-}
+function showIndexingDiagnostics() { showTab("activity"); activityView.setTab("diagnostics"); }
 $("index-diagnostics").onclick = $("apps-diagnostics").onclick = showIndexingDiagnostics;
-$("index-diagnostics-close").onclick = () => $("index-diagnostics-dialog").close();
-$("index-diagnostics-copy").onclick = async () => {
-  const text = $("index-diagnostics-text");
-  try {
-    await navigator.clipboard.writeText(text.value);
-    $("index-diagnostics-message").textContent = "Report copied.";
-  } catch {
-    text.focus(); text.select();
-    $("index-diagnostics-message").textContent = "Press Ctrl+C to copy the selected report.";
-  }
-};
 
 async function loadSummaries() {
   try {
@@ -557,6 +547,7 @@ async function refresh() {
 
 // Back from the code folders window (or anything else that changed the settings): shown as they are now.
 window.addEventListener("focus", () => { refresh().catch(() => {}); });
+tauri.event.listen("settings-tab", ({ payload }) => showTab(payload));
 
 // Indexing as it goes, and what's indexed under each folder at most every two seconds.
 let summariesTimer = null;
@@ -581,9 +572,13 @@ async function start() {
   if (info.debug) {
     const report = await invoke("indexing_diagnostics");
     const diagnostics = JSON.parse(report.split("\n\n--- ")[0]);
+    const activity = await invoke("activity_snapshot");
+    activityView.update(activity, "");
     invoke("debug_report", { report: { settings: true, hotkey: info.hotkey, openAtLogin: info.openAtLogin,
                                        canOpenAtLogin: info.canOpenAtLogin, folders: info.folders,
                                        diagnosticBuild: diagnostics.build, diagnosticBlocker: diagnostics.blockedBy,
+                                       activitySchema: activity.schemaVersion, activityPhase: activity.files.phase,
+                                       activityRendered: Boolean(activityView.get("phase").textContent),
                                        accelerator: $("accelerator").value, cpuOption: Boolean($("accelerator").querySelector('option[value="cpu"]')) } }).catch(() => {});
   }
   const asked = new URLSearchParams(location.search).get("tab");   // dev snapshots: ?tab=folders
