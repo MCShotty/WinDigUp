@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from npu_runtime import NPURuntime, bundle_id, check_parity, only_npu, validate_bundle, verify_execution
+from npu_runtime import NPURuntime, bundle_id, check_parity, compile_npu, only_npu, validate_bundle, verify_execution
 
 
 @pytest.mark.parametrize("devices", [[], ["CPU"], ["NPU", "CPU"], ["AUTO:NPU"], ["HETERO:NPU,CPU"], ["GPU"], ["NPU.fake"]])
@@ -44,6 +44,36 @@ def test_bad_precision_and_masks_rejected():
             check_parity(values, np.array([1., 2.]), "bad")
     with pytest.raises(RuntimeError, match="different mask"):
         check_parity(np.array([True, False]), np.array([True, True]), "mask")
+
+
+@pytest.mark.parametrize("mapped_device", ["CPU", "", "NPU"])
+def test_compile_disables_wrapper_and_rejects_partial_device_support(mapped_device):
+    class Op:
+        def get_type_name(self): return "MatMul"
+        def get_friendly_name(self): return "projection"
+    class Model:
+        def get_ops(self): return [Op()]
+    class Compiled:
+        def get_property(self, key): return ["NPU"]
+    class Core:
+        compiled = False
+        def query_model(self, model, device, config):
+            assert device == "NPU" and config["NPU_USE_NPUW"] is False
+            return {"projection": mapped_device}
+        def compile_model(self, model, device, config):
+            assert mapped_device == "NPU", "unsupported operations must fail before compilation"
+            assert device == "NPU" and config["NPU_USE_NPUW"] is False
+            assert config["ENABLE_PROFILING"] is True
+            self.compiled = True
+            return Compiled()
+    core = Core()
+    if mapped_device == "NPU":
+        compile_npu(core, Model(), "text")
+        assert core.compiled
+    else:
+        with pytest.raises(RuntimeError, match="does not support"):
+            compile_npu(core, Model(), "text")
+        assert not core.compiled
 
 
 def test_bundle_integrity_and_required_media(tmp_path):

@@ -33,6 +33,7 @@ host accelerator backend. It also checks direct/asynchronous graph and opaque gr
 remains installed for host storage and transfers; its presence in a log does not mean CPU inference is enabled.
 The Swift helper verifies the loaded library's compiled enforcement flag and pins text, vision and audio to the
 same device. Vector version 2 rebuilds existing GPU indexes for accelerator normalization.
+OpenMP is disabled in the native build: the storage backend needs no CPU compute pool or extra OpenMP runtime DLL.
 
 For the CLI in PowerShell:
 
@@ -65,7 +66,7 @@ Allow several GB for the static profiles: queries (512 tokens), indexing (2048 t
 The source model and PyTorch forward passes are used only during this explicit preparation step.
 
 Choose **Intel NPU — OpenVINO** in Settings, enter the Python executable and exported bundle folder, and apply.
-Every required graph is queried and compiled explicitly for `NPU`. The worker checks `EXECUTION_DEVICES`, profiling
+Every required graph is queried and compiled explicitly for `NPU`, with the NPUW wrapper disabled. The worker checks `EXECUTION_DEVICES`, profiling
 and reference parity for every stage before reporting ready. `CPU`, `AUTO`, `HETERO` and mixed-device execution are
 rejected. A driver that cannot compile a stage or reproduce its reference output produces an error, never a partial
 CPU pipeline. NPU vectors have a bundle fingerprint and a separate `index/openvino-npu` store, including code search.
@@ -98,5 +99,7 @@ containing text, an image and mono 16 kHz WAV, and search it. Confirm device/pol
 modality and a query encoder on the same backend. With the adapter disabled or unavailable, repeat and confirm a
 clear error and no CPU inference. To exercise RDNA1's shader path on newer hardware, disable optional cooperative
 matrix and integer-dot features through ggml's diagnostic environment flags; a real RX 5000 run is still required.
+With the GGUF model installed, `swift test --filter ReferenceVectorTests` compares GPU vectors with the retained
+version 1 golden corpus and verifies normalization. The minimum cosine agreement remains 0.999.
 
-The updater now reads this fork's feed, so accepting an upstream update cannot replace this execution policy.
+The updater reads this fork's feed and rejects upstream package URLs inherited by a sync, preserving this execution policy.

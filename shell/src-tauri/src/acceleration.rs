@@ -40,9 +40,20 @@ impl Acceleration {
     }
 }
 
+/// A synced upstream feed can still name upstream installers. They do not enforce this fork's execution policy.
+pub fn compatible_update(url: &str) -> bool {
+    url.starts_with("https://github.com/MCShotty/WinDigUp/releases/download/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn updates_keep_the_forks_execution_policy() {
+        assert!(compatible_update("https://github.com/MCShotty/WinDigUp/releases/download/v1/DigUp.exe"));
+        assert!(!compatible_update("https://github.com/ARahim3/DigUp/releases/download/v1/DigUp.exe"));
+        assert!(!compatible_update("https://github.com/MCShotty/WinDigUp-other/releases/download/v1/DigUp.exe"));
+    }
     #[test]
     fn never_offers_cpu_or_automatic_openvino_fallback() {
         for backend in ["cpu", "auto", "AUTO:NPU,CPU", "HETERO:NPU,CPU", ""] {

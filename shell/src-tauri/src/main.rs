@@ -167,7 +167,9 @@ impl Shell {
 
     fn index_folder(&self) -> Option<PathBuf> {
         self.options.index_folder().map(|folder| {
-            if self.settings.lock().unwrap().acceleration.backend == "openvino-npu" { folder.join("openvino-npu") } else { folder }
+            if self.settings.lock().unwrap().acceleration.backend == "openvino-npu" && !folder.ends_with("openvino-npu") {
+                folder.join("openvino-npu")
+            } else { folder }
         })
     }
 
@@ -1898,7 +1900,12 @@ fn measure_then_index(app: &AppHandle) {
         }
         shell.measuring.store(false, Ordering::SeqCst);
         shell.status.lock().unwrap().measuring = false;
+        let error = reply.get("error").and_then(Value::as_str).map(str::to_string);
         let _ = app.emit("speed", reply);
+        if let Some(error) = error {
+            model_event(&app, json!({"event": "error", "message": format!("The selected accelerator couldn't run the model: {error}")}));
+            return;
+        }
         changed(&app);
         run_index(&app);
     });

@@ -36,6 +36,20 @@ def verify_execution(compiled) -> None:
         raise RuntimeError(f"Exclusive Intel NPU execution required, got {devices!r}; CPU fallback disabled")
 
 
+def compile_npu(core, model, name: str):
+    # NPUW can partition an explicit NPU request between NPU and CPU. Do not enable that wrapper.
+    supported = core.query_model(model, "NPU", {"NPU_USE_NPUW": False})
+    unsupported = {op.get_type_name() for op in model.get_ops()
+        if op.get_type_name() not in ("Parameter", "Result", "Constant")
+        and not only_npu([supported.get(op.get_friendly_name(), "")])}
+    if unsupported:
+        raise RuntimeError(f"NPU does not support {name}: {', '.join(sorted(unsupported))}; CPU fallback disabled")
+    compiled = core.compile_model(model, "NPU", {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,
+                                               "NPU_USE_NPUW": False})
+    verify_execution(compiled)
+    return compiled
+
+
 def validate_bundle(folder: Path) -> dict:
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("format") != 1 or manifest.get("model") != "google/embeddinggemma-2":
@@ -97,15 +111,7 @@ class NPURuntime:
         for name in names:
             entry = self.manifest["graphs"][name]
             model = core.read_model(str(self.folder / entry["file"]))
-            unsupported = set()
-            supported = core.query_model(model, "NPU")
-            for op in model.get_ops():
-                if op.get_type_name() not in ("Parameter", "Result", "Constant") and not only_npu([supported.get(op.get_friendly_name(), "")]):
-                    unsupported.add(op.get_type_name())
-            if unsupported:
-                raise RuntimeError(f"NPU does not support {name}: {', '.join(sorted(unsupported))}; CPU fallback disabled")
-            compiled = core.compile_model(model, "NPU", {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True})
-            verify_execution(compiled)
+            compiled = compile_npu(core, model, name)
             self.graphs[name] = compiled.create_infer_request()
             with np.load(self.folder / entry["fixture"], allow_pickle=False) as fixture:
                 inputs = {key: fixture[f"input-{key}"] for key in entry["inputs"]}
@@ -113,7 +119,8 @@ class NPURuntime:
                 for i, result in enumerate(results):
                     check_parity(result, fixture[f"output-{i}"], f"{name}/{i}")
         from transformers import AutoProcessor
-        self.processor = AutoProcessor.from_pretrained(str(self.folder / "processor"), local_files_only=True)
+        self.processor = AutoProcessor.from_pretrained(str(self.folder / "processor"), local_files_only=True,
+                                                       trust_remote_code=False)
         self.processor.tokenizer.padding_side = "right"
         self.role = role
         self.length = self.manifest["lengths"][role]

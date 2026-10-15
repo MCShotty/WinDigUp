@@ -18,6 +18,11 @@ if PATH="/c/Windows/System32:/c/Windows" DIGUP_DEVICE=cpu "$helper" accelerator 
   echo "CPU selection was accepted" >&2; exit 1
 fi
 grep -q 'CPU inference is disabled' "$work/cpu.txt"
+if DIGUP_DEVICE=cpu "$helper" speed --model --json --index "$(win "$work/index")" > "$work/speed.txt" 2>&1; then
+  echo "CPU benchmark was accepted" >&2; exit 1
+fi
+grep -q '"event":"error"' "$work/speed.txt"
+grep -q 'CPU inference is disabled' "$work/speed.txt"
 if PATH="/c/Windows/System32:/c/Windows" DIGUP_ACCELERATOR=invalid "$helper" accelerator > "$work/invalid.txt" 2>&1; then
   echo "Unknown accelerator was accepted" >&2; exit 1
 fi

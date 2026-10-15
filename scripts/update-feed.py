@@ -50,7 +50,7 @@ def main():
         sys.exit(f"update-feed: the packages are of different versions: {sorted(versions)}")
     version = versions.pop()
     tag = args.tag or f"v{version}"
-    base = os.environ.get("DOWNLOAD_BASE", f"https://github.com/ARahim3/DigUp/releases/download/{tag}/")
+    base = os.environ.get("DOWNLOAD_BASE", f"https://github.com/MCShotty/WinDigUp/releases/download/{tag}/")
     feed = {
         "version": version,
         "notes": Path(args.notes).read_text().strip() if args.notes else "",

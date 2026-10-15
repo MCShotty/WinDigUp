@@ -92,10 +92,10 @@ struct Arguments {
     }
 
     var indexFolder: URL {
-        let base = values["--index"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            ?? AppPaths.defaultIndex
+        let base = (values["--index"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? AppPaths.defaultIndex).standardizedFileURL
         // NPU exports have their own fingerprint and store, including for code search.
-        return (ProcessInfo.processInfo.environment["DIGUP_ACCELERATOR"] == "openvino-npu"
+        return (ProcessInfo.processInfo.environment["DIGUP_ACCELERATOR"] == "openvino-npu" && base.lastPathComponent != "openvino-npu"
             ? base.appendingPathComponent("openvino-npu") : base).standardizedFileURL
     }
 
@@ -650,6 +650,9 @@ do {
         exit(2)
     }
 } catch {
+    if CommandLine.arguments.contains("--json") {
+        emit(["event": "error", "error": String("\(error)".prefix(1500)), "message": String("\(error)".prefix(1500))])
+    }
     FileHandle.standardError.write(Data("error: \(error)\n".utf8))
     exit(1)
 }

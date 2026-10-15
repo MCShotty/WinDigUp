@@ -29,7 +29,7 @@ else
   echo "Vulkan SDK (glslc) required. CPU-only production builds are disabled." >&2
   exit 1
 fi
-STAMP="$TAG $(cat "$PATCH" "$STRICT_PATCH" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-12) $FLAVOR accelerator-only"
+STAMP="$TAG $(cat "$0" "$PATCH" "$STRICT_PATCH" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-12) $FLAVOR accelerator-only"
 if [[ ( -f "$OUT/lib/libllamacpp.a" || -f "$OUT/lib/libllama.so" || -f "$OUT/lib/llama.dll" ) \
       && "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then
   exit 0
@@ -72,7 +72,7 @@ if [[ $OS == Darwin ]]; then
   GENERATOR=$(command -v ninja > /dev/null && echo Ninja || echo "Unix Makefiles")
   # Only the libraries: no tools, no server, nothing downloaded at build time.
   cmake -S "$SOURCE" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-    -DBUILD_SHARED_LIBS=OFF -DGGML_ACCELERATOR_ONLY=ON -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_MTMD=ON \
+    -DBUILD_SHARED_LIBS=OFF -DGGML_ACCELERATOR_ONLY=ON -DGGML_OPENMP=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_MTMD=ON \
     -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
     -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF > /dev/null
   cmake --build "$BUILD" --config Release -j "$(sysctl -n hw.ncpu)" --target llama mtmd > /dev/null
@@ -111,7 +111,7 @@ else
   esac
   # Shared libraries, the backends as modules (every CPU variant, so one build fits any x86-64 or arm64 machine).
   cmake -S "$SOURCE" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release "${COMPILERS[@]}" \
-    -DBUILD_SHARED_LIBS=ON -DGGML_ACCELERATOR_ONLY=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF "${GPU[@]}" \
+    -DBUILD_SHARED_LIBS=ON -DGGML_ACCELERATOR_ONLY=ON -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF "${GPU[@]}" \
     -DLLAMA_BUILD_MTMD=ON -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF \
     -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF \
     -DLLAMA_CURL=OFF > /dev/null

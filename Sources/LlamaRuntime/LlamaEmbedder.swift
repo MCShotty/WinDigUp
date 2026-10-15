@@ -336,26 +336,24 @@ public final class LlamaEmbedder: Embedder {
         }
     }
 
-    private static func isGPU(_ device: ggml_backend_dev_t?) -> Bool {
-        let type = ggml_backend_dev_type(device)
-        return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU
-    }
-
     private static func selectDevice(_ acceleration: Acceleration) throws -> ggml_backend_dev_t {
         let requested = ProcessInfo.processInfo.environment["DIGUP_GPU"]
-        for index in 0..<ggml_backend_dev_count() {
-            guard let device = ggml_backend_dev_get(index), isGPU(device) else { continue }
-            let registry = String(cString: ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))).lowercased()
-            let name = String(cString: ggml_backend_dev_name(device))
-            let description = String(cString: ggml_backend_dev_description(device)).lowercased()
-            guard registry == (acceleration == .metal ? "metal" : "vulkan") else { continue }
-            guard !["llvmpipe", "lavapipe", "swiftshader", "software", "basic render"].contains(where: description.contains) else {
-                continue
+        // Prefer a discrete adapter on systems that also expose integrated graphics.
+        for preferred in [GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_IGPU] {
+            for index in 0..<ggml_backend_dev_count() {
+                guard let device = ggml_backend_dev_get(index), ggml_backend_dev_type(device) == preferred else { continue }
+                let registry = String(cString: ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))).lowercased()
+                let name = String(cString: ggml_backend_dev_name(device))
+                let description = String(cString: ggml_backend_dev_description(device)).lowercased()
+                guard registry == (acceleration == .metal ? "metal" : "vulkan") else { continue }
+                guard !["llvmpipe", "lavapipe", "swiftshader", "software", "basic render"].contains(where: description.contains) else {
+                    continue
+                }
+                if let requested, !requested.isEmpty, requested != name { continue }
+                if acceleration == .amdVulkan, !description.contains("amd") && !description.contains("radeon") { continue }
+                if acceleration == .nvidiaVulkan, !description.contains("nvidia") { continue }
+                return device
             }
-            if let requested, !requested.isEmpty, requested != name { continue }
-            if acceleration == .amdVulkan, !description.contains("amd") && !description.contains("radeon") { continue }
-            if acceleration == .nvidiaVulkan, !description.contains("nvidia") { continue }
-            return device
         }
         throw WorkerError.failed("No compatible \(acceleration.rawValue) hardware GPU\(requested.map { " (\($0))" } ?? "") found. "
             + "Install the vendor's Vulkan driver. AMD supports RDNA1/RX 5000 and newer. CPU fallback is disabled.")

@@ -159,7 +159,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
       # The small ffmpeg is built once per version of its build script (build-ffmpeg.sh does nothing when it's there).
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: ffmpeg
         with:
           path: Vendor/ffmpeg
@@ -179,6 +179,11 @@ jobs:
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: scripts/build-ffmpeg.sh
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        with:
+          path: Vendor/ffmpeg
+          key: ffmpeg-windows-${{ hashFiles('scripts/build-ffmpeg.sh') }}
       - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057 # v0.5.0
         with:
           swift-version: swift-6.4.0-release

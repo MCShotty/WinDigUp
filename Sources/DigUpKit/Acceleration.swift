@@ -25,7 +25,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
 
     /// The speed cache may describe a different accelerator, or an upstream CPU preference.
     public static var cacheKey: String {
-        [ProcessInfo.processInfo.environment["DIGUP_ACCELERATOR"] ?? "vulkan",
+        [(try? selected())?.rawValue ?? "invalid",
          ProcessInfo.processInfo.environment["DIGUP_GPU"] ?? "",
          ProcessInfo.processInfo.environment["DIGUP_OPENVINO_MODELS"] ?? ""].joined(separator: ":")
     }
