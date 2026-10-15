@@ -5,7 +5,7 @@ let appSettingsOffset = 0;
 let appSettingsTimer;
 let appSettingsInfo = {};
 
-function renderApplications() {
+function renderApplications(statusOnly = false) {
   const settings = info.applications || {};
   appSettingsInfo = settings;
   document.getElementById("apps-tab").hidden = !settings.supported;
@@ -13,8 +13,12 @@ function renderApplications() {
   document.getElementById("apps-semantic").checked = Boolean(settings.semanticEnabled);
   document.getElementById("apps-semantic").disabled = !settings.enabled;
   const issues = Object.values(settings.sourceErrors || {});
-  document.getElementById("apps-status").textContent = `${settings.count || 0} applications${settings.refreshing ? " · Refreshing…" : ""}${issues.length ? ` · Some sources could not refresh: ${issues.join("; ")}` : ""}`;
-  if (settings.supported && !document.getElementById("apps").hidden && !appDrafts.size) loadApplicationSettings();
+  const semantic = info.applicationSemantic || {};
+  const purpose = !settings.semanticEnabled ? "Purpose matching off" : semantic.state === "unavailable"
+    ? `Purpose matching unavailable: ${semantic.message || "configure your accelerator in General"}`
+    : `Purpose matching: ${semantic.embedded || 0} of ${semantic.total || 0} prepared`;
+  document.getElementById("apps-status").textContent = `${settings.count || 0} applications${settings.refreshing ? " · Refreshing…" : ""} · ${purpose}${issues.length ? ` · Some sources could not refresh: ${issues.join("; ")}` : ""}`;
+  if (!statusOnly && settings.supported && !document.getElementById("apps").hidden && !appDrafts.size) loadApplicationSettings();
 }
 
 async function loadApplicationSettings(append = false) {
@@ -79,10 +83,8 @@ document.getElementById("apps-refresh").onclick = async () => {
 };
 document.getElementById("apps-filter").oninput = () => { clearTimeout(appSettingsTimer); appSettingsTimer = setTimeout(() => loadApplicationSettings(), 120); };
 document.getElementById("apps-more").onclick = () => loadApplicationSettings(true);
-window.__TAURI__.event.listen("applications", ({ payload }) => { info.applications = payload; renderApplications(); });
+window.__TAURI__.event.listen("applications", ({ payload }) => { if (typeof info !== "undefined") { info.applications = payload; renderApplications(); } });
 window.__TAURI__.event.listen("applications-progress", ({ payload }) => {
-  if (!appSettingsInfo.supported) return;
-  document.getElementById("apps-status").textContent = payload.state === "unavailable"
-    ? `App names available; purpose matching unavailable: ${payload.message || "configure your accelerator in General"}`
-    : `${appSettingsInfo.count || 0} applications · Purpose matching: ${payload.embedded || 0} of ${payload.total || 0} prepared`;
+  if (typeof info === "undefined" || !appSettingsInfo.supported) return;
+  info.applicationSemantic = payload; renderApplications(true);
 });

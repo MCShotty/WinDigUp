@@ -253,6 +253,9 @@ jobs:
       - name: Installed application discovery and launch
         shell: pwsh
         run: scripts/check-windows-applications.ps1
+      - name: Application service protocol (synthetic unit vectors)
+        shell: pwsh
+        run: python scripts/check-app-protocol.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe"
       - name: Swift and Rust policy checks
         shell: bash
         run: |
@@ -260,6 +263,7 @@ jobs:
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
           swift test --filter 'AccelerationTests|ApplicationStoreTests'
+          cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked
           cargo test --release applications:: --locked

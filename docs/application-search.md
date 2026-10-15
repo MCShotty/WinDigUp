@@ -72,11 +72,19 @@ Swift cache/policy checks:
 swift test --filter 'AccelerationTests|ApplicationStoreTests'
 ```
 
+The portable tests also exercise the real helper transport with a deliberately blocked subprocess pipe, concurrent
+reply IDs and a restart. Native app-name requests and shutdown remain independent of that pipe. A corrupt-catalog
+fixture checks that annotations survive recovery/reinstallation and icon changes leave embedding text unchanged.
+
 The UI checks run the actual panel, window, Settings and setup pages in Chromium. They cover a blocked helper,
 application-only routing, name/semantic merging, stable selection, pagination, launch IDs, file-only actions and Linux
 behavior. The Windows installer check compiles a disposable GUI target, registers its own Start menu shortcut,
 launches it from the installed DigUp window, verifies Unicode arguments/working directory, and checks that it survives
 DigUp exiting. It cleans up its own shortcut and process. Packaged-app activation still needs a real Windows check.
+
+The installed Swift service also runs `scripts/check-app-protocol.py` with an explicitly synthetic worker (unit
+vectors, no neural inference). It verifies one-document background steps, query-cache reuse, persistent fingerprints,
+changed-runtime invalidation and rejection of CPU device proof. These protocol checks do not validate an accelerator.
 
 On a machine with model files and the configured accelerator, evaluate synthetic app-purpose fixtures through the
 real strict helper:
@@ -95,3 +103,7 @@ The synthetic suite is an initial calibration aid; supplement it with varied rea
 The UI target is cached app-name results rendered within 50 ms at p95 for 2,000 apps on a recorded reference Windows
 machine. Native benchmark output measures backend time only. Report actual end-to-end results separately; no model
 performance or hardware relevance result is implied by hosted CPU-only CI.
+
+Development measurement (2026-10-15): the release native fixture reported **2.18 ms p95** for cached name matching over
+2,000 entries on a Linux x86-64 container backed by an AMD EPYC 9V74 CPU. This excludes Tauri IPC and rendering and is
+not the required reference-Windows end-to-end measurement.

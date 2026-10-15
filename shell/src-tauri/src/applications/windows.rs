@@ -130,8 +130,8 @@ unsafe fn shortcut(path: &Path, source: &str) -> Option<Record> {
         let mut args = vec![0u16; 32768];
         let mut cwd = vec![0u16; 32768];
         let _ = link.GetPath(&mut target, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32);
-        let _ = link.GetArguments(&mut args);
-        let _ = link.GetWorkingDirectory(&mut cwd);
+        let arguments_known = link.GetArguments(&mut args).is_ok();
+        let directory_known = link.GetWorkingDirectory(&mut cwd).is_ok();
         let target = string(&target);
         if !target.is_empty() {
             if Path::new(&target).is_dir() {
@@ -146,7 +146,9 @@ unsafe fn shortcut(path: &Path, source: &str) -> Option<Record> {
             {
                 return None;
             }
-            record.identity = desktop_identity(&target, &string(&args), &string(&cwd));
+            if arguments_known && directory_known {
+                record.identity = desktop_identity(&target, &string(&args), &string(&cwd));
+            }
             record
                 .icon_revision
                 .push_str(&file_revision(Path::new(&target)));

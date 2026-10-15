@@ -41,6 +41,11 @@ pub struct Override {
 }
 impl Override {
     pub fn validate(&self) -> Result<(), String> {
+        if self.purpose.contains('\0') || self.aliases.iter().any(|s| s.contains('\0')) {
+            return Err(
+                "Remove null characters from the application description or aliases.".into(),
+            );
+        }
         if self.aliases.len() > 16
             || self.aliases.iter().any(|s| s.chars().count() > 80)
             || self.purpose.chars().count() > 1024
@@ -194,6 +199,9 @@ impl Catalog {
     }
     pub fn supported() -> bool {
         cfg!(windows)
+    }
+    pub fn revision(&self) -> String {
+        self.snapshot.read().unwrap().revision.clone()
     }
     pub fn enabled(&self) -> bool {
         (Self::supported() || cfg!(test)) && self.options.read().unwrap().enabled
@@ -486,7 +494,16 @@ impl Catalog {
         ))
     }
     pub fn launch(self: &Arc<Self>, id: &str) -> Result<(), AppError> {
-        let record = self.record(id)?;
+        let record = self.record(id).map_err(|error| {
+            self.refresh();
+            error
+        })?;
+        if let Target::Shortcut { path } = &record.target {
+            if !std::path::Path::new(path).is_file() {
+                self.refresh();
+                return Err(AppError::new("unavailable", id, "The application's shortcut is no longer available. Refreshing installed applications."));
+            }
+        }
         if !self.launching.lock().unwrap().insert(id.into()) {
             return Err(AppError::new(
                 "unavailable",
@@ -560,6 +577,44 @@ mod tests {
         }
         .validate()
         .is_err());
+        assert!(Override {
+            aliases: vec!["name\0hidden".into()],
+            ..Override::default()
+        }
+        .validate()
+        .is_err());
+    }
+    #[test]
+    fn damaged_catalog_rebuild_preserves_annotations_and_icon_changes_preserve_documents() {
+        let root = std::env::temp_dir().join(format!("digup-app-recovery-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("catalog.json"), b"damaged cache").unwrap();
+        let mut app = record("Photo Studio", "packaged:Example.Photo_abc!App");
+        let mut options = Options {
+            enabled: true,
+            ..Options::default()
+        };
+        options.overrides.insert(
+            app.id.clone(),
+            Override {
+                aliases: vec!["retouch".into()],
+                ..Override::default()
+            },
+        );
+        let c = Catalog::new(root.clone(), options.clone(), |_| {});
+        assert!(c.search("", false).is_empty());
+        c.publish_source("appsFolder", Ok(vec![app.clone()]));
+        let before = c.documents();
+        app.icon_revision = "new-icon".into();
+        c.publish_source("appsFolder", Ok(vec![app.clone()]));
+        assert_ne!(before["revision"], c.documents()["revision"]);
+        assert_eq!(before["documents"], c.documents()["documents"]);
+        c.publish_source("appsFolder", Ok(vec![]));
+        c.publish_source("appsFolder", Ok(vec![app]));
+        assert_eq!(c.search("retouch", false)[0].reason, "exact");
+        let reloaded = Catalog::new(root.clone(), options, |_| {});
+        assert_eq!(reloaded.search("retouch", false).len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn hidden_removed_and_duplicate_semantic_hits_never_reappear() {

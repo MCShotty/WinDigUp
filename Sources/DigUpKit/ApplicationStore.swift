@@ -68,14 +68,17 @@ public final class ApplicationStore {
 
     /// Includes the full revision, not the abbreviated display label, and the actual NPU bundle runtime fingerprint.
     public static func fingerprint(info: WorkerInfo, backend: String) -> String {
-        [info.model, info.revision, info.runtime, info.dtype, String(info.dim), backend, promptVersion].joined(separator: "\u{0}")
+        // SQLite's text binder uses NUL termination. Encode components before joining, keeping the identity lossless.
+        [info.model, info.revision, info.runtime, info.dtype, String(info.dim), backend, promptVersion]
+            .map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
     }
 
     public func synchronize(_ documents: [ApplicationDocument], revision: String) throws {
-        guard documents.count <= 20_000, revision.count <= 128,
+        guard documents.count <= 20_000, revision.count <= 128, !revision.contains("\0"),
               Set(documents.map(\.id)).count == documents.count,
               documents.allSatisfy({ $0.id.hasPrefix("app:") && $0.id.count <= 128 && $0.hash.count == 64
-                  && $0.name.count <= 4096 && $0.text.count <= 16_384 }) else {
+                  && $0.name.count <= 4096 && $0.text.count <= 16_384
+                  && !$0.id.contains("\0") && !$0.name.contains("\0") && !$0.text.contains("\0") && !$0.hash.contains("\0") }) else {
             throw Database.Failure(message: "Invalid application catalog snapshot")
         }
         try db.transaction {
@@ -92,6 +95,7 @@ public final class ApplicationStore {
     }
 
     public func prepare(fingerprint: String) throws {
+        guard !fingerprint.contains("\0") else { throw Database.Failure(message: "Invalid application fingerprint") }
         if self.fingerprint != fingerprint {
             try db.transaction {
                 try db.execute("UPDATE applications SET vector=NULL")

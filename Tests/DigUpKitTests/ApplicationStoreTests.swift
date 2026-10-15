@@ -59,4 +59,17 @@ struct ApplicationStoreTests {
         #expect(try store.counts().total == 0)
         #expect(try String(contentsOf: fileIndex, encoding: .utf8) == "file index sentinel")
     }
+    @Test func actualRuntimeFingerprintSurvivesSQLiteAndAcceptsVectors() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try ApplicationStore(directory: root)
+        let info = WorkerInfo(model: "google/embeddinggemma-2", revision: "123456789abcdef", runtime: "llama.cpp-vectors2", dtype: "q8", dim: 768, textOnly: true, loadSeconds: nil)
+        let fingerprint = ApplicationStore.fingerprint(info: info, backend: "amd-vulkan")
+        let item = document("photos")
+        try store.synchronize([item], revision: "one")
+        try store.prepare(fingerprint: fingerprint)
+        #expect(store.fingerprint == fingerprint)
+        try store.save(vector(0), for: item, fingerprint: fingerprint)
+        #expect(try store.counts().embedded == 1)
+    }
 }

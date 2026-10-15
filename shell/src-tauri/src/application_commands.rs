@@ -28,19 +28,21 @@ impl Drop for Foreground<'_> {
 
 async fn synchronize(shell: &Shell) -> Result<String, String> {
     let mut synced = shell.app_sync.lock().await;
-    let mut documents = shell.applications.documents();
-    let revision = documents["revision"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let revision = shell.applications.revision();
     let generation = shell.search.generation();
     if synced
         .as_ref()
         .is_none_or(|(epoch, stamp)| *epoch != generation || stamp != &revision)
     {
+        let mut documents = shell.applications.documents();
+        let revision = documents["revision"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         documents["op"] = json!("apps_catalog");
         shell.search.ask(documents).await?;
         *synced = Some((shell.search.generation(), revision.clone()));
+        return Ok(revision);
     }
     Ok(revision)
 }
@@ -101,9 +103,7 @@ pub async fn search_apps(
                     .search
                     .ask(json!({"op":"apps_search","q":q.trim(),"revision":revision}))
                     .await?;
-                if reply["revision"] == revision
-                    && shell.applications.documents()["revision"] == revision
-                {
+                if reply["revision"] == revision && shell.applications.revision() == revision {
                     return Ok::<Value, String>(reply);
                 }
                 *shell.app_sync.lock().await = None;
@@ -255,7 +255,7 @@ pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
                 continue;
             }
             let state = shell.app_semantic.lock().unwrap().clone();
-            if state["revision"] == shell.applications.documents()["revision"]
+            if state["revision"] == shell.applications.revision()
                 && (state["encoder"] == "stopped"
                     || state["encoder"] == "unavailable"
                     || state["total"]
@@ -265,8 +265,13 @@ pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
                 continue;
             }
             let result = tauri::async_runtime::block_on(async {
+                if shell.quitting.load(Ordering::SeqCst) {
+                    return Ok::<Value, String>(Value::Null);
+                }
                 synchronize(&shell).await?;
-                if shell.app_foreground.load(Ordering::SeqCst) != 0 {
+                if shell.quitting.load(Ordering::SeqCst)
+                    || shell.app_foreground.load(Ordering::SeqCst) != 0
+                {
                     return Ok::<Value, String>(Value::Null);
                 }
                 // Exactly one document per request; the helper refuses to wake a stopped encoder here.
@@ -275,7 +280,8 @@ pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
             let state = match result {
                 Ok(state) if !state.is_null() => state,
                 Ok(_) => continue,
-                Err(error) => json!({"state":"unavailable","message":error}),
+                Err(error) => json!({"state":"unavailable","encoder":"unavailable","message":error,
+                    "revision":shell.applications.revision()}),
             };
             *shell.app_semantic.lock().unwrap() = state.clone();
             if state != previous {

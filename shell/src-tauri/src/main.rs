@@ -971,6 +971,7 @@ fn delete_code_index(shell: &Arc<Shell>) {
 
 fn stop_helpers(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>();
+    shell.quitting.store(true, Ordering::SeqCst);
     shell.model.stop();
     shell.index.stop();
     shell.search.stop();
@@ -1233,6 +1234,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     let settings = shell.settings.lock().unwrap().clone();
     json!({
         "applications": shell.applications.info(),
+        "applicationSemantic": shell.app_semantic.lock().unwrap().clone(),
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,

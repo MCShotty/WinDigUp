@@ -112,16 +112,18 @@ fn reap(child: &mut Child) -> Option<i32> {
 }
 
 /// `digup search-service`: started on the first request, and again after it died.
+#[derive(Clone)]
 pub struct SearchService {
     launch: Launch,
     running: Arc<Mutex<Option<Searching>>>,
-    next_id: AtomicU64,
+    next_id: Arc<AtomicU64>,
+    generation: Arc<AtomicU64>,
     on_event: EventSink,
 }
 
 struct Searching {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Arc<Mutex<ChildStdin>>,
     number: u64,
     /// Replies still to come, by request id. Each process has its own, so one that dies fails only its own requests.
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
@@ -129,14 +131,15 @@ struct Searching {
 
 impl SearchService {
     pub fn generation(&self) -> u64 {
-        self.running.lock().unwrap().as_ref().map(|running| running.number).unwrap_or(0)
+        self.generation.load(Ordering::SeqCst)
     }
 
     pub fn new(launch: Launch, on_event: impl Fn(Value) + Send + Sync + 'static) -> SearchService {
         SearchService {
             launch,
             running: Arc::default(),
-            next_id: AtomicU64::new(1),
+            next_id: Arc::new(AtomicU64::new(1)),
+            generation: Arc::new(AtomicU64::new(0)),
             on_event: Arc::new(on_event),
         }
     }
@@ -145,10 +148,19 @@ impl SearchService {
     pub async fn ask(&self, mut request: Value) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         request["id"] = json!(id);
-        let reply = self.send(id, &request)?;
-        let reply = reply.await.map_err(|_| "DigUp's helper stopped".to_string())?;
+        let service = self.clone();
+        // A large catalog can fill a busy helper's pipe. Never block Tauri's async executor on its writer/mutex.
+        let reply = tauri::async_runtime::spawn_blocking(move || service.send(id, &request))
+            .await
+            .map_err(|error| error.to_string())??;
+        let reply = reply
+            .await
+            .map_err(|_| "DigUp's helper stopped".to_string())?;
         match reply.get("ok") {
-            Some(Value::Bool(false)) => Err(reply["error"].as_str().unwrap_or("the helper failed").to_string()),
+            Some(Value::Bool(false)) => Err(reply["error"]
+                .as_str()
+                .unwrap_or("the helper failed")
+                .to_string()),
             _ => Ok(reply),
         }
     }
@@ -162,13 +174,34 @@ impl SearchService {
         }
         if running.is_none() {
             *running = Some(self.start()?);
+            self.generation
+                .store(running.as_ref().unwrap().number, Ordering::SeqCst);
         }
         let searching = running.as_mut().unwrap();
         let (sender, receiver) = oneshot::channel();
         searching.pending.lock().unwrap().insert(id, sender);
-        if let Err(error) = writeln!(searching.stdin, "{request}").and_then(|_| searching.stdin.flush()) {
-            searching.pending.lock().unwrap().remove(&id);
-            *running = None;
+        let (stdin, pending, number) = (
+            searching.stdin.clone(),
+            searching.pending.clone(),
+            searching.number,
+        );
+        drop(running);
+        let written = {
+            let mut stdin = stdin.lock().unwrap();
+            writeln!(stdin, "{request}").and_then(|_| stdin.flush())
+        };
+        if let Err(error) = written {
+            pending.lock().unwrap().remove(&id);
+            let mut running = self.running.lock().unwrap();
+            if running
+                .as_ref()
+                .is_some_and(|searching| searching.number == number)
+            {
+                if let Some(mut searching) = running.take() {
+                    let _ = searching.child.kill();
+                    let _ = searching.child.wait();
+                }
+            }
             return Err(format!("DigUp's helper isn't answering: {error}"));
         }
         Ok(receiver)
@@ -178,11 +211,14 @@ impl SearchService {
         let (child, stdin, stdout) = self.launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> = Arc::default();
-        let (replies, on_event, slot) = (pending.clone(), self.on_event.clone(), self.running.clone());
+        let (replies, on_event, slot) =
+            (pending.clone(), self.on_event.clone(), self.running.clone());
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+                let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
                 match message.get("id").and_then(Value::as_u64) {
                     Some(id) => {
                         if let Some(sender) = replies.lock().unwrap().remove(&id) {
@@ -195,7 +231,10 @@ impl SearchService {
             // Gone: its waiting requests fail (their senders drop here), and the next request starts another.
             replies.lock().unwrap().clear();
             let mut slot = slot.lock().unwrap();
-            if slot.as_ref().is_some_and(|searching| searching.number == number) {
+            if slot
+                .as_ref()
+                .is_some_and(|searching| searching.number == number)
+            {
                 if let Some(mut searching) = slot.take() {
                     reap(&mut searching.child);
                 }
@@ -203,12 +242,21 @@ impl SearchService {
             drop(slot);
             on_event(json!({"event": "exit"}));
         });
-        Ok(Searching { child, stdin, number, pending })
+        Ok(Searching {
+            child,
+            stdin: Arc::new(Mutex::new(stdin)),
+            number,
+            pending,
+        })
     }
 
     pub fn stop(&self) {
-        if let Some(searching) = self.running.lock().unwrap().take() {
-            stop(searching.child, searching.stdin, &json!({"op": "quit"}).to_string());
+        let searching = self.running.lock().unwrap().take();
+        if let Some(mut searching) = searching {
+            // Query caches use transactions. Ending the process also releases a full/blocked stdin pipe.
+            searching.pending.lock().unwrap().clear();
+            let _ = searching.child.kill();
+            let _ = searching.child.wait();
         }
     }
 }
