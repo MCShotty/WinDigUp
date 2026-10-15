@@ -112,3 +112,9 @@ performance or hardware relevance result is implied by hosted CPU-only CI.
 Development measurement (2026-10-15): the release native fixture reported **2.18 ms p95** for cached name matching over
 2,000 entries on a Linux x86-64 container backed by an AMD EPYC 9V74 CPU. This excludes Tauri IPC and rendering and is
 not the required reference-Windows end-to-end measurement.
+
+Windows hosted measurement (2026-10-15, commit `a1301b2`): **5.11 ms p95** for the same release native fixture on
+Windows Server 2025 x64 / AMD EPYC 7763 with four logical processors. The
+[workflow log](https://github.com/MCShotty/WinDigUp/actions/runs/38750128191/job/116474039374) records the machine and
+timing. This is also backend-only; the separate transport test in that run exposed a subprocess startup timing
+assumption that was subsequently corrected to wait for a ready signal.

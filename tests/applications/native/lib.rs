@@ -16,9 +16,16 @@ mod tests {
     use serde_json::json;
     use std::{
         path::PathBuf,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
         time::{Duration, Instant},
     };
-    fn python(script: &str) -> SearchService {
+    fn python(
+        script: &str,
+        on_event: impl Fn(serde_json::Value) + Send + Sync + 'static,
+    ) -> SearchService {
         SearchService::new(
             Launch {
                 program: PathBuf::from(if cfg!(windows) { "python" } else { "python3" }),
@@ -27,18 +34,40 @@ mod tests {
                 log: None,
                 background: false,
             },
-            |_| {},
+            on_event,
         )
     }
     #[tokio::test(flavor = "current_thread")]
     async fn stalled_helper_pipe_does_not_block_executor_or_shutdown() {
-        let service = python("import time; time.sleep(3)");
+        let ready = Arc::new(AtomicBool::new(false));
+        let signal = ready.clone();
+        let service = python(
+            "import time; print('{\"event\":\"fixture_ready\"}',flush=True); time.sleep(30)",
+            move |event| {
+                if event["event"] == "fixture_ready" {
+                    signal.store(true, Ordering::SeqCst);
+                }
+            },
+        );
         let copy = service.clone();
-        let started = Instant::now();
         let request = tokio::spawn(async move {
             copy.ask(json!({"op":"catalog","payload":"x".repeat(2_000_000)}))
                 .await
         });
+        // Windows process creation/antivirus can exceed 100 ms. Time the pipe after the child is actually ready.
+        let startup = Instant::now();
+        while !ready.load(Ordering::SeqCst) && startup.elapsed() < Duration::from_secs(15) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        if !ready.load(Ordering::SeqCst) {
+            service.stop();
+            panic!("fixture subprocess did not start");
+        }
+        assert!(
+            !request.is_finished(),
+            "fixture did not keep the helper pipe blocked"
+        );
+        let started = Instant::now();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(
             started.elapsed() < Duration::from_millis(700),
@@ -56,7 +85,7 @@ mod tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn concurrent_reply_ids_and_restart_generation_remain_correct() {
-        let service=python("import sys,json\nfor line in sys.stdin:\n r=json.loads(line); print(json.dumps({'id':r['id'],'ok':True,'echo':r['op']}),flush=True)");
+        let service=python("import sys,json\nfor line in sys.stdin:\n r=json.loads(line); print(json.dumps({'id':r['id'],'ok':True,'echo':r['op']}),flush=True)", |_| {});
         let (a, b) = tokio::join!(
             service.ask(json!({"op":"one"})),
             service.ask(json!({"op":"two"}))
