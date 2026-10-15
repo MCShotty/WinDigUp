@@ -119,16 +119,22 @@ mod tests {
             if event["event"]=="hold" {
                 signal.store(true,Ordering::SeqCst);
                 let deadline=Instant::now();
-                while !gate.load(Ordering::SeqCst) && deadline.elapsed()<Duration::from_secs(10) { std::thread::sleep(Duration::from_millis(5)); }
+                while !gate.load(Ordering::SeqCst) && deadline.elapsed()<Duration::from_secs(30) { std::thread::sleep(Duration::from_millis(5)); }
             } else { record.lock().unwrap().push(event); }
         });
         let copy = service.clone();
         let old = tokio::spawn(async move { copy.ask(json!({"op":"hold"})).await });
         let startup = Instant::now();
-        while !held.load(Ordering::SeqCst) && startup.elapsed() < Duration::from_secs(5) {
+        // Process startup is not part of the behavior under test. Match the allowance
+        // used by the blocked-pipe fixture for Windows process creation/antivirus.
+        while !held.load(Ordering::SeqCst) && startup.elapsed() < Duration::from_secs(15) {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert!(held.load(Ordering::SeqCst));
+        if !held.load(Ordering::SeqCst) {
+            release.store(true, Ordering::SeqCst);
+            service.stop();
+            panic!("fixture subprocess did not reach the held event");
+        }
         service.stop();
         assert!(old.await.unwrap().is_err());
         service.ask(json!({"op":"replacement"})).await.unwrap();
@@ -178,7 +184,7 @@ mod tests {
             if event["event"] == "hold" {
                 signal.store(true, Ordering::SeqCst);
                 let start = Instant::now();
-                while !gate.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(10) {
+                while !gate.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(30) {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             } else {
@@ -196,16 +202,20 @@ mod tests {
         };
         service.run(&launch).unwrap();
         let start = Instant::now();
-        while !held.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(10) {
+        while !held.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(15) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(held.load(Ordering::SeqCst));
+        if !held.load(Ordering::SeqCst) {
+            release.store(true, Ordering::SeqCst);
+            service.stop();
+            panic!("fixture subprocess did not reach the held event");
+        }
         launch.args[2] =
             "import sys; print('{\"event\":\"replacement\"}',flush=True); sys.stdin.readline()"
                 .into();
         service.run(&launch).unwrap();
         let start = Instant::now();
-        while !replaced.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(10) {
+        while !replaced.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(15) {
             std::thread::sleep(Duration::from_millis(5));
         }
         release.store(true, Ordering::SeqCst);
