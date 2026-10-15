@@ -75,11 +75,15 @@ With the .deb, DigUp tells you when there's a new version and opens its release 
 This fork adds accelerator-only AMD Vulkan (RDNA1/RX 5000 and newer), NVIDIA Vulkan and Intel OpenVINO NPU modes.
 See [acceleration setup, requirements and hardware validation limits](docs/acceleration.md).
 
+On Windows, this fork also finds and launches registered applications. Type a name or use `apps:`; application names
+work before the model is ready. With an accelerator, DigUp can also match what an application does.
+See [Windows application search](docs/application-search.md) for discovery, aliases and validation limits.
+
 | Mac | Windows and Linux | What it does |
 |---|---|---|
 | ⇧⌘Space | Ctrl+Shift+Space | Opens the search panel from any app (you can change it) |
 | ↓ ↑ | ↓ ↑ | Moves through the results |
-| ↩ | Enter | Opens the result: PDFs at the page, recordings and videos at the moment, code in your editor at the line |
+| ↩ | Enter | Launches an application or opens the file result: PDFs at the page, recordings and videos at the moment, code at the line |
 | Space | Space | A big preview, at the page or moment (once you've moved to a result) |
 | ⌘↩ | Ctrl+Enter | Shows it in Finder, Explorer or your file manager |
 | ⌘C | Ctrl+C (in the window) | Copies the file, to paste anywhere |
@@ -122,10 +126,10 @@ live in the cloud (iCloud on a Mac, OneDrive on Windows). You can skip more fold
 only reads your files; it never changes, moves or uploads them.
 
 The first pass happens once. On a Mac it takes a few minutes for a few hundred files and can take an hour for a big
-Downloads folder. On Windows and Linux, DigUp runs the model on the graphics card where that's faster and on the
-processor otherwise; on a processor alone a picture takes a few seconds (about five on a 2017 laptop's Core i5), so a
-large photo library can take hours, which is why setup shows the time first. After that, a new file is searchable a
-few seconds after it lands.
+Downloads folder. In this fork, Windows and Linux model inference requires the configured GPU or Intel NPU;
+unsupported hardware stops model work. Setup measures the selected accelerator before estimating indexing time.
+Application-name search and launching remain available while the model is unavailable. After the initial pass, a new
+file becomes searchable as indexing catches up.
 
 ## Code
 

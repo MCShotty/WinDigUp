@@ -1,4 +1,5 @@
 import DigUpKit
+import LlamaRuntime
 import Foundation
 
 /// `digup search-service`: the app's searcher as a process, for shells that can't link DigUpKit (the Windows and Linux
@@ -6,6 +7,9 @@ import Foundation
 /// in the Mac app (tens of milliseconds), not a process start.
 ///
 /// Protocol: one JSON request per line on stdin, one JSON response per line on stdout, carrying the request's `id`.
+/// Native app service only: apps_catalog synchronizes app documents; apps_status reports preparation;
+/// apps_index_step embeds at most one pending document with an already-running encoder; apps_search uses the
+/// ordinary query prompt/cache and returns compatible application IDs. These operations never enter the file crawler.
 ///   {"op":"search","q":…,"code":bool,"kinds":[…],"limit":n,"meaning":bool,"prefix_last":bool}
 ///       → {"hits":[…], "strong":n, "meaning":bool, "ms":{"embed":…,"search":…}}
 ///         `meaning` false: keyword-only (while typing, or while the encoder isn't ready); `strong`: the weaker-matches
@@ -46,6 +50,8 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     private var vectorCache: [String: [Float]] = [:]
     private var lastQuery = Date()
     private var warnedAboutSource = false
+    private var applicationStore: ApplicationStore?
+    private var encoderError: String?
     private let lock = NSLock()
     private let output = NSLock()
     /// Renders for previews: two at a time, beside the request loop, each made once per file version.
@@ -122,6 +128,52 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
 
     private func handle(_ op: String, _ request: [String: Any]) throws -> [String: Any] {
         switch op {
+        case "apps_catalog":
+            guard let revision = request["revision"] as? String,
+                  let documents = request["documents"] as? [[String: Any]] else { throw CLIError("invalid application catalog") }
+            let store = try applications()
+            if store.revision != revision {
+                let data = try JSONSerialization.data(withJSONObject: documents)
+                try store.synchronize(JSONDecoder().decode([ApplicationDocument].self, from: data), revision: revision)
+            }
+            return try applicationState(store)
+        case "apps_status":
+            return try applicationState(applications())
+        case "apps_index_step":
+            let store = try applications()
+            // Background preparation never starts another encoder or wakes an idle one.
+            guard let encoder, encoderState == "ready" else { return try applicationState(store) }
+            let fingerprint = try applicationFingerprint(encoder)
+            try store.prepare(fingerprint: fingerprint)
+            if let document = try store.pending() {
+                let values = try encoder.embedTexts([Prompts.document(title: document.name, text: document.text)])
+                guard let vector = values.first else { throw CLIError("the accelerator returned no application vector") }
+                try store.save(vector, for: document, fingerprint: fingerprint)
+            }
+            return try applicationState(store)
+        case "apps_search":
+            let store = try applications()
+            guard let revision = request["revision"] as? String, revision == store.revision else {
+                return ["revision": store.revision, "hits": [], "state": "preparing"]
+            }
+            let text = request["q"] as? String ?? ""
+            guard text.count <= 4096 else { throw CLIError("application query is too long") }
+            var state = try applicationState(store)
+            state["hits"] = []
+            if !text.isEmpty, let vector = vector(for: text, code: false), let encoder {
+                let fingerprint = try applicationFingerprint(encoder)
+                try store.prepare(fingerprint: fingerprint)
+                // The optional threshold is an internal evaluation hook, not a frontend command.
+                let minimum = min(max((request["minimum_cosine"] as? NSNumber)?.floatValue ?? ApplicationStore.minimumCosine, 0), 1)
+                state = try applicationState(store)
+                state["hits"] = try store.search(vector, fingerprint: fingerprint, minimumCosine: minimum).map {
+                    ["id": $0.id, "cosine": $0.cosine] as [String: Any]
+                }
+            } else if !text.isEmpty {
+                state = try applicationState(store)
+                state["hits"] = []
+            }
+            return state
         case "search":
             let text = request["q"] as? String ?? ""
             let code = request["code"] as? Bool ?? false
@@ -277,6 +329,35 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
 
     // MARK: The query encoder
 
+    private func applications() throws -> ApplicationStore {
+        if let applicationStore { return applicationStore }
+        let store = try ApplicationStore.recovering(directory: directory)
+        applicationStore = store
+        return store
+    }
+
+    private func applicationFingerprint(_ worker: any Embedder) throws -> String {
+        let backend = try Acceleration.selected()
+        return ApplicationStore.fingerprint(info: worker.info, backend: backend.rawValue,
+            runtimeBuild: backend == .openvinoNPU ? "" : LlamaEmbedder.buildTag)
+    }
+
+    private func applicationState(_ store: ApplicationStore) throws -> [String: Any] {
+        let counts = try store.counts()
+        let state = encoderState == "unavailable" ? "unavailable"
+            : counts.embedded < counts.total || encoderState != "ready" ? "preparing" : "ready"
+        var reply: [String: Any] = ["ok": true, "revision": store.revision, "state": state,
+            "total": counts.total, "embedded": counts.embedded, "encoder": encoderState,
+            "ranking_version": ApplicationStore.rankingVersion, "ranking_calibrated": false]
+        if let encoder {
+            reply["fingerprint"] = try applicationFingerprint(encoder)
+            reply["device"] = encoder.info.device ?? ""
+            reply["execution_policy"] = encoder.info.executionPolicy ?? ""
+        }
+        if let encoderError { reply["message"] = encoderError }
+        return reply
+    }
+
     /// The query's vector (cached), or nil when the encoder can't run: keyword results still work.
     private func vector(for text: String, code: Bool) -> [Float]? {
         lastQuery = Date()
@@ -304,11 +385,13 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             let worker = try makeEmbedder(textOnly: true, log: log, qos: .userInitiated)
             encoder = worker
             encoderState = "ready"
+            encoderError = nil
             write(["event": "encoder", "state": "ready", "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
                   "source": worker.info.vectorSource])
             return worker
         } catch {
             encoderState = "unavailable"
+            encoderError = String("\(error)".prefix(300))
             write(["event": "encoder", "state": "unavailable", "error": String("\(error)".prefix(300))])
             return nil
         }

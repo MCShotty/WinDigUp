@@ -223,6 +223,7 @@ jobs:
             Vendor/llama.cpp/licenses
           key: llama-windows-vulkan-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Build
+        id: package_build
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
@@ -243,14 +244,34 @@ jobs:
             shell/src-tauri/target/release/bundle/nsis/*.exe
             shell/src-tauri/target/release/bundle/nsis/*.exe.sig
       - name: The installer
+        id: installer
         shell: bash
         run: scripts/check-windows-accelerators.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+      - name: Application launch fixture
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
+      - name: Installed application discovery and launch
+        shell: pwsh
+        run: scripts/check-windows-applications.ps1
+      - name: Application service protocol (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: python scripts/check-app-protocol.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe"
+      - name: Installed folder indexing (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: python scripts/check-windows-indexing.py --app "$env:LOCALAPPDATA\DigUp\DigUp.exe"
       - name: Swift and Rust policy checks
+        if: ${{ !cancelled() && steps.package_build.outcome == 'success' }}
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter AccelerationTests
+          swift test --filter 'AccelerationTests|ApplicationStoreTests|CrawlerTests'
+          cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked
+          cargo test --release applications:: --locked

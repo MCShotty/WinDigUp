@@ -6,7 +6,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod acceleration;
+mod applications;
+mod application_commands;
 mod clipboard;
+mod diagnostics;
 mod code;
 mod editors;
 mod helper;
@@ -39,6 +42,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use watcher::FolderWatcher;
+use application_commands::{search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps};
 
 const PANEL_WIDTH: f64 = 780.0;
 /// The panel's window, under one name or the other: made anew when the person turns centering on or off.
@@ -50,6 +54,11 @@ const WINDOW: &str = "main";
 
 /// What the commands and events share.
 struct Shell {
+    applications: Arc<applications::Catalog>,
+    app_sync: tokio::sync::Mutex<Option<(u64, String)>>,
+    app_semantic: Mutex<Value>,
+    app_foreground: AtomicUsize,
+    app_last_query: Mutex<Instant>,
     options: Options,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
@@ -101,6 +110,7 @@ struct Shell {
     /// A folder was taken out: the next index helper drops its files from the index (`--prune`).
     prune: AtomicBool,
     logs: PathBuf,
+    diagnostics: diagnostics::Diagnostics,
 }
 
 impl Shell {
@@ -248,10 +258,16 @@ fn folder_arguments(settings: &Settings, code_folders: &[String]) -> Vec<String>
 
 /// The panel's and the window's questions for `search-service`.
 #[tauri::command]
-async fn ask(shell: State<'_, Arc<Shell>>, request: Value) -> Result<Value, String> {
+async fn ask(shell: State<'_, Arc<Shell>>, mut request: Value) -> Result<Value, String> {
+    let _foreground = application_commands::Foreground::new(&shell);
     let op = request.get("op").and_then(Value::as_str).unwrap_or_default();
     if !["search", "embed_ahead", "text", "render", "prewarm", "status", "summaries"].contains(&op) {
         return Err(format!("not a question the panel asks: {op}"));
+    }
+    // A query while the model downloads must not permanently poison the helper's encoder state.
+    if !shell.model_ready() {
+        if op == "prewarm" || op == "embed_ahead" { return Ok(json!({"ok":true,"encoder":"stopped"})); }
+        if op == "search" { request["meaning"] = json!(false); }
     }
     shell.search.ask(request).await
 }
@@ -301,6 +317,7 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         }
     };
     json!({
+        "applicationsSupported": applications::Catalog::supported(),
         "offered": offered.iter().map(|folder| folder.display().to_string()).collect::<Vec<_>>(),
         "chosen": shell.folders(),
         "skipped": shell.settings.lock().unwrap().skipped.clone(),
@@ -519,6 +536,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "debugQuery": shell.options.debug_window,
         "debugSettings": shell.options.debug_settings,
         "debugCopy": shell.options.debug_copy,
+        "debugLaunch": shell.options.debug_launch,
     })
 }
 
@@ -553,8 +571,8 @@ fn choose_folders(app: AppHandle) {
 }
 
 #[tauri::command]
-fn index_now(app: AppHandle) {
-    run_index(&app);
+async fn index_now(app: AppHandle) {
+    let _ = tauri::async_runtime::spawn_blocking(move || run_index(&app)).await;
 }
 
 #[tauri::command]
@@ -642,7 +660,8 @@ fn main() {
             app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration
+            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration,
+            search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps, indexing_diagnostics
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -715,7 +734,17 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     for root in &options.roots {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
+    let application_root = options.index_folder().unwrap_or_else(std::env::temp_dir).join("applications");
+    let applications = applications::Catalog::new(application_root, settings.applications.clone(), {
+        let app = handle.clone();
+        move |info| { let _ = app.emit("applications", info); }
+    });
     let shell = Arc::new(Shell {
+        applications,
+        app_sync: tokio::sync::Mutex::new(None),
+        app_semantic: Mutex::new(json!({"state":"preparing","total":0,"embedded":0})),
+        app_foreground: AtomicUsize::new(0),
+        app_last_query: Mutex::new(Instant::now()),
         options,
         settings: Mutex::new(settings),
         settings_path,
@@ -745,9 +774,13 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         measuring: AtomicBool::new(false),
         estimating: AtomicUsize::new(0),
         prune: AtomicBool::new(false),
+        diagnostics: diagnostics::Diagnostics::new(&logs),
         logs,
     });
     app.manage(shell.clone());
+    shell.diagnostics.record("shell", json!({"event":"startup","build":env!("DIGUP_BUILD"),
+        "backend":shell.settings.lock().unwrap().acceleration.backend,"folders":shell.folders(),"index":shell.index_folder()}));
+    application_commands::start(&handle, &shell);
     if shell.settings.lock().unwrap().delete_code_index {
         delete_code_index(&shell);
     }
@@ -801,6 +834,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         }
     });
     let mut download = vec!["download-model".to_string()];
+    download.extend(shell.index_arguments());
     if let Some(models) = &shell.options.models {
         download.extend(["--to".to_string(), models.display().to_string()]);
     }
@@ -888,21 +922,31 @@ fn watch_folders(app: &AppHandle) {
 /// Indexing may run: there's a model and a folder (from setup's folders step on), the speed check isn't running, and
 /// indexing isn't paused or waiting for its hours.
 fn may_index(shell: &Shell) -> bool {
-    (!shell.folders().is_empty() || !shell.code_folders().is_empty()) && shell.model_ready()
-        && !shell.measuring.load(Ordering::SeqCst) && !shell.quitting.load(Ordering::SeqCst) && {
-            let status = shell.status.lock().unwrap();
-            !status.paused && status.held_until.is_none()
-        }
+    indexing_blocker(shell).is_none()
+}
+
+fn indexing_blocker(shell: &Shell) -> Option<&'static str> {
+    if shell.quitting.load(Ordering::SeqCst) { return Some("quitting"); }
+    if shell.folders().is_empty() && shell.code_folders().is_empty() { return Some("no_folders"); }
+    if !shell.model_ready() { return Some("model_not_ready"); }
+    if shell.measuring.load(Ordering::SeqCst) { return Some("speed_check"); }
+    let status = shell.status.lock().unwrap();
+    if status.paused { return Some("paused"); }
+    if status.held_until.is_some() { return Some("outside_schedule"); }
+    None
 }
 
 /// Has the index helper sync and index.
 fn run_index(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>();
-    if !may_index(&shell) {
+    if let Some(reason) = indexing_blocker(&shell) {
+        shell.diagnostics.record("scheduler", json!({"event":"deferred","reason":reason}));
         return;
     }
-    if let Err(error) = shell.index.run(&shell.index_launch()) {
-        set_status(app, &format!("Indexing couldn't start: {error}"));
+    let launch = shell.index_launch();
+    shell.diagnostics.record("scheduler", json!({"event":"run_index","helper":launch.program,"args":launch.args}));
+    if let Err(error) = shell.index.run(&launch) {
+        index_event(app, json!({"event":"error","message":format!("Indexing couldn't start: {error}"),"fatal":true}));
     }
 }
 
@@ -913,7 +957,7 @@ fn sync_code(app: &AppHandle) {
         return;
     }
     if let Err(error) = shell.index.sync_code(&shell.index_launch()) {
-        set_status(app, &format!("Indexing couldn't start: {error}"));
+        index_event(app, json!({"event":"error","message":format!("Code indexing couldn't start: {error}"),"fatal":true}));
     }
 }
 
@@ -943,6 +987,7 @@ fn delete_code_index(shell: &Arc<Shell>) {
 
 fn stop_helpers(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>();
+    shell.quitting.store(true, Ordering::SeqCst);
     shell.model.stop();
     shell.index.stop();
     shell.search.stop();
@@ -1018,6 +1063,7 @@ fn remake_panel(app: &AppHandle) {
 }
 
 fn show_panel(app: &AppHandle) {
+    app.state::<Arc<Shell>>().applications.refresh_if_stale();
     if !app.state::<Arc<Shell>>().is_set_up() {
         later(app, |app| {
             let _ = show_setup(app);
@@ -1058,6 +1104,7 @@ fn toggle_panel(app: &AppHandle) {
 /// `window_search`: a new window takes it as it loads, an open one is told.
 fn show_window(app: &AppHandle) -> tauri::Result<()> {
     let shell = app.state::<Arc<Shell>>().inner().clone();
+    shell.applications.refresh_if_stale();
     if let Some(window) = app.get_webview_window(WINDOW) {
         if let Some((query, kind)) = shell.window_search.lock().unwrap().take() {
             let _ = window.emit("window-search", json!({"query": query, "kind": kind}));
@@ -1204,6 +1251,8 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
 fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     let settings = shell.settings.lock().unwrap().clone();
     json!({
+        "applications": shell.applications.info(),
+        "applicationSemantic": shell.app_semantic.lock().unwrap().clone(),
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,
@@ -1232,9 +1281,38 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         "updateChecks": !settings.update_checks_off,
         "installsUpdates": updates::installs_itself(),
         "version": app.package_info().version.to_string(),
+        "build": env!("DIGUP_BUILD"),
         "licenses": licenses_file(&app).is_some(),
         "debug": shell.options.debug_settings,
     })
+}
+
+/// Works even when the helper is blocked. Local log tails and in-memory state only; no inference or folder crawl.
+#[tauri::command]
+async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<String, String> {
+    let shell = shell.inner().clone();
+    let version = app.package_info().version.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = json!({"version":version,"build":env!("DIGUP_BUILD"),"os":std::env::consts::OS,
+            "executable":std::env::current_exe().ok(),"settingsPath":shell.settings_path,"index":shell.index_folder(),
+            "folders":shell.folders(),"codeFolders":shell.code_folders(),
+            "acceleration":shell.settings.lock().unwrap().acceleration.clone(),
+            "blockedBy":indexing_blocker(&shell),"measuring":shell.measuring.load(Ordering::SeqCst),
+            "estimating":shell.estimating.load(Ordering::SeqCst),"state":shell.snapshot(),
+            "indexHelper":shell.index.snapshot(),"searchHelper":shell.search.snapshot(),
+            "applications":shell.applications.info(),"applicationSemantic":shell.app_semantic.lock().unwrap().clone(),
+            "recent":shell.diagnostics.recent()});
+        let mut text = serde_json::to_string_pretty(&report).unwrap_or_default();
+        for name in ["indexing.jsonl", "index.log", "search.log", "model.log", "speed.log"] {
+            text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&shell.logs.join(name), 24_576)));
+        }
+        if let Some(index) = shell.index_folder() {
+            for name in ["worker.log", "worker-query.log"] {
+                text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&index.join(name), 12_288)));
+            }
+        }
+        text
+    }).await.map_err(|error| error.to_string())
 }
 
 /// Where the model and the index are, and how big the index is on disk (its database and write-ahead log).
@@ -1262,6 +1340,7 @@ fn storage(shell: &Shell) -> Value {
         "index": index.as_ref().map(|folder| folder.display().to_string()),
         "indexBytes": size("index.sqlite"),
         "codeBytes": size("code.sqlite"),
+        "applicationsBytes": size("applications.sqlite"),
         "models": models.map(|folder| folder.display().to_string()),
     })
 }
@@ -1685,13 +1764,26 @@ fn set_paused(app: &AppHandle, paused: bool) {
 
 /// A problem to see in the tray's first line (the shortcut is taken…), until indexing next has news.
 fn set_status(app: &AppHandle, text: &str) {
-    if let Some(status) = app.state::<Arc<Shell>>().status_item.lock().unwrap().as_ref() {
-        let _ = status.set_text(text);
-    }
+    let handle = app.clone();
+    let text = text.to_string();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(status) = handle.state::<Arc<Shell>>().status_item.lock().unwrap().as_ref() {
+            let _ = status.set_text(&text);
+        }
+    });
 }
 
 /// Indexing or the model moved on: the tray's first line and items, and every page, follow (status.rs has the words).
 fn changed(app: &AppHandle) {
+    let snapshot = app.state::<Arc<Shell>>().snapshot();
+    let _ = app.emit("state", snapshot);
+    // Menu/tray setters marshal synchronously to the UI thread. Holding a shared menu lock while waiting for
+    // that thread can deadlock a simultaneous UI status update and prevent the speed->index handoff.
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || render_tray(&handle));
+}
+
+fn render_tray(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
     let snapshot = shell.snapshot();
     let folders = !shell.folders().is_empty();
@@ -1718,7 +1810,6 @@ fn changed(app: &AppHandle) {
         }
     }
     drop(shown);
-    let _ = app.emit("state", snapshot);
 }
 
 /// The waiting update's line in the tray menu, under the status line: added when one is found, its words following the
@@ -1753,6 +1844,11 @@ fn update_line(app: &AppHandle, shell: &Shell) {
 // MARK: The helpers' events
 
 fn search_event(app: &AppHandle, event: Value) {
+    if event["event"] == "encoder" && event["state"] == "ready" {
+        let shell = app.state::<Arc<Shell>>();
+        let mut state = shell.app_semantic.lock().unwrap();
+        state["encoder"] = json!("ready"); state["embedded"] = json!(0); state["state"] = json!("preparing");
+    }
     if cfg!(debug_assertions) {
         println!("search: {event}");
     }
@@ -1765,6 +1861,7 @@ fn search_event(app: &AppHandle, event: Value) {
 }
 
 fn index_event(app: &AppHandle, event: Value) {
+    app.state::<Arc<Shell>>().diagnostics.record("index", event.clone());
     if cfg!(debug_assertions) {
         println!("index: {event}");
     }
@@ -1817,6 +1914,7 @@ fn model_event(app: &AppHandle, event: Value) {
         println!("model: {event}");
     }
     let shell = app.state::<Arc<Shell>>().inner().clone();
+    if event["event"] != "progress" { shell.diagnostics.record("model", event.clone()); }
     let before = shell.model_state.lock().unwrap().clone();
     let state = match event["event"].as_str().unwrap_or_default() {
         "progress" => {
@@ -1900,6 +1998,7 @@ fn measure_then_index(app: &AppHandle) {
         }
         shell.measuring.store(false, Ordering::SeqCst);
         shell.status.lock().unwrap().measuring = false;
+        shell.diagnostics.record("speed", reply.clone());
         let error = reply.get("error").and_then(Value::as_str).map(str::to_string);
         let _ = app.emit("speed", reply);
         if let Some(error) = error {

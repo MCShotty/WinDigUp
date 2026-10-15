@@ -1,6 +1,9 @@
 import DigUpKit
 import Foundation
 import LlamaRuntime
+#if os(Windows)
+import WinSDK
+#endif
 
 // DigUp's developer CLI. Every command works on an explicit index folder, so tests never touch the real one.
 
@@ -140,7 +143,19 @@ struct Arguments {
     /// The folder can be listed. One that macOS won't let us read (Files and Folders privacy) looks empty to a crawl,
     /// which must never be mistaken for "everything in it was deleted". (The first look may bring up macOS's prompt.)
     static func isReadable(_ url: URL) -> Bool {
+        #if os(Windows)
+        // Check directory access without allocating a list of every child before the real scan even starts.
+        let native = url.path.replacingOccurrences(of: "/", with: "\\")
+        let handle = native.withCString(encodedAs: UTF16.self) {
+            CreateFileW($0, DWORD(FILE_LIST_DIRECTORY), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                        nil, DWORD(OPEN_EXISTING), DWORD(FILE_FLAG_BACKUP_SEMANTICS), nil)
+        }
+        guard let handle, handle != INVALID_HANDLE_VALUE else { return false }
+        CloseHandle(handle)
+        return true
+        #else
         (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
+        #endif
     }
 
     /// Dev knobs for A/B runs in evals/.
@@ -311,6 +326,7 @@ func estimate(_ args: Arguments) throws {
 }
 
 func index(_ args: Arguments) throws {
+    FileHandle.standardError.write(Data("Opening index at \(args.indexFolder.path)…\n".utf8))
     let store = try args.store()
     if args.flags.contains("--reindex") { try store.resetAll() }
     let indexer = try Indexer(store: store, options: args.options, makeEmbedder: {
@@ -321,7 +337,10 @@ func index(_ args: Arguments) throws {
     try store.readAgainOnce()   // what older indexes couldn't read: scanned pages' words, SVGs
     try indexer.checkModel()
     let folders = try args.folders()
-    let sync = try indexer.sync(folders)
+    print("Scanning \(folders.count) \(folders.count == 1 ? "folder" : "folders")…")
+    let sync = try indexer.sync(folders, onProgress: { progress in
+        FileHandle.standardError.write(Data("Scan \(progress.stage): \(progress.visited) entries, \(progress.candidates) candidates · \(progress.path)\n".utf8))
+    })
     print("index: \(tilde(store.file.path))")
     print("sync: \(sync.added) new · \(sync.changed) changed · \(sync.moved) moved · \(sync.removed) removed · \(sync.unchanged) unchanged")
     if !sync.crawl.skipped.isEmpty { print("skipped: " + skippedLine(sync.crawl.skipped)) }
@@ -426,6 +445,7 @@ func status(_ args: Arguments) throws {
 
 /// The app's indexing helper: sync + index on request, JSON events out (IndexService.swift).
 func indexService(_ args: Arguments) throws -> Int32 {
+    emit(["event": "phase", "stage": "opening_index", "path": args.indexFolder.path, "message": "Opening the file index…"])
     // One model for both indexes, started when the first file needs it (`SharedEmbedder`).
     let model = SharedEmbedder {
         try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"), qos: .utility)

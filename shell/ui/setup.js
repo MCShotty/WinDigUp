@@ -372,10 +372,11 @@ function render() {
 }
 
 function renderFooter() {
-  $("next").disabled = page === 1 && !selection.folders().length;
+  $("next").disabled = page === 1 && !selection.folders().length && !(firstTime && info.applicationsSupported && !codeMode);
+  $("apps-start").hidden = !firstTime || !info.applicationsSupported || codeMode;
   let summary = "";
   if (PAGES[page] === "folders") {
-    if (!selection.folders().length) summary = "Choose at least one folder";
+    if (!selection.folders().length) summary = firstTime && info.applicationsSupported ? "Application search works without selecting folders" : "Choose at least one folder";
     else if (estimating > 0 || rows.some((row) => selection.isSearched(row) && !estimates.has(key(row)))) summary = "Looking at your folders…";
     // Turning code search on: what reading the code takes, and its index.
     else if (codeMode && !info.chosen.length) {
@@ -441,6 +442,25 @@ $("next").addEventListener("click", async () => {
   page += 1;
   render();
 });
+
+$("apps-start").onclick = async () => {
+  $("apps-start").disabled = true;
+  $("next").disabled = true;
+  $("back").disabled = true;
+  try {
+    // The welcome page hasn't offered a folder choice yet. Once it has, keep every choice made before leaving.
+    if (page >= PAGES.indexOf("folders")) {
+      await invoke("apply_setup_folders", { folders: selection.folders().map(native), skipped: selection.skips().map(native) });
+    }
+    const codePage = PAGES.indexOf("code");
+    if (codePage >= 0 && page >= codePage) {
+      await invoke("set_code_folders", { folders: [...codeChosen].map(native), skipped: [] });
+    }
+    await invoke("finish_setup");
+  }
+  catch (error) { $("summary").textContent = String(error); $("apps-start").disabled = false; }
+  finally { $("next").disabled = false; $("back").disabled = false; }
+};
 
 $("back").addEventListener("click", () => {
   if (!firstTime) {
