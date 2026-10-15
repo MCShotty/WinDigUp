@@ -4,6 +4,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path $PackageDirectory).Path
+foreach ($file in @('App.xbf', 'MainWindow.xbf')) {
+    if (-not (Test-Path (Join-Path $package $file))) { throw "Published WinUI application is missing $file." }
+}
 New-Item $DiagnosticsDirectory -ItemType Directory -Force | Out-Null
 $diagnostics = (Resolve-Path $DiagnosticsDirectory).Path
 $started = Get-Date
@@ -42,7 +45,15 @@ try {
                 if ([WinDigUpWindowProbe]::SendMessageTimeout($window, 0, [UIntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$reply) -eq [IntPtr]::Zero) {
                     throw 'WinDigUp opened a window but its UI thread is unresponsive.'
                 }
-                Write-Host 'Verified WinDigUp.exe opens a visible, responsive WinUI window using the distributed runtime.'
+                # Windows PowerShell provides UI Automation without installing a test framework
+                # or sharing a .NET/WinUI runtime with the application under test.
+                & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive `
+                    -File (Join-Path $PSScriptRoot 'test-windows-controls.ps1') `
+                    -WindowHandle $window.ToInt64() -DiagnosticsDirectory $diagnostics
+                if ($LASTEXITCODE -ne 0) { throw 'The launched WinUI controls did not pass UI Automation checks.' }
+                if (-not $process.WaitForExit(15000)) { throw 'WinDigUp did not exit after invoking Quit.' }
+                if ($process.ExitCode -ne 0) { throw "WinDigUp failed while quitting: $($process.ExitCode)." }
+                Write-Host 'Verified WinDigUp.exe opens a visible, responsive WinUI window and quits cleanly using the distributed runtime.'
                 return
             }
         } else { $visibleSince = $null }

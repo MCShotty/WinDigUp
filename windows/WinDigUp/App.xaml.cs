@@ -34,6 +34,6 @@ public partial class App : Application
             _window.Activate();
             StartupDiagnostics.Write("Main window activated");
         }
-        catch (Exception error) { StartupDiagnostics.Report(error); Exit(); }
+        catch (Exception error) { StartupDiagnostics.Report(error); Environment.ExitCode = 1; Exit(); }
     }
 }

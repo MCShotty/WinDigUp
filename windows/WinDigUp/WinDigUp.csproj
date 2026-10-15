@@ -19,4 +19,17 @@
     <ProjectReference Include="../WinDigUp.Core/WinDigUp.Core.csproj" />
     <Content Include="Assets/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- WinUI marks compiled XAML for the build output, but .NET publish does not carry
+       those generated items into this unpackaged distribution automatically. -->
+  <Target Name="PublishCompiledXaml" AfterTargets="ComputeFilesToPublish" DependsOnTargets="Prep_ComputeProcessXamlFiles">
+    <AssignTargetPath Files="@(GeneratedXamlSrc)" RootFolder="$(XamlGeneratedOutputPath)">
+      <Output TaskParameter="AssignedFiles" ItemName="_CompiledXamlToPublish" />
+    </AssignTargetPath>
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(_CompiledXamlToPublish)" Condition="'%(_CompiledXamlToPublish.Extension)' == '.xbf'">
+        <RelativePath>%(_CompiledXamlToPublish.TargetPath)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 </Project>

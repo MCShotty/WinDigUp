@@ -63,6 +63,9 @@ CI builds the UI plus separate CPU and Vulkan helpers, then publishes **WinDigUp
 and **WinDigUp-Windows-x64-AMD-Vulkan** (AMD GPU, with CPU fallback). Both contain the full app.
 The AMD package includes the Vulkan backend, compiled shaders, loader, and license notices. CI checks
 that the packaged helper starts and the Vulkan module loads without a development SDK on PATH.
+It also launches the published app from another working folder with only Windows directories on PATH,
+checks the visible search control, selects AMD through UI Automation, and invokes Quit. These launch checks
+run against both assembled distributions. Compiled XAML files are explicitly included in the publish output.
 `build-info.json` records the source commit, native build configuration and Vulkan SDK version.
 
 For AMD, download and extract **WinDigUp-Windows-x64-AMD-Vulkan**, install a current AMD graphics
@@ -72,6 +75,10 @@ When switching from an existing CPU installation, update **DigUp helper** to thi
 `helper/digup.exe`; saved settings can otherwise keep pointing to the previous helper.
 GPU inference and performance must still be checked on the actual AMD machine; the CI runner has no AMD GPU.
 NVIDIA CUDA distributions require a build with the CUDA SDK.
+
+If startup fails, the app displays an error and records its exception details in
+`%LOCALAPPDATA%\WinDigUp\startup.log`. Extract the entire distribution before opening `WinDigUp.exe`;
+its `.xbf` files and runtime libraries must remain beside it.
 
 ## Intel NPU / OpenVINO
 

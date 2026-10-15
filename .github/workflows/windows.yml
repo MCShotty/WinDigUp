@@ -24,7 +24,7 @@ jobs:
       - name: Launch the published WinUI application
         run: ./scripts/test-windows-launch.ps1 -PackageDirectory ./windows/artifacts/WinUI
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: WinUI-launch-diagnostics
           path: ${{ runner.temp }}/WinDigUp-launch
@@ -147,7 +147,7 @@ jobs:
           ./scripts/verify-windows-package.ps1 -PackageDirectory ./package/WinDigUp -Backend ${{ matrix.backend }}
           ./scripts/test-windows-launch.ps1 -PackageDirectory ./package/WinDigUp
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: WinUI-launch-diagnostics-${{ matrix.backend }}
           path: ${{ runner.temp }}/WinDigUp-launch
