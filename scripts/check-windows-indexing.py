@@ -43,6 +43,27 @@ def main():
             DIGUP_OPENVINO_WORKER=str(Path(__file__).resolve().parents[1] / "tests/applications/synthetic-worker.py"))
         # Test the scanner independently of the desktop scheduler, then start setup with a separate fresh index.
         helper = args.app.resolve().parent / "helper" / "digup.exe"
+        # A normal-size tree on the AMD index path, without starting any embedder (--limit 0).
+        # Kept separate from the one-document installed inference fixture so scanning is tested at realistic scale.
+        bulk = root / "Mixed library العربية"
+        bulk.mkdir()
+        for number in range(2000):
+            subfolder = bulk / f"Folder {number // 40:03}"
+            subfolder.mkdir(exist_ok=True)
+            (subfolder / f"Note {number:04}.txt").write_text("A personal note about a lemon cake recipe.", encoding="utf-8")
+            (subfolder / f"Program {number:04}.exe").write_bytes(b"not a document")
+        ignored = bulk / "node_modules"
+        ignored.mkdir()
+        (ignored / "should not index.txt").write_text("Ignored developer dependency", encoding="utf-8")
+        bulk_env = dict(env, DIGUP_ACCELERATOR="amd-vulkan")
+        scanned = subprocess.run([str(helper), "index", str(bulk), "--index", str(root / "bulk-index"), "--limit", "0"],
+            env=bulk_env, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=120)
+        assert scanned.returncode == 0, scanned.stdout + scanned.stderr
+        assert "Scan root:" in scanned.stderr and "Scan reconciling:" in scanned.stderr, scanned.stderr
+        with closing(sqlite3.connect(root / "bulk-index" / "index.sqlite")) as db:
+            rows = db.execute("SELECT state, COUNT(*) FROM files GROUP BY state").fetchall()
+            assert rows == [("pending", 2000)], f"Mixed tree lost documents or indexed excluded files: {rows}"
+        assert not (root / "synthetic-requests.jsonl").exists(), "Metadata-only scan invoked an embedder"
         direct = subprocess.run([str(helper), "index", str(documents), "--index", str(root / "direct"), "--limit", "1"],
             env=env, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=30)
         assert direct.returncode == 0, direct.stdout + direct.stderr
@@ -74,7 +95,7 @@ def main():
             assert len(rows) == 1, f"Junction cycle was crawled: {rows}"
         saved = json.loads(settings.read_text(encoding="utf-8"))
         assert [Path(path) for path in saved["folders"]] == [documents] and saved["setUp"], saved
-    print("PASS: installed setup, readiness handoff, Unicode folder scan, indexing and rendered file result (synthetic unit vectors; no inference)")
+    print("PASS: 4,000-file metadata scan on AMD path, installed setup, readiness handoff, Unicode/junction scan and rendered result (synthetic unit vectors; no inference)")
 
 
 if __name__ == "__main__":

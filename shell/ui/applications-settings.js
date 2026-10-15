@@ -14,12 +14,25 @@ function renderApplications(statusOnly = false) {
   document.getElementById("apps-semantic").disabled = !settings.enabled;
   const issues = Object.values(settings.sourceErrors || {});
   const semantic = info.applicationSemantic || {};
-  const purpose = !settings.semanticEnabled ? "Purpose matching off" : semantic.state === "unavailable"
+  const model = info.state?.model || {};
+  const purpose = !settings.enabled ? "Application search off" : !settings.semanticEnabled ? "Purpose matching off" : model.state === "failed"
+    ? `Purpose matching unavailable: ${model.message || "check the selected accelerator"}` : semantic.state === "unavailable"
     ? `Purpose matching unavailable: ${semantic.message || "configure your accelerator in General"}`
+    : model.state && model.state !== "ready" ? "Purpose matching is waiting for the selected accelerator"
+    : semantic.encoder === "stopped" || !semantic.encoder ? "Purpose matching is idle. Choose Prepare purpose matching or run a search."
     : `Purpose matching: ${semantic.embedded || 0} of ${semantic.total || 0} prepared`;
+  document.getElementById("apps-prepare").disabled = !settings.enabled || !settings.semanticEnabled || model.state !== "ready" || appPreparationPending;
   document.getElementById("apps-status").textContent = `${settings.count || 0} applications${settings.refreshing ? " · Refreshing…" : ""} · ${purpose}${issues.length ? ` · Some sources could not refresh: ${issues.join("; ")}` : ""}`;
   if (!statusOnly && settings.supported && !document.getElementById("apps").hidden && !appDrafts.size) loadApplicationSettings();
 }
+
+let appPreparationPending = false;
+document.getElementById("apps-prepare").onclick = async () => {
+  appPreparationPending = true; renderApplications(true);
+  try { info.applicationSemantic = await invoke("prepare_apps"); }
+  catch (error) { fail(error?.message || error); }
+  finally { appPreparationPending = false; renderApplications(true); }
+};
 
 async function loadApplicationSettings(append = false) {
   if (!appSettingsInfo.supported) return;

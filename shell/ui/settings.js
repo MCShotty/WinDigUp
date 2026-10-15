@@ -170,12 +170,52 @@ function renderStatus() {
   const parts = [`${(state.searchable || 0).toLocaleString()} of ${(state.files || 0).toLocaleString()} files searchable`];
   if (state.pending) parts.push(`${state.pending.toLocaleString()} waiting`);
   if (state.unfinished) parts.push(`${state.unfinished.toLocaleString()} long ${state.unfinished === 1 ? "file" : "files"} to finish`);
+  const scan = state.scan || {};
+  if (scan.path) parts.push(shown(scan.path));
+  if (scan.event === "sync") {
+    if (scan.visited != null) parts.push(`${scan.visited.toLocaleString()} entries checked`);
+    const skipped = Object.entries(scan.skipped || {}).map(([reason, count]) => `${count.toLocaleString()} ${reason}`);
+    const folders = Object.entries(scan.skippedFolders || {}).map(([reason, count]) => `${count.toLocaleString()} folders: ${reason}`);
+    parts.push(...skipped, ...folders);
+  }
   $("status-detail").textContent = parts.join(" · ");
+  $("index-now").disabled = Boolean(state.busy);
   $("pause").hidden = !info.folders?.length;
   $("pause").textContent = state.paused ? "Resume" : "Pause";
 }
 
 $("pause").onclick = () => invoke("pause_indexing", { paused: !(info.state || {}).paused }).catch(fail);
+$("index-now").onclick = async () => {
+  $("index-now").disabled = true;
+  try { await invoke("index_now"); } catch (error) { fail(error); }
+  finally { renderStatus(); }
+};
+
+async function showIndexingDiagnostics() {
+  const dialog = $("index-diagnostics-dialog");
+  $("index-diagnostics-text").value = "Reading local indexing status…";
+  $("index-diagnostics-message").textContent = "";
+  $("index-diagnostics-copy").disabled = true;
+  if (!dialog.open) dialog.showModal();
+  try {
+    $("index-diagnostics-text").value = await invoke("indexing_diagnostics");
+    $("index-diagnostics-copy").disabled = false;
+  } catch (error) {
+    $("index-diagnostics-text").value = String(error?.message || error);
+  }
+}
+$("index-diagnostics").onclick = $("apps-diagnostics").onclick = showIndexingDiagnostics;
+$("index-diagnostics-close").onclick = () => $("index-diagnostics-dialog").close();
+$("index-diagnostics-copy").onclick = async () => {
+  const text = $("index-diagnostics-text");
+  try {
+    await navigator.clipboard.writeText(text.value);
+    $("index-diagnostics-message").textContent = "Report copied.";
+  } catch {
+    text.focus(); text.select();
+    $("index-diagnostics-message").textContent = "Press Ctrl+C to copy the selected report.";
+  }
+};
 
 async function loadSummaries() {
   try {
@@ -524,6 +564,7 @@ tauri.event.listen("state", ({ payload }) => {
   const before = info.state || {};
   info.state = payload;
   renderStatus();
+  renderApplications(true);
   renderStorage();
   renderUpdates();
   // The code index's progress isn't in the state: its folders are asked again while the tab is up.
@@ -538,8 +579,11 @@ async function start() {
   await refresh();
   // Debug runs (--debug-settings): the page is up.
   if (info.debug) {
+    const report = await invoke("indexing_diagnostics");
+    const diagnostics = JSON.parse(report.split("\n\n--- ")[0]);
     invoke("debug_report", { report: { settings: true, hotkey: info.hotkey, openAtLogin: info.openAtLogin,
                                        canOpenAtLogin: info.canOpenAtLogin, folders: info.folders,
+                                       diagnosticBuild: diagnostics.build, diagnosticBlocker: diagnostics.blockedBy,
                                        accelerator: $("accelerator").value, cpuOption: Boolean($("accelerator").querySelector('option[value="cpu"]')) } }).catch(() => {});
   }
   const asked = new URLSearchParams(location.search).get("tab");   // dev snapshots: ?tab=folders

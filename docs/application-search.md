@@ -15,6 +15,28 @@ the first scan running repeatedly. While files are being discovered, the status 
 launcher opened while model verification was pending, it resumes encoder warm-up and purpose queries when the model
 becomes ready. Empty `apps:` listings still run without inference.
 
+## Indexing diagnostics and recovery
+
+**Settings → Folders → Indexing diagnostics…** (also available in Apps) shows the running build, saved folders,
+selected accelerator, scheduler blockers, helper PIDs, current scan stage, app preparation state, and bounded local
+log tails. **Copy report** copies it; if Windows denies clipboard access, the report is selected for Ctrl+C. Review
+the report before sharing: it includes local file/folder names. It does not start inference or scan folders, so it
+also works when a helper is stalled. Logs rotate at about 1 MiB, retaining one previous file.
+
+Worker exits, startup failures and synchronization errors remain visible instead of returning to “0 files indexed.”
+A successful empty scan shows why files were skipped (unsupported types, cloud placeholders, excluded folders, and
+other crawl rules). Scan progress reports checked entries and candidates before embedding begins. **Index now**
+retries using the existing saved choices; model errors still require fixing the selected accelerator.
+
+App preparation uses an already-running query encoder and pauses when it becomes idle. **Prepare purpose matching**
+explicitly starts the selected encoder without a file search. The Apps status distinguishes an idle encoder from
+an unavailable accelerator and from preparation progress. It never enables CPU inference.
+
+The earlier junction fix did not resolve the reported RX 7900 XTX zero-index issue. These diagnostics are needed to
+establish the remaining cause on that installation; a hosted fixture passing is not evidence that this device-specific
+report is resolved. Hosted checks include a 4,000-file mixed tree without inference and an installed one-document
+indexing flow with synthetic unit vectors. Real model indexing on the affected installation remains unverified.
+
 ## Windows supplies the catalog
 
 DigUp reads Windows Shell's AppsFolder and the current-user/shared Start menu Programs folders using Windows APIs.

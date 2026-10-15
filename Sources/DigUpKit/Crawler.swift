@@ -15,6 +15,15 @@ public struct CrawlReport: Sendable {
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
+    public var visited = 0
+}
+
+public struct CrawlProgress: Sendable {
+    public let stage: String
+    public let root: String
+    public let path: String
+    public let visited: Int
+    public let candidates: Int
 }
 
 /// Walks the chosen folders and applies `Rules`. Reads metadata only, never file contents (except the 600-byte
@@ -23,7 +32,8 @@ public struct CrawlReport: Sendable {
 /// For the code index (`IndexOptions.code`) it walks the code folders instead: code files only (`Rules.classifyCode`),
 /// in a git repo only those git keeps (`GitFiles`), and none in vendored or built folders.
 public enum Crawler {
-    public static func crawl(_ roots: [URL], options: IndexOptions) -> CrawlReport {
+    public static func crawl(_ roots: [URL], options: IndexOptions,
+                             onProgress: (CrawlProgress) -> Void = { _ in }) -> CrawlReport {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path
         let keys = FileSystem.crawlKeys
@@ -33,8 +43,15 @@ public enum Crawler {
         var found: [Candidate] = []
         var foundPaths = Set<String>()   // a folder inside another root would be walked twice
         let rootPaths = Set(roots.map { $0.standardizedFileURL.path })
+        var lastProgress = Date.distantPast
+        func progress(_ stage: String, root: String, path: String, force: Bool = false) {
+            guard force || Date().timeIntervalSince(lastProgress) >= 0.5 else { return }
+            lastProgress = Date()
+            onProgress(CrawlProgress(stage: stage, root: root, path: path, visited: report.visited, candidates: found.count))
+        }
 
         for root in roots.map({ $0.standardizedFileURL }) {
+            progress("root", root: root.path, path: root.path, force: true)
             if options.code {
                 repos.enterRoot(root.path)
             } else if Rules.isProjectRoot(root.path) {
@@ -54,9 +71,19 @@ public enum Crawler {
                                              errorHandler: { _, _ in true }) else { continue }
             #endif
             func visit(_ url: URL) {
+                report.visited += 1
+                progress("entries", root: root.path, path: url.path)
+                #if os(Windows)
+                // The native walk already has the directory attribute. Asking Foundation again follows reparse
+                // points and invokes filesystem providers for metadata we already obtained without opening files.
+                let values: URLResourceValues? = nil
+                let isDirectory = walker.currentIsDirectory
+                #else
                 let values = try? url.resourceValues(forKeys: Set(keys))
+                let isDirectory = values?.isDirectory == true
+                #endif
                 let isPackage = FileSystem.isPackage(url, values)
-                if values?.isDirectory == true, !isPackage {
+                if isDirectory, !isPackage {
                     if let reason = Rules.skipReason(forFolder: url, home: home, excluded: skips)
                         ?? (options.code ? Rules.codeSkipReason(forFolder: url) : nil) {
                         walker.skipDescendants()
@@ -118,6 +145,8 @@ public enum Crawler {
             }
         }
 
+        progress("filtering", root: "", path: "", force: true)
+
         // Inside a code project only screenshots count (assets, fixtures and datasets don't).
         var inProject: [String: Bool] = [:]
         func isInProject(_ folder: String) -> Bool {
@@ -152,6 +181,7 @@ public enum Crawler {
             }
         }
         report.candidates = kept
+        onProgress(CrawlProgress(stage: "complete", root: "", path: "", visited: report.visited, candidates: kept.count))
         return report
     }
 }

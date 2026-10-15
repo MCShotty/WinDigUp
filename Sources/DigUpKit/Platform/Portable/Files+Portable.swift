@@ -163,6 +163,7 @@ final class DirectoryWalk {
     }
     private var pending: [Entry]   // what's next, last first
     private var opened: URL?     // the folder just returned: its contents come next, unless skipped
+    private(set) var currentIsDirectory = false
 
     init(_ root: URL, keys: [URLResourceKey]) {
         pending = []
@@ -175,6 +176,7 @@ final class DirectoryWalk {
             opened = nil
         }
         guard let next = pending.popLast() else { return nil }
+        currentIsDirectory = next.directory
         if next.directory { opened = next.url }
         return next.url
     }

@@ -130,6 +130,16 @@ struct Searching {
 }
 
 impl SearchService {
+    pub fn snapshot(&self) -> Value {
+        match self.running.try_lock() {
+            Ok(running) => match running.as_ref() {
+                Some(worker) => json!({"pid":worker.child.id(),"generation":worker.number,
+                    "pending":worker.pending.try_lock().ok().map(|pending| pending.len())}),
+                None => json!({"running":false}),
+            },
+            Err(_) => json!({"busy":true}),
+        }
+    }
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
@@ -280,6 +290,15 @@ struct Indexing {
 }
 
 impl IndexService {
+    pub fn snapshot(&self) -> Value {
+        match self.running.try_lock() {
+            Ok(running) => match running.as_ref() {
+                Some(worker) => json!({"pid":worker.child.id(),"generation":worker.number,"args":worker.args,"owed":worker.owed}),
+                None => json!({"running":false}),
+            },
+            Err(_) => json!({"busy":true}),
+        }
+    }
     pub fn new(on_event: impl Fn(Value) + Send + Sync + 'static) -> IndexService {
         IndexService { running: Arc::default(), on_event: Arc::new(on_event) }
     }
@@ -298,8 +317,10 @@ impl IndexService {
         }
         let (child, stdin, stdout) = launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
+        let pid = child.id();
         let (on_event, slot) = (self.on_event.clone(), self.running.clone());
         std::thread::spawn(move || {
+            on_event(json!({"event":"started","pid":pid,"generation":number}));
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
                 let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };

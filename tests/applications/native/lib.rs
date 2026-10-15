@@ -11,6 +11,8 @@ pub mod async_runtime {
 pub mod helper;
 #[path = "../../../shell/src-tauri/src/status.rs"]
 pub mod status;
+#[path = "../../../shell/src-tauri/src/diagnostics.rs"]
+pub mod diagnostics;
 
 #[cfg(test)]
 mod tests {

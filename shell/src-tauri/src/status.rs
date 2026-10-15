@@ -37,6 +37,9 @@ pub struct Status {
     pub paused: bool,
     /// Outside the set hours (Settings → Folders): when they begin ("01:00").
     pub held_until: Option<String>,
+    /// Last reported stage/counts and errors survive an idle/exit event, rather than looking like an empty index.
+    pub scan: Value,
+    pub last_error: Option<String>,
 }
 
 impl Status {
@@ -53,10 +56,14 @@ impl Status {
             self.unfinished = count("unfinished");
         }
         match event["event"].as_str().unwrap_or_default() {
-            "scanning" => self.activity = Activity::Scanning,
-            "sync" => self.activity = if count("new") > 0 || self.pending > 0 {
+            "started" => { self.last_error = None; self.scan = Value::Null; self.activity = Activity::Starting; }
+            "phase" | "scanning" | "scan_progress" => {
+                self.activity = Activity::Scanning;
+                self.scan = event.clone();
+            }
+            "sync" => { self.scan = event.clone(); self.activity = if count("new") > 0 || self.pending > 0 {
                 Activity::Indexing { done: 0, total: count("new").max(self.pending) }
-            } else { Activity::Idle },
+            } else { Activity::Idle }; },
             "file" => {
                 self.activity = Activity::Indexing { done: count("done"), total: count("total") };
                 // The counts come with a sync; each file read since leaves "waiting".
@@ -76,9 +83,18 @@ impl Status {
                 self.missing = paths("folders");
                 self.unreadable = paths("unreadable");
             }
-            "error" if event["fatal"] == true => self.activity = Activity::Failed("Indexing stopped".into()),
+            "error" => {
+                let message = event["message"].as_str().unwrap_or("Indexing stopped").chars().take(1500).collect::<String>();
+                self.last_error = Some(message.clone());
+                self.activity = Activity::Failed(message);
+            }
             // The helper is gone: whatever it was doing is over.
             "exit" | "ended" => {
+                if event["event"] == "ended" && event["status"].as_i64() != Some(0) {
+                    let message = self.last_error.clone().unwrap_or_else(|| format!("Indexing helper exited (status {}). Open indexing diagnostics for details.", event["status"]));
+                    self.last_error = Some(message.clone());
+                    self.activity = Activity::Failed(message);
+                }
                 if matches!(self.activity, Activity::Starting | Activity::Scanning | Activity::Indexing { .. } | Activity::Finishing { .. }) {
                     self.activity = Activity::Idle;
                 }
@@ -95,6 +111,7 @@ impl Status {
         if let Activity::Failed(problem) = &self.activity {
             return format!("⚠︎ {problem}");
         }
+        if let Some(problem) = &self.last_error { return format!("⚠︎ {problem}"); }
         // Nothing is read before the model is in (file names are searchable once indexing starts).
         if let Some(line) = download_line(model) {
             return line;
@@ -105,7 +122,12 @@ impl Status {
         match self.activity {
             // Held or paused, no index helper runs to say it has started: what's indexed stands.
             Activity::Starting if !self.paused && self.held_until.is_none() => "Starting…".into(),
-            Activity::Scanning => "Scanning folders…".into(),
+            Activity::Scanning => {
+                match self.scan["visited"].as_u64() {
+                    Some(visited) => format!("Scanning folders · {} entries checked · {} candidates", number(visited), number(self.scan["candidates"].as_u64().unwrap_or(0))),
+                    None => self.scan["message"].as_str().unwrap_or("Scanning folders…").to_string(),
+                }
+            },
             Activity::Indexing { done, total } => format!("Indexing {}% · {} of {}", percent(done, total), number(done), number(total)),
             Activity::Finishing { done, total, files } => {
                 let which = if files > 0 { format!("{} long {}", number(files), plural(files, "file", "files")) } else { "long files".into() };
@@ -120,6 +142,11 @@ impl Status {
                 }
             }
             _ => {
+                if self.files == 0 && self.scan["event"] == "sync" && !self.paused {
+                    return if !self.missing.is_empty() || !self.unreadable.is_empty() {
+                        "No files found · some selected folders are unavailable".into()
+                    } else { "No supported local files found in the selected folders".into() };
+                }
                 let indexed = format!("{} {} indexed", number(self.searchable), plural(self.searchable, "file", "files"));
                 match &self.held_until {
                     _ if self.paused => format!("{indexed} · paused"),
@@ -211,6 +238,8 @@ impl Status {
                 Activity::Failed(_) => "failed",
             },
             "model": model,
+            "scan": self.scan,
+            "lastError": self.last_error,
         })
     }
 }
@@ -284,7 +313,7 @@ mod tests {
         assert_eq!(status.progress(&ready), None);
         assert_eq!(status.caveat(&ready), None);
         status.apply(&json!({"event": "error", "message": "worker died", "fatal": true}));
-        assert_eq!(status.line(true, &ready), "⚠︎ Indexing stopped");
+        assert_eq!(status.line(true, &ready), "⚠︎ worker died");
 
         let mut held = Status { held_until: Some("01:00".into()), ..Status::default() };
         held.apply(&json!({"event": "counts", "files": 70, "searchable": 66, "pending": 4, "unfinished": 0}));
@@ -301,5 +330,25 @@ mod tests {
         assert_eq!(number(999), "999");
         assert_eq!(number(1000), "1,000");
         assert_eq!(number(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn errors_are_not_disguised_as_an_empty_index() {
+        let ready = json!({"state":"ready"});
+        let mut status = Status::default();
+        status.apply(&json!({"event":"error","message":"sync failed: database is locked"}));
+        status.apply(&json!({"event":"idle","files":0,"searchable":0}));
+        status.apply(&json!({"event":"ended","status":0}));
+        assert!(status.line(true, &ready).contains("database is locked"));
+        status.apply(&json!({"event":"started","pid":123}));
+        assert_eq!(status.last_error, None);
+        status.apply(&json!({"event":"scan_progress","visited":2020,"candidates":17,"path":"C:/Documents"}));
+        assert!(status.line(true, &ready).contains("2,020 entries checked"));
+        status.apply(&json!({"event":"ended","status":-1073741819_i64}));
+        assert!(status.line(true, &ready).contains("-1073741819"));
+        status.apply(&json!({"event":"started"}));
+        status.apply(&json!({"event":"sync","files":0,"candidates":0,"visited":500,"skipped":{"other type":500}}));
+        assert_eq!(status.line(true, &ready), "No supported local files found in the selected folders");
+        assert_eq!(status.snapshot(true, &ready)["scan"]["skipped"]["other type"], 500);
     }
 }

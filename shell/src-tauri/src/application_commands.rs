@@ -189,6 +189,21 @@ pub fn refresh_apps(shell: State<'_, Arc<Shell>>) -> Value {
     shell.applications.info()
 }
 
+/// An explicit preparation request may wake the encoder; passive background steps still never do.
+#[tauri::command]
+pub async fn prepare_apps(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    if !shell.applications.semantic_enabled() { return Err("Enable application purpose matching first.".into()); }
+    if !shell.model_ready() { return Err("The selected accelerator is not ready. Check General and Storage.".into()); }
+    let _foreground = Foreground::new(&shell);
+    synchronize(&shell).await?;
+    let reply = shell.search.ask(json!({"op":"prewarm"})).await?;
+    let state = shell.search.ask(json!({"op":"apps_status"})).await?;
+    *shell.app_semantic.lock().unwrap() = state.clone();
+    shell.diagnostics.record("applications", state.clone());
+    if reply["encoder"] == "unavailable" { return Err(state["message"].as_str().unwrap_or("The selected accelerator is unavailable.").into()); }
+    Ok(state)
+}
+
 #[tauri::command]
 pub fn set_app_options(
     shell: State<'_, Arc<Shell>>,
@@ -290,6 +305,7 @@ pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
             *shell.app_semantic.lock().unwrap() = state.clone();
             if state != previous {
                 previous = state.clone();
+                shell.diagnostics.record("applications", state.clone());
                 let _ = app.emit("applications-progress", state);
             }
         }

@@ -75,8 +75,10 @@ final class IndexService: @unchecked Sendable {
     private var parts: [Part] { [main] + (code.map { [$0] } ?? []) }
 
     func serve() -> Int32 {
+        emit(["event": "phase", "stage": "cleanup", "message": "Preparing indexing scratch space…"])
         removeStaleScratchFolders()
         do {
+            emit(["event": "phase", "stage": "checking_index", "message": "Checking the file index…"])
             // A file an earlier helper had to stop on (`Watchdog`) isn't read again until it changes.
             if let stopped = StoppedFile.take(from: folder), let path = stopped.path {
                 for part in parts {
@@ -196,8 +198,13 @@ final class IndexService: @unchecked Sendable {
 
     /// A part's chosen folders that are there and readable right now; also what `pending` and the counts look at.
     private func availableRoots(_ part: Part) -> [URL] {
-        let missing = part.roots.filter { !Arguments.isFolder($0) }
-        let unreadable = part.roots.filter { !missing.contains($0) && !Arguments.isReadable($0) }
+        var missing: [URL] = [], unreadable: [URL] = []
+        for root in part.roots {
+            emit(["event": "phase", "stage": "checking_folder", "path": root.path, "code": part.code,
+                  "message": "Checking selected folders…"])
+            if !Arguments.isFolder(root) { missing.append(root) }
+            else if !Arguments.isReadable(root) { unreadable.append(root) }
+        }
         let report = (missing.map(\.path), unreadable.map(\.path))
         if unavailable[part.code].map({ $0 != report }) ?? !(missing.isEmpty && unreadable.isEmpty) {
             emit(["event": "missing", "folders": report.0, "unreadable": report.1, "code": part.code])
@@ -216,7 +223,10 @@ final class IndexService: @unchecked Sendable {
         }
         do {
             emit(["event": "scanning", "code": part.code])
-            let summary = try part.indexer.sync(availableRoots(part))
+            let summary = try part.indexer.sync(availableRoots(part), onProgress: { progress in
+                emit(["event": "scan_progress", "stage": progress.stage, "root": progress.root, "path": progress.path,
+                      "visited": progress.visited, "candidates": progress.candidates, "code": part.code])
+            })
             if summary.queued.count <= newFilesLimit { newFiles.formUnion(summary.queued) }
             emitCounts("sync", [
                 "code": part.code,
@@ -225,6 +235,8 @@ final class IndexService: @unchecked Sendable {
                 "removed": summary.removed, "unchanged": summary.unchanged,
                 "ms": Int(Date().timeIntervalSince(started) * 1000),
                 "started": started.timeIntervalSince1970,   // the app checks its sync request came before this
+                "visited": summary.crawl.visited, "candidates": summary.crawl.candidates.count,
+                "skipped": summary.crawl.skipped, "skippedFolders": summary.crawl.skippedFolders,
             ])
         } catch {
             emit(["event": "error", "message": "sync failed: \(error)", "code": part.code])
