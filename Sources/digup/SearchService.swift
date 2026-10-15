@@ -1,4 +1,5 @@
 import DigUpKit
+import LlamaRuntime
 import Foundation
 
 /// `digup search-service`: the app's searcher as a process, for shells that can't link DigUpKit (the Windows and Linux
@@ -336,13 +337,15 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     }
 
     private func applicationFingerprint(_ worker: any Embedder) throws -> String {
-        ApplicationStore.fingerprint(info: worker.info, backend: try Acceleration.selected().rawValue)
+        let backend = try Acceleration.selected()
+        return ApplicationStore.fingerprint(info: worker.info, backend: backend.rawValue,
+            runtimeBuild: backend == .openvinoNPU ? "" : LlamaEmbedder.buildTag)
     }
 
     private func applicationState(_ store: ApplicationStore) throws -> [String: Any] {
         let counts = try store.counts()
         let state = encoderState == "unavailable" ? "unavailable"
-            : counts.embedded < counts.total || (encoderState != "ready" && counts.embedded == 0) ? "preparing" : "ready"
+            : counts.embedded < counts.total || encoderState != "ready" ? "preparing" : "ready"
         var reply: [String: Any] = ["ok": true, "revision": store.revision, "state": state,
             "total": counts.total, "embedded": counts.embedded, "encoder": encoderState,
             "ranking_version": ApplicationStore.rankingVersion, "ranking_calibrated": false]

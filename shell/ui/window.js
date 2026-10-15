@@ -456,6 +456,7 @@ function columns() {
 }
 
 function open(hit) {
+  state.selection = resultKey(hit); state.navigated = true;
   openResult(hit).catch(failed);
 }
 

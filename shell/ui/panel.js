@@ -152,6 +152,7 @@ function toggleWeaker() {
 
 function openSelected() {
   const hit = selectedHit();
+  if (hit) state.navigated = true;
   if (hit) openResult(hit).catch(failed);
 }
 

@@ -47,6 +47,7 @@ struct ApplicationStoreTests {
         }
         #expect(ApplicationStore.fingerprint(info: info("1234567a"), backend: "vulkan") != ApplicationStore.fingerprint(info: info("1234567b"), backend: "vulkan"))
         #expect(ApplicationStore.fingerprint(info: info("1234567a"), backend: "vulkan") != ApplicationStore.fingerprint(info: info("1234567a"), backend: "openvino-npu"))
+        #expect(ApplicationStore.fingerprint(info: info("1234567a"), backend: "vulkan", runtimeBuild: "b11461") != ApplicationStore.fingerprint(info: info("1234567a"), backend: "vulkan", runtimeBuild: "next-build"))
     }
     @Test func corruptApplicationCacheRecoversWithoutTouchingOtherFiles() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

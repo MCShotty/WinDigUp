@@ -160,12 +160,20 @@ unsafe fn shortcut(path: &Path, source: &str) -> Option<Record> {
     }
     Some(record)
 }
-fn walk(folder: &Path, source: &str, records: &mut Vec<Record>) -> Result<(), String> {
+fn walk(
+    folder: &Path,
+    source: &str,
+    records: &mut Vec<Record>,
+    enabled: &dyn Fn() -> bool,
+) -> Result<(), String> {
     for entry in std::fs::read_dir(folder).map_err(|e| e.to_string())? {
+        if !enabled() {
+            return Err("Application discovery is disabled.".into());
+        }
         let entry = entry.map_err(|e| e.to_string())?;
         let kind = entry.file_type().map_err(|e| e.to_string())?;
         if kind.is_dir() {
-            walk(&entry.path(), source, records)?;
+            walk(&entry.path(), source, records, enabled)?;
         } else if kind.is_file()
             && entry
                 .path()
@@ -179,16 +187,20 @@ fn walk(folder: &Path, source: &str, records: &mut Vec<Record>) -> Result<(), St
     }
     Ok(())
 }
-unsafe fn programs(id: &windows::core::GUID, source: &str) -> Result<Vec<Record>, String> {
+unsafe fn programs(
+    id: &windows::core::GUID,
+    source: &str,
+    enabled: &dyn Fn() -> bool,
+) -> Result<Vec<Record>, String> {
     let root = unsafe { folder(id)? };
     if !root.exists() {
         return Ok(Vec::new());
     }
     let mut records = Vec::new();
-    walk(&root, source, &mut records)?;
+    walk(&root, source, &mut records, enabled)?;
     Ok(records)
 }
-unsafe fn apps_folder() -> Result<Vec<Record>, String> {
+unsafe fn apps_folder(enabled: &dyn Fn() -> bool) -> Result<Vec<Record>, String> {
     unsafe {
         let folder: IShellItem = SHGetKnownFolderItem(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, None)
             .map_err(|e| e.to_string())?;
@@ -197,6 +209,9 @@ unsafe fn apps_folder() -> Result<Vec<Record>, String> {
             .map_err(|e| e.to_string())?;
         let mut records = Vec::new();
         loop {
+            if !enabled() {
+                return Err("Application discovery is disabled.".into());
+            }
             let mut next = [None];
             let mut fetched = 0;
             entries
@@ -228,14 +243,6 @@ unsafe fn apps_folder() -> Result<Vec<Record>, String> {
                 },
             );
             if let Ok(item) = item.cast::<IShellItem2>() {
-                record.publisher = property(&item, "System.Company");
-                record.keywords = formatted_property(&item, "System.Keywords");
-                record.icon_revision = property(&item, "System.AppUserModel.PackageFullName")
-                    + &property(&item, "System.FileVersion");
-                record.description = property(&item, "System.FileDescription");
-                if record.description.is_empty() {
-                    record.description = property(&item, "System.Comment");
-                }
                 let target = property(&item, "System.Link.TargetParsingPath");
                 if !target.is_empty() {
                     if let (Some(args), Some(cwd)) = (
@@ -261,22 +268,90 @@ unsafe fn apps_folder() -> Result<Vec<Record>, String> {
         Ok(records)
     }
 }
-pub fn scan(mut publish: impl FnMut(&str, Result<Vec<Record>, String>)) {
+unsafe fn enrich(record: &mut Record) {
+    unsafe {
+        let path = match &record.target {
+            Target::Shortcut { path } => path,
+            Target::Shell { parsing_name } => parsing_name,
+        };
+        let spelling = wide(path);
+        let Ok(mut item) =
+            SHCreateItemFromParsingName::<_, _, IShellItem2>(PCWSTR(spelling.as_ptr()), None)
+        else {
+            return;
+        };
+        if matches!(record.target, Target::Shortcut { .. }) {
+            let target = property(&item, "System.Link.TargetParsingPath");
+            if !target.is_empty() {
+                let target = wide(&target);
+                if let Ok(resolved) =
+                    SHCreateItemFromParsingName::<_, _, IShellItem2>(PCWSTR(target.as_ptr()), None)
+                {
+                    item = resolved;
+                }
+            }
+        }
+        record.publisher = property(&item, "System.Company");
+        record.keywords = formatted_property(&item, "System.Keywords");
+        let mut description = property(&item, "System.FileDescription");
+        if description.is_empty() {
+            description = property(&item, "System.Comment");
+        }
+        if !description.is_empty() && !record.description.contains(&description) {
+            if !record.description.is_empty() {
+                record.description.push('\n');
+            }
+            record.description.push_str(&description);
+        }
+        record.icon_revision.push_str(
+            &(property(&item, "System.AppUserModel.PackageFullName")
+                + &property(&item, "System.FileVersion")),
+        );
+    }
+}
+pub fn scan(
+    mut publish: impl FnMut(&str, Result<Vec<Record>, String>, bool),
+    enabled: impl Fn() -> bool,
+) {
     let apartment = Apartment::new();
     if let Err(error) = apartment {
         for source in ["userPrograms", "commonPrograms", "appsFolder"] {
-            publish(source, Err(error.clone()));
+            publish(source, Err(error.clone()), false);
         }
         return;
     }
-    // Start menu entries become searchable before the larger AppsFolder scan finishes.
-    publish("userPrograms", unsafe {
-        programs(&FOLDERID_Programs, "userPrograms")
-    });
-    publish("commonPrograms", unsafe {
-        programs(&FOLDERID_CommonPrograms, "commonPrograms")
-    });
-    publish("appsFolder", unsafe { apps_folder() });
+    // Publish stable names/launch identities before asking optional property handlers for metadata.
+    let mut discovered = Vec::new();
+    for source in ["userPrograms", "commonPrograms", "appsFolder"] {
+        if !enabled() {
+            return;
+        }
+        let result = unsafe {
+            match source {
+                "userPrograms" => programs(&FOLDERID_Programs, source, &enabled),
+                "commonPrograms" => programs(&FOLDERID_CommonPrograms, source, &enabled),
+                _ => apps_folder(&enabled),
+            }
+        };
+        if let Ok(records) = &result {
+            discovered.push((source, records.clone()));
+        }
+        publish(source, result, false);
+    }
+    for (source, mut records) in discovered {
+        for record in &mut records {
+            if !enabled() {
+                return;
+            }
+            unsafe {
+                enrich(record);
+            }
+        }
+        if !enabled() {
+            return;
+        }
+        publish(source, Ok(records), true);
+    }
 }
 
 pub fn launch(target: &Target) -> Result<(), String> {

@@ -31,11 +31,11 @@ async function setup(page, platform='Win32') {
       if(command==='search_apps'){
         const q=args.q.toLowerCase();
         if(args.meaning)await new Promise(r=>setTimeout(r,700));
-        const matches=!q?all:q.includes('photo')?[photo,...(args.meaning?[{...semantic,reason:'semantic'}]:[])]:q==='portrait'?[semantic]:[];
+        const matches=!q?all:q.includes('photo')?[photo,...(args.meaning?[{...semantic,reason:'semantic'}]:[])]:q==='portrait'?[semantic]:q==='retouch'&&args.meaning?[{...semantic,reason:'semantic'}]:[];
         return {generation:args.generation,hits:window.catalogEnabled?matches.slice(args.offset||0,(args.offset||0)+args.limit):[],total:window.catalogEnabled?matches.length:0,
           catalog:{enabled:window.catalogEnabled,supported:true,revision:'fixture'},semantic:{state:args.meaning?'ready':'preparing',total:2,embedded:args.meaning?2:0}};
       }
-      if(command==='launch_app')return {accepted:true};
+      if(command==='launch_app'){if(window.launchFailure)throw {code:'launch_failed',message:'Application launch was refused'};return {accepted:true};}
       if(command==='refresh_apps')return settings.applications;
       if(command==='set_app_options'){Object.assign(settings.applications,{enabled:args.enabled,semanticEnabled:args.semanticEnabled});return settings.applications;}
       if(command==='set_app_override')return settings.applications;
@@ -112,13 +112,41 @@ async function setup(page, platform='Win32') {
   assert.equal(await page.locator('#side video, #side audio, #side .frame').count(),0);
   if(process.env.DIGUP_APP_SCREENSHOT)await page.screenshot({path:process.env.DIGUP_APP_SCREENSHOT});
 
+  await page.evaluate(()=>{window.calls=[];window.launchFailure=true;});
+  await page.press('#query','Enter');
+  await page.waitForFunction(()=>document.body.textContent.includes('Application launch was refused'));
+  assert.equal(await page.locator('#query').inputValue(),'photo');
+  assert.equal(await page.locator('.app-row.selected').count(),1);
+  await page.evaluate(()=>{window.launchFailure=false;window.calls=[];});
+  await page.fill('#query','apps: photo');
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='search_apps'&&c.args.meaning&&c.args.q==='photo'));
+  await page.fill('#query','apps: portrait');
+  await page.waitForFunction(()=>document.querySelector('.app-row')?.textContent.includes('Portrait Editor'));
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='search_apps'&&c.args.meaning&&c.args.q==='portrait'));
+  await page.waitForTimeout(800);
+  assert.equal(await page.locator('.app-row').count(),1);
+  assert.match(await page.locator('.app-row').textContent(),/Portrait Editor/);
+  await page.evaluate(()=>{window.fileMode='failed';});
+  await page.fill('#query','photo');
+  await page.waitForFunction(()=>document.body.textContent.includes('File helper unavailable'));
+  assert.match(await page.locator('.app-row').first().textContent(),/Photo Studio/);
+  await page.evaluate(()=>{window.fileMode='ready';window.calls=[];});
+  await page.fill('#query','retouch');
+  await page.waitForSelector('.cell.selected');
+  await page.press('#query','Enter');
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='open_path'));
+  await page.waitForFunction(()=>document.querySelector('.app-row')?.textContent.includes('Portrait Editor'));
+  assert.equal(await page.locator('.cell.selected').count(),1,'Keyboard activation did not preserve selection after semantic results');
+
   await page.goto(base+'/settings.html?tab=apps');
   await page.waitForFunction(()=>document.querySelectorAll('.app-editor').length===100);
   const purpose=page.locator('.app-editor textarea').nth(1);
   await purpose.fill('Retouch portraits, color correction');
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await page.evaluate(()=>window.emit('applications-progress',{state:'preparing',total:150,embedded:23}));
   await page.waitForTimeout(250);
   assert.equal(await purpose.inputValue(),'Retouch portraits, color correction');
+  assert.match(await page.locator('#apps-status').textContent(),/23 of 150 prepared/);
   await page.locator('.app-editor').first().getByRole('button',{name:'Save',exact:true}).click();
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='set_app_override'));
   assert.equal(await page.evaluate(()=>window.calls.find(c=>c.command==='set_app_override').args.value.purpose),'Retouch portraits, color correction');
@@ -134,6 +162,6 @@ async function setup(page, platform='Win32') {
   await linux.fill('#query','apps: photo');await linux.waitForTimeout(250);
   assert.equal(await linux.evaluate(()=>window.calls.filter(c=>c.command==='search_apps').length),0);
   assert.deepEqual(errors,[]);
-  console.log('PASS: native-app results survive a blocked helper; routing, launch IDs, pagination, selection, app actions, settings drafts, setup and Linux behavior');
+  console.log('PASS: native apps survive blocked/failed file search; routing, stale replies, launch errors, pagination, selection, settings drafts/progress, setup and Linux behavior');
   await browser.close();
 })().catch(async e=>{console.error(e);if(browser)await browser.close();process.exit(1)});

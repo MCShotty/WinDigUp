@@ -38,6 +38,7 @@ const Apps = {
   },
   row(hit, selected, select, launch) {
     const row = element("div", "app-row" + (selected ? " selected" : ""));
+    row.title = hit.shortcut || "Registered Windows application";
     row.dataset.resultKey = resultKey(hit); row.setAttribute("role", "option");
     row.setAttribute("aria-selected", String(selected));
     row.setAttribute("aria-label", `Application, ${hit.name}`);
@@ -53,6 +54,7 @@ const Apps = {
     box.append(this.icon(hit, 128), element("div", "app-name", hit.name));
     if (hit.publisher) box.append(element("div", "app-description", hit.publisher));
     if (hit.description) box.append(element("p", "", hit.description));
+    box.append(element("p", "app-description", hit.shortcut || "Registered with Windows"));
     box.append(element("p", "app-description", hit.reason === "semantic" ? "Matches what this application does" : "Matches the application name or alias"));
     const launch = element("button", "primary", "Launch");
     launch.onclick = async () => { launch.disabled = true; try { await this.launch(hit); } catch (e) { fail(e); } finally { launch.disabled = false; } };

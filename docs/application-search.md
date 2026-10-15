@@ -25,6 +25,11 @@ The catalog refreshes at startup, from Shell change notifications, when a stale 
 **Settings → Apps → Refresh applications**. A source that temporarily fails retains its previous entries. Missing
 applications produce a launch error and trigger a refresh.
 
+Names and stable launch identities are published before optional publisher/description properties are read. The
+previous metadata stays available during that refresh, avoiding needless embedding invalidation. Disabling discovery
+stops the scan between entries; enabling it again schedules a refresh. Icon extraction and launching use independent
+execution paths.
+
 ## Purpose matching
 
 With **Match applications by purpose** enabled, try descriptions such as “retouch a portrait.” DigUp embeds the app's

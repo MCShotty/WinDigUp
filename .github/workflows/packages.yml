@@ -223,6 +223,7 @@ jobs:
             Vendor/llama.cpp/licenses
           key: llama-windows-vulkan-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Build
+        id: package_build
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
@@ -243,6 +244,7 @@ jobs:
             shell/src-tauri/target/release/bundle/nsis/*.exe
             shell/src-tauri/target/release/bundle/nsis/*.exe.sig
       - name: The installer
+        id: installer
         shell: bash
         run: scripts/check-windows-accelerators.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
       - name: Application launch fixture
@@ -254,9 +256,11 @@ jobs:
         shell: pwsh
         run: scripts/check-windows-applications.ps1
       - name: Application service protocol (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         shell: pwsh
         run: python scripts/check-app-protocol.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe"
       - name: Swift and Rust policy checks
+        if: ${{ !cancelled() && steps.package_build.outcome == 'success' }}
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"

@@ -5,6 +5,23 @@ on:
 permissions:
   contents: read
 jobs:
+  windows-applications:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Real Windows catalog and Shell launch contract
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib
+          cargo build --release --manifest-path tests/applications/native/Cargo.toml --bin application-provider-check --locked
+          cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
+      - name: Discover a shortcut, launch and verify its arguments/cwd/lifetime
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors
+          scripts/check-windows-applications.ps1 -ProviderHarness "$pwd\tests\applications\native\target\release\application-provider-check.exe"
   policy:
     runs-on: ubuntu-24.04
     steps:

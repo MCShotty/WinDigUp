@@ -1,4 +1,5 @@
 # Installed WebView2 -> catalog -> native Shell launch, with no model or accelerator required.
+param([string]$ProviderHarness)
 $ErrorActionPreference = 'Stop'
 $fixture = Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe'
 $work = Join-Path $env:RUNNER_TEMP ('DigUp Apps ' + [Guid]::NewGuid().ToString('N'))
@@ -26,6 +27,10 @@ try {
     $stderr = Join-Path $work 'ui-error.txt'
     $installed = Join-Path $env:LOCALAPPDATA 'DigUp\DigUp.exe'
     $arguments = '--settings "' + $settings + '" --index "' + (Join-Path $work 'index') + '" --debug-window "apps: ' + $name + '" --debug-launch --debug-quit'
+    if ($ProviderHarness) {
+        $installed = $ProviderHarness
+        $arguments = '"' + (Join-Path $work 'index') + '" "' + $name + '"'
+    }
     $app = Start-Process -FilePath $installed -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     if (-not $app.WaitForExit(60000)) { throw 'Installed app did not finish the catalog/launch check' }
     Get-Content $stdout
@@ -35,9 +40,12 @@ try {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while (-not (Test-Path $recordPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $record = Get-Content -Raw $recordPath | ConvertFrom-Json
+    Write-Output ($record | ConvertTo-Json -Depth 4 -Compress)
+    Write-Output ('Expected working directory: ' + $cwd)
     if ($record.cwd -ne $cwd -or $record.args[-1] -ne 'spaces العربية') { throw 'Shortcut arguments or working directory were changed' }
     if (-not (Get-Process -Id $record.pid -ErrorAction SilentlyContinue)) { throw 'Launched application ended with DigUp' }
-    Write-Output 'PASS: installed app discovers and launches a real shortcut; Unicode arguments/cwd preserved; application survives DigUp exit'
+    $mode = if ($ProviderHarness) { 'Native provider harness' } else { 'Installed WebView2 app' }
+    Write-Output ($mode + ': PASS: discovers and launches a real shortcut; Unicode arguments/cwd preserved; fixture survives parent exit')
 } finally {
     if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -ErrorAction SilentlyContinue }
     if ($record) { Stop-Process -Id $record.pid -ErrorAction SilentlyContinue }

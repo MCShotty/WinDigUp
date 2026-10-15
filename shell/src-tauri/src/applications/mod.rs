@@ -216,11 +216,16 @@ impl Catalog {
             "refreshing":self.refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})
     }
     pub fn configure(self: &Arc<Self>, options: Options) {
+        let was_enabled = self.enabled();
         *self.options.write().unwrap() = options;
         self.rebuild();
         (self.notify)(self.info());
         if self.enabled() {
-            self.refresh_if_stale();
+            if was_enabled {
+                self.refresh_if_stale();
+            } else {
+                self.refresh();
+            }
         }
     }
     fn rebuild(&self) {
@@ -306,6 +311,40 @@ impl Catalog {
         s.hits = hits;
         s.revision = revision;
     }
+    fn publish_names(&self, source: &str, result: Result<Vec<Record>, String>) {
+        let result = result.map(|mut records| {
+            let cache = self.cache.lock().unwrap();
+            let previous: BTreeMap<_, _> = cache
+                .sources
+                .get(source)
+                .into_iter()
+                .flatten()
+                .map(|r| (&r.id, r))
+                .collect();
+            for record in &mut records {
+                if let Some(old) = previous.get(&record.id) {
+                    if record.publisher.is_empty() {
+                        record.publisher = old.publisher.clone();
+                    }
+                    if record.description.is_empty()
+                        || old.description.starts_with(&record.description)
+                    {
+                        record.description = old.description.clone();
+                    }
+                    if record.keywords.is_empty() {
+                        record.keywords = old.keywords.clone();
+                    }
+                    if record.icon_revision.is_empty()
+                        || old.icon_revision.starts_with(&record.icon_revision)
+                    {
+                        record.icon_revision = old.icon_revision.clone();
+                    }
+                }
+            }
+            records
+        });
+        self.publish_source(source, result);
+    }
     fn publish_source(&self, source: &str, result: Result<Vec<Record>, String>) {
         match result {
             Ok(records) => {
@@ -322,6 +361,8 @@ impl Catalog {
                         .unwrap()
                         .errors
                         .insert("cache".into(), error.to_string());
+                } else {
+                    self.snapshot.write().unwrap().errors.remove("cache");
                 }
             }
             Err(error) => {
@@ -341,7 +382,7 @@ impl Catalog {
         std::fs::rename(tmp, self.root.join("catalog.json"))
     }
     pub fn start(self: &Arc<Self>) {
-        #[cfg(windows)]
+        #[cfg(all(windows, not(test)))]
         windows::watch(Arc::downgrade(self));
         self.refresh_if_stale();
     }
@@ -361,8 +402,17 @@ impl Catalog {
         }
         let service = self.clone();
         std::thread::spawn(move || {
-            #[cfg(windows)]
-            windows::scan(|source, result| service.publish_source(source, result));
+            #[cfg(all(windows, not(test)))]
+            windows::scan(
+                |source, result, complete| {
+                    if complete {
+                        service.publish_source(source, result);
+                    } else {
+                        service.publish_names(source, result);
+                    }
+                },
+                || service.enabled(),
+            );
             *service.last_refresh.lock().unwrap() = Some(Instant::now());
             service.refreshing.store(false, Ordering::SeqCst);
             (service.notify)(service.info());
@@ -583,6 +633,37 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+    #[test]
+    fn name_publication_retains_metadata_until_optional_enrichment_finishes() {
+        let root = std::env::temp_dir().join(format!("digup-app-metadata-{}", std::process::id()));
+        let c = Catalog::new(
+            root.clone(),
+            Options {
+                enabled: true,
+                ..Options::default()
+            },
+            |_| {},
+        );
+        let mut rich = record("Photo Studio", "photo");
+        rich.description = "Shortcut comment\nEdits photographs".into();
+        rich.publisher = "Example Publisher".into();
+        rich.icon_revision = "file-stamp:version-1".into();
+        c.publish_source("userPrograms", Ok(vec![rich.clone()]));
+        let before = c.documents();
+        let mut names = rich.clone();
+        names.publisher.clear();
+        names.description = "Shortcut comment".into();
+        names.icon_revision = "file-stamp:".into();
+        c.publish_names("userPrograms", Ok(vec![names.clone()]));
+        assert_eq!(before, c.documents());
+        names.description = "Updated purpose".into();
+        c.publish_source("userPrograms", Ok(vec![names]));
+        assert_ne!(
+            before["documents"][0]["hash"],
+            c.documents()["documents"][0]["hash"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn damaged_catalog_rebuild_preserves_annotations_and_icon_changes_preserve_documents() {
