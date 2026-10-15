@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path $PackageDirectory).Path
-foreach ($file in @('App.xbf', 'MainWindow.xbf')) {
+foreach ($file in @('App.xbf', 'MainWindow.xbf', 'Microsoft.UI.Xaml/Themes/themeresources.xbf')) {
     if (-not (Test-Path (Join-Path $package $file))) { throw "Published WinUI application is missing $file." }
 }
 New-Item $DiagnosticsDirectory -ItemType Directory -Force | Out-Null

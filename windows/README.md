@@ -65,7 +65,8 @@ The AMD package includes the Vulkan backend, compiled shaders, loader, and licen
 that the packaged helper starts and the Vulkan module loads without a development SDK on PATH.
 It also launches the published app from another working folder with only Windows directories on PATH,
 checks the visible search control, selects AMD through UI Automation, and invokes Quit. These launch checks
-run against both assembled distributions. Compiled XAML files are explicitly included in the publish output.
+run against both assembled distributions. Compiled XAML and expanded WinUI theme resources are explicitly
+included in the publish output with their original resource paths.
 `build-info.json` records the source commit, native build configuration and Vulkan SDK version.
 
 For AMD, download and extract **WinDigUp-Windows-x64-AMD-Vulkan**, install a current AMD graphics
