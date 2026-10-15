@@ -7,6 +7,7 @@
     <UseWinUI>true</UseWinUI>
     <DisableXbfLineInfo>false</DisableXbfLineInfo>
     <WindowsPackageType>None</WindowsPackageType>
+    <ProjectPriFileName>resources.pri</ProjectPriFileName>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -22,7 +23,7 @@
   <!-- WinUI marks compiled XAML and expanded framework PRI assets for the build output.
        Carry both into the unpackaged publish layout, preserving their resource paths. -->
   <Target Name="PublishWinUIResources" AfterTargets="ComputeFilesToPublish"
-          DependsOnTargets="Prep_ComputeProcessXamlFiles;AddPriPayloadFilesToCopyToOutputDirectoryItems">
+          DependsOnTargets="Prep_ComputeProcessXamlFiles;AddPriPayloadFilesToCopyToOutputDirectoryItems;_GenerateProjectPriFile">
     <AssignTargetPath Files="@(GeneratedXamlSrc)" RootFolder="$(XamlGeneratedOutputPath)">
       <Output TaskParameter="AssignedFiles" ItemName="_CompiledXamlToPublish" />
     </AssignTargetPath>
@@ -33,6 +34,10 @@
       </ResolvedFileToPublish>
       <ResolvedFileToPublish Include="@(_ExtraPriPayloadFiles)" Exclude="@(ResolvedFileToPublish)">
         <RelativePath>%(_ExtraPriPayloadFiles.TargetPath)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="$(ProjectPriFullPath)" Exclude="@(ResolvedFileToPublish)">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
     </ItemGroup>

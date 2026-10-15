@@ -4,11 +4,14 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path $PackageDirectory).Path
-foreach ($file in @('App.xbf', 'MainWindow.xbf', 'Microsoft.UI.Xaml/Themes/themeresources.xbf')) {
-    if (-not (Test-Path (Join-Path $package $file))) { throw "Published WinUI application is missing $file." }
-}
 New-Item $DiagnosticsDirectory -ItemType Directory -Force | Out-Null
 $diagnostics = (Resolve-Path $DiagnosticsDirectory).Path
+Get-ChildItem $package -Recurse -File | ForEach-Object {
+    "$($_.FullName.Substring($package.Length + 1)) ($($_.Length) bytes)"
+} | Set-Content (Join-Path $diagnostics 'package-files.txt')
+foreach ($file in @('App.xbf', 'MainWindow.xbf', 'resources.pri')) {
+    if (-not (Test-Path (Join-Path $package $file))) { throw "Published WinUI application is missing $file." }
+}
 $started = Get-Date
 $previousPath = $env:Path
 $process = $null

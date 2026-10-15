@@ -66,7 +66,8 @@ that the packaged helper starts and the Vulkan module loads without a developmen
 It also launches the published app from another working folder with only Windows directories on PATH,
 checks the visible search control, selects AMD through UI Automation, and invokes Quit. These launch checks
 run against both assembled distributions. Compiled XAML and expanded WinUI theme resources are explicitly
-included in the publish output with their original resource paths.
+included in the publish output with their original resource paths. The merged `resources.pri` index includes
+the framework's embedded themes.
 `build-info.json` records the source commit, native build configuration and Vulkan SDK version.
 
 For AMD, download and extract **WinDigUp-Windows-x64-AMD-Vulkan**, install a current AMD graphics
