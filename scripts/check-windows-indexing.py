@@ -4,6 +4,7 @@
 This checks orchestration and real file I/O. It loads no neural model and does not validate GPU/NPU execution.
 """
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ def main():
         direct = subprocess.run([str(helper), "index", str(documents), "--index", str(root / "direct"), "--limit", "1"],
             env=env, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=30)
         assert direct.returncode == 0, direct.stdout + direct.stderr
-        with sqlite3.connect(root / "direct" / "openvino-npu" / "index.sqlite") as db:
+        with closing(sqlite3.connect(root / "direct" / "openvino-npu" / "index.sqlite")) as db:
             rows = db.execute("SELECT path, state FROM files").fetchall()
             assert len(rows) == 1 and rows[0][1] == "done", f"Direct scan followed a junction or failed: {rows}"
         command = [str(args.app.resolve()), "--index", str(root / "index"), "--settings", str(settings),
@@ -67,7 +68,7 @@ def main():
         assert result.returncode == 0, result.returncode
         assert any("recipe.txt" in json.dumps(report) for report in reports), "Indexed note was not rendered in search"
         effective = root / "index" / "openvino-npu"
-        with sqlite3.connect(effective / "index.sqlite") as db:
+        with closing(sqlite3.connect(effective / "index.sqlite")) as db:
             rows = db.execute("SELECT path, state FROM files").fetchall()
             assert any(path.endswith("recipe.txt") and state == "done" for path, state in rows), rows
             assert len(rows) == 1, f"Junction cycle was crawled: {rows}"

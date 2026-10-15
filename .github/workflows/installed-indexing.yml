@@ -1,0 +1,63 @@
+name: Installed Windows indexing regression
+on:
+  pull_request:
+    paths:
+      - scripts/check-windows-indexing.py
+      - .github/workflows/installed-indexing.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed-indexing:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Find an installer with identical application and build sources
+        id: installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Only this workflow and its test script may differ. Any app/build/config change requires Packages to rebuild.
+          $allowed = @('scripts/check-windows-indexing.py', '.github/workflows/installed-indexing.yml')
+          $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/packages.yml/runs?per_page=30" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read package runs' }
+          foreach ($run in $runs.workflow_runs) {
+            git cat-file -e "$($run.head_sha)^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) { continue }
+            $changed = @(git diff --name-only $run.head_sha HEAD)
+            if ($LASTEXITCODE -ne 0 -or @($changed | Where-Object { $_ -notin $allowed }).Count) { continue }
+            $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/artifacts" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read package artifacts' }
+            if ($artifacts.artifacts | Where-Object { $_.name -eq 'DigUp-windows-x64' -and -not $_.expired }) {
+              "run=$($run.id)" >> $env:GITHUB_OUTPUT
+              "Installer source: $($run.head_sha); test source: $(git rev-parse HEAD)" >> $env:GITHUB_STEP_SUMMARY
+              break
+            }
+          }
+          if (-not (Select-String -Quiet -Path $env:GITHUB_OUTPUT -Pattern '^run=' -ErrorAction SilentlyContinue)) {
+            'No identical prebuilt application is available; the Packages workflow performs the installed regression after building.' >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.installer.outputs.run != ''
+        with:
+          name: DigUp-windows-x64
+          run-id: ${{ steps.installer.outputs.run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/indexing-installer
+      - name: Install and exercise real folder indexing
+        if: steps.installer.outputs.run != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem "$env:RUNNER_TEMP/indexing-installer" -Filter '*-setup.exe' -Recurse | Select-Object -First 1
+          if (-not $setup) { throw 'Installer artifact is missing its executable' }
+          $installation = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($installation.ExitCode -ne 0) { throw "Installer exited with $($installation.ExitCode)" }
+          python scripts/check-windows-indexing.py --app "$env:LOCALAPPDATA\DigUp\DigUp.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed indexing regression failed' }
