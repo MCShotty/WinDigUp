@@ -100,6 +100,22 @@ public enum Crawler {
                     report.skipped["app or bundle", default: 0] += 1
                     return
                 }
+                func localFileInfo() -> FileInfo? {
+                    guard let info = FileSystem.info(of: url.path), info.isRegular else {
+                        report.skipped["link or special file", default: 0] += 1
+                        return nil
+                    }
+                    if info.dataless || FileSystem.isInCloud(values) {
+                        report.skipped["in the cloud, not downloaded", default: 0] += 1
+                        return nil
+                    }
+                    return info
+                }
+                // These extensions require reading a media header to distinguish video from TypeScript. Check
+                // metadata first: opening a pipe can block forever; opening an offline placeholder can download it.
+                let readsHeader = ["ts", "mts", "m2ts"].contains(url.pathExtension.lowercased())
+                let checked = readsHeader ? localFileInfo() : nil
+                if readsHeader && checked == nil { return }
                 let classification = options.code ? Rules.classifyCode(url, options: options)
                     : Rules.classify(url, values: values, options: options)
                 switch classification {
@@ -108,15 +124,7 @@ public enum Crawler {
                 case .skip(let reason):
                     report.skipped[reason, default: 0] += 1
                 case .index(let kind):
-                    guard let info = FileSystem.info(of: url.path), info.isRegular else {
-                        report.skipped["link or special file", default: 0] += 1
-                        return
-                    }
-                    // Reading a dataless placeholder (iCloud "Optimize Mac Storage", File Providers) downloads it.
-                    if info.dataless || FileSystem.isInCloud(values) {
-                        report.skipped["in the cloud, not downloaded", default: 0] += 1
-                        return
-                    }
+                    guard let info = checked ?? localFileInfo() else { return }
                     if options.code {
                         // Too big to be written by hand; a notebook's file holds its outputs too.
                         let limit = url.pathExtension.lowercased() == "ipynb" ? options.maxNotebookBytes

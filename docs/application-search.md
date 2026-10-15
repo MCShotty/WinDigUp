@@ -37,6 +37,12 @@ establish the remaining cause on that installation; a hosted fixture passing is 
 report is resolved. Hosted checks include a 4,000-file mixed tree without inference and an installed one-document
 indexing flow with synthetic unit vectors. Real model indexing on the affected installation remains unverified.
 
+A separate scanner stall was reproduced with a named pipe ending in `.ts`: media header inspection happened before
+the regular-file/cloud-placeholder checks. Those checks now precede inspection for `.ts`, `.mts` and `.m2ts` so special
+files cannot block this read and offline files are not opened to sniff media content. Regression fixtures cover a
+pipe, ordinary video/document files, and the Windows offline attribute. The pipe reproduction establishes a scanner
+defect; it does not establish which file or phase is blocking the reported Windows installation.
+
 ## Windows supplies the catalog
 
 DigUp reads Windows Shell's AppsFolder and the current-user/shared Start menu Programs folders using Windows APIs.
