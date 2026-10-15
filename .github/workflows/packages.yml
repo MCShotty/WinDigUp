@@ -215,6 +215,8 @@ jobs:
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
+          # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
+          export PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
           swift test --filter AccelerationTests
           cd shell/src-tauri
           cargo test acceleration::tests --locked
