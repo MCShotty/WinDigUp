@@ -72,6 +72,9 @@ With the .deb, DigUp tells you when there's a new version and opens its release 
 
 ## Using it
 
+This fork adds accelerator-only AMD Vulkan (RDNA1/RX 5000 and newer), NVIDIA Vulkan and Intel OpenVINO NPU modes.
+See [acceleration setup, requirements and hardware validation limits](docs/acceleration.md).
+
 | Mac | Windows and Linux | What it does |
 |---|---|---|
 | ⇧⌘Space | Ctrl+Shift+Space | Opens the search panel from any app (you can change it) |

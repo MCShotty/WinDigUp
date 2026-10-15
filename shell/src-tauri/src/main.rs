@@ -5,6 +5,7 @@
 // behavior.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod acceleration;
 mod clipboard;
 mod code;
 mod editors;
@@ -152,10 +153,22 @@ impl Shell {
         Launch {
             program: self.options.helper.clone(),
             args,
-            env: self.options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())).collect(),
+            env: self.helper_environment(),
             log: Some(self.logs.join(log)),
             background: true,
         }
+    }
+
+    fn helper_environment(&self) -> Vec<(String, String)> {
+        let mut env = self.settings.lock().unwrap().acceleration.environment();
+        env.extend(self.options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())));
+        env
+    }
+
+    fn index_folder(&self) -> Option<PathBuf> {
+        self.options.index_folder().map(|folder| {
+            if self.settings.lock().unwrap().acceleration.backend == "openvino-npu" { folder.join("openvino-npu") } else { folder }
+        })
     }
 
     fn index_arguments(&self) -> Vec<String> {
@@ -177,7 +190,7 @@ impl Shell {
 
     /// Where the code index is (deleted when code search is turned off).
     fn code_index_files(&self) -> Vec<PathBuf> {
-        let Some(index) = self.options.index_folder() else { return Vec::new() };
+        let Some(index) = self.index_folder() else { return Vec::new() };
         ["", "-wal", "-shm"].iter().map(|end| index.join(format!("code.sqlite{end}"))).collect()
     }
 
@@ -627,7 +640,7 @@ fn main() {
             app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses
+            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -675,7 +688,8 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         Launch {
             program: options.helper.clone(),
             args: search_args,
-            env: options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())).collect(),
+            env: settings.acceleration.environment().into_iter().chain(options.models.iter().map(|models|
+                ("DIGUP_MODELS".to_string(), models.display().to_string()))).collect(),
             log: Some(logs.join("search.log")),
             background: false,   // it answers typing
         },
@@ -854,7 +868,7 @@ fn watch_folders(app: &AppHandle) {
         (settings.skipped.iter().map(PathBuf::from).collect(), settings.code_skipped.iter().map(PathBuf::from).collect())
     };
     changed(app);
-    let index = shell.options.index_folder();
+    let index = shell.index_folder();
     *shell.watcher.lock().unwrap() = (!folders.is_empty()).then(|| {
         let app = app.clone();
         FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::MAX, move || run_index(&app))
@@ -1190,6 +1204,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     json!({
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
+        "acceleration": settings.acceleration,
         "centered": shell.settings.lock().unwrap().center_panel,
         // Windows' tray reports clicks (Linux's open the menu, a Mac's too).
         "canChooseTrayClick": cfg!(windows),
@@ -1222,7 +1237,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
 
 /// Where the model and the index are, and how big the index is on disk (its database and write-ahead log).
 fn storage(shell: &Shell) -> Value {
-    let index = shell.options.index_folder();
+    let index = shell.index_folder();
     let size = |name: &str| -> u64 {
         let Some(index) = &index else { return 0 };
         ["", "-wal", "-shm"].iter().filter_map(|end| std::fs::metadata(index.join(format!("{name}{end}"))).ok()).map(|file| file.len()).sum()
@@ -1424,6 +1439,22 @@ fn set_update_checks(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), Strin
     let mut settings = shell.settings.lock().unwrap();
     settings.update_checks_off = !on;
     settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
+}
+
+/// Applying an inference configuration restarts all helpers together so query and index vectors cannot mix runtimes.
+#[tauri::command]
+fn set_acceleration(app: AppHandle, shell: State<'_, Arc<Shell>>, acceleration: acceleration::Acceleration) -> Result<(), String> {
+    acceleration.validate()?;
+    {
+        let mut settings = shell.settings.lock().unwrap();
+        let mut updated = settings.clone();
+        updated.acceleration = acceleration;
+        updated.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        *settings = updated;
+    }
+    stop_helpers(&app);
+    helper::end_all();
+    app.restart();
 }
 
 /// Settings → Code: the editor code results open in (an editor's id, or "default" for the file's default app).
@@ -1831,6 +1862,7 @@ fn measure_then_index(app: &AppHandle) {
         if let Some(models) = &shell.options.models {
             command.env("DIGUP_MODELS", models);
         }
+        command.envs(shell.helper_environment());
         // Its reply goes to speed.log after what it said on the way (the model's own lines go to the index's worker.log).
         let log = std::fs::OpenOptions::new().create(true).append(true).open(shell.logs.join("speed.log")).ok();
         if let Some(log) = log.as_ref().and_then(|log| log.try_clone().ok()) {

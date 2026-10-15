@@ -41,6 +41,12 @@ for (const button of document.querySelectorAll("#tabs button")) button.onclick =
 // MARK: General
 
 function renderGeneral() {
+  const acceleration = info.acceleration || { backend: "vulkan" };
+  $("accelerator").value = acceleration.backend;
+  $("gpu-device").value = acceleration.gpu || "";
+  $("npu-python").value = acceleration.python || "";
+  $("npu-models").value = acceleration.models || "";
+  showAcceleratorOptions();
   $("login-option").hidden = !info.canOpenAtLogin;
   $("login").checked = info.openAtLogin;
   $("tray-click-option").hidden = !info.canChooseTrayClick;
@@ -57,6 +63,25 @@ function renderGeneral() {
   $("recording").hidden = !recording;
   renderUpdates();
 }
+
+function showAcceleratorOptions() {
+  const npu = $("accelerator").value === "openvino-npu";
+  $("npu-options").hidden = !npu;
+  $("gpu-options").hidden = npu;
+}
+$("accelerator").onchange = showAcceleratorOptions;
+$("apply-accelerator").onclick = async () => {
+  $("apply-accelerator").disabled = true;
+  try {
+    await invoke("set_acceleration", { acceleration: {
+      backend: $("accelerator").value, gpu: $("gpu-device").value.trim(),
+      python: $("npu-python").value.trim(), models: $("npu-models").value.trim(),
+    } });
+  } catch (error) {
+    fail(error);
+    $("apply-accelerator").disabled = false;
+  }
+};
 
 /// Updates: the daily check, and this version or the one waiting (updates.rs).
 function renderUpdates() {
@@ -503,7 +528,8 @@ async function start() {
   // Debug runs (--debug-settings): the page is up.
   if (info.debug) {
     invoke("debug_report", { report: { settings: true, hotkey: info.hotkey, openAtLogin: info.openAtLogin,
-                                       canOpenAtLogin: info.canOpenAtLogin, folders: info.folders } }).catch(() => {});
+                                       canOpenAtLogin: info.canOpenAtLogin, folders: info.folders,
+                                       accelerator: $("accelerator").value, cpuOption: Boolean($("accelerator").querySelector('option[value="cpu"]')) } }).catch(() => {});
   }
   const asked = new URLSearchParams(location.search).get("tab");   // dev snapshots: ?tab=folders
   showTab(asked || "general");

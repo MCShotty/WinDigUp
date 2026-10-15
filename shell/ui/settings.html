@@ -43,6 +43,32 @@
         </span>
       </label>
 
+      <h3>Model acceleration</h3>
+      <label for="accelerator">Inference device</label>
+      <select class="field" id="accelerator">
+        <option value="vulkan">Vulkan GPU — automatic hardware selection</option>
+        <option value="amd-vulkan">AMD Vulkan — RDNA1 / RX 5000 and newer</option>
+        <option value="nvidia-vulkan">NVIDIA Vulkan</option>
+        <option value="openvino-npu">Intel NPU — OpenVINO</option>
+        <option value="metal">Apple Metal</option>
+      </select>
+      <div id="gpu-options">
+        <label for="gpu-device">GPU device (optional)</label>
+        <input class="field" id="gpu-device" placeholder="Automatic, or Vulkan0 / Vulkan1" spellcheck="false">
+      </div>
+      <div id="npu-options" hidden>
+        <label for="npu-python">OpenVINO Python executable</label>
+        <input class="field" id="npu-python" placeholder="C:\DigUpNPU\.venv\Scripts\python.exe" spellcheck="false">
+        <label for="npu-models">Exported EmbeddingGemma 2 bundle folder</label>
+        <input class="field" id="npu-models" placeholder="C:\DigUpNPU\models" spellcheck="false">
+        <p class="note">Prepare the model with worker/openvino/export_model.py in the fork. Intel's NPU driver is required.
+          NPU vectors use a separate index.</p>
+      </div>
+      <p class="note">Text, image and audio model inference stays on the selected accelerator, including pooling and
+        normalization. Unsupported operations or missing hardware stop inference. CPU fallback is disabled.
+        File reading, decoding, tokenization and the app still use the CPU.</p>
+      <button id="apply-accelerator">Apply and Restart DigUp</button>
+
       <h3>The shortcut</h3>
       <div class="keys" id="keys"></div>
       <button class="link" id="change-shortcut" hidden>Change Shortcut…</button>
