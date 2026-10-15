@@ -75,12 +75,11 @@ class ApplicationSearch {
     for (const name of ["applications", "applications-progress"]) {
       tauri.event.listen(name, ({ payload }) => {
         if (!this.active) return;
-        if (name === "applications-progress") this.semantic = payload;
+        if (name === "applications") { this.refresh(); return; }
+        this.semantic = payload;
         clearTimeout(this.refreshTimer);
         this.refreshTimer = setTimeout(() => {
-          if (name === "applications-progress") {
-            this.changed(); if (this.hits.length <= this.limit && this.text) this.request(true, true);
-          } else this.request(false, true).then(() => this.request(true, true));
+          this.changed(); if (this.text) this.request(true, true, false, Math.max(this.limit, this.hits.length));
         }, 250);
       }).then((stop) => this.unlisten.push(stop));
     }
@@ -93,18 +92,39 @@ class ApplicationSearch {
     this.request(false);
     if (text) this.timer = setTimeout(() => this.request(true), 120);
   }
-  async request(meaning, passive = false, append = false) {
+  refresh() {
+    if (!this.active) return;
+    const wanted = Math.max(this.limit, this.hits.length);
+    this.epoch++; this.finalEpoch = -1; clearTimeout(this.timer);
+    const epoch = this.epoch;
+    return this.request(false, true, false, wanted).then(() => {
+      if (epoch === this.epoch) return this.request(true, true, false, wanted);
+    });
+  }
+  async request(meaning, passive = false, append = false, wanted = this.limit) {
     if (!this.active || (meaning && !this.text)) return;
-    if (meaning && this.semanticBusy) { this.semanticQueued = {epoch:this.epoch,passive,append}; return; }
+    if (meaning && this.semanticBusy) {
+      if (!this.semanticQueued?.append || append || this.semanticQueued.epoch !== this.epoch) this.semanticQueued = {epoch:this.epoch,passive,append,wanted};
+      return;
+    }
     if (meaning) this.semanticBusy = true;
     const epoch = this.epoch;
     try {
-      const reply = await invoke("search_apps", { q: this.text, meaning, generation: epoch,
-        limit: this.limit, offset: append ? this.hits.length : 0, passive });
+      const page = (offset, limit) => invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive });
+      const reply = await page(append ? this.hits.length : 0, this.limit);
       if (epoch !== this.epoch || reply.generation !== epoch) return;
+      if (append && this.catalog.revision && reply.catalog?.revision !== this.catalog.revision) { this.refresh(); return; }
+      const hits = reply.hits || [];
+      while (!append && hits.length < wanted && hits.length < reply.total) {
+        const next = await page(hits.length, Math.min(this.limit, wanted - hits.length));
+        if (epoch !== this.epoch || next.generation !== epoch) return;
+        if (next.catalog?.revision !== reply.catalog?.revision) { this.refresh(); return; }
+        if (!next.hits?.length) break;
+        hits.push(...next.hits);
+      }
       if (!meaning && this.finalEpoch === epoch && !passive) return;
       if (meaning) this.finalEpoch = epoch;
-      this.hits = append ? [...this.hits, ...reply.hits.filter(h => !this.hits.some(old => old.id === h.id))] : reply.hits || [];
+      this.hits = append ? [...this.hits, ...hits.filter(h => !this.hits.some(old => old.id === h.id))] : hits;
       this.total = reply.total || 0; this.semantic = reply.semantic || {}; this.catalog = reply.catalog || {};
       Apps.enabled = this.catalog.enabled !== false;
       this.error = null; this.changed();
@@ -115,7 +135,7 @@ class ApplicationSearch {
       if (meaning) {
         this.semanticBusy = false;
         const queued = this.semanticQueued; this.semanticQueued = null;
-        if (queued?.epoch === this.epoch) this.request(true, queued.passive, queued.append);
+        if (queued?.epoch === this.epoch) this.request(true, queued.passive, queued.append, queued.wanted);
       }
     }
   }

@@ -251,7 +251,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
-          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
       - name: Installed application discovery and launch
         shell: pwsh
         run: scripts/check-windows-applications.ps1

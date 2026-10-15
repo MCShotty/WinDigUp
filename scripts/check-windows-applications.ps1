@@ -12,15 +12,12 @@ try {
     New-Item -ItemType Directory -Force $work | Out-Null
     $cwd = Join-Path $work 'Working folder العربية'
     New-Item -ItemType Directory $cwd | Out-Null
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $fixture
-    $shortcut.Arguments = '--record "' + $recordPath + '" --token "spaces العربية"'
-    $shortcut.WorkingDirectory = $cwd
-    $shortcut.Description = 'Disposable application launch integration fixture'
-    $shortcut.Save()
-    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null
-    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+    $compiledFixture = $fixture
+    $fixture = Join-Path $work 'Fixture العربية.exe'
+    Copy-Item $compiledFixture $fixture
+    $creationArgs = '--create-shortcut "' + $shortcutPath + '" "' + $recordPath + '" "' + $cwd + '"'
+    $creation = Start-Process -FilePath $fixture -ArgumentList $creationArgs -PassThru -Wait
+    if ($creation.ExitCode -ne 0) { throw 'Could not create the Unicode fixture shortcut' }
     $settings = Join-Path $work 'settings.json'
     [IO.File]::WriteAllText($settings, '{"setUp":true,"updateChecksOff":true,"applications":{"enabled":true,"semanticEnabled":false},"acceleration":{"backend":"openvino-npu"}}', [Text.UTF8Encoding]::new($false))
     $stdout = Join-Path $work 'ui.json'
@@ -42,7 +39,7 @@ try {
     $record = Get-Content -Raw $recordPath | ConvertFrom-Json
     Write-Output ($record | ConvertTo-Json -Depth 4 -Compress)
     Write-Output ('Expected working directory: ' + $cwd)
-    if ($record.cwd -ne $cwd -or $record.args[-1] -ne 'spaces العربية') { throw 'Shortcut arguments or working directory were changed' }
+    if ($record.cwd -ne $cwd -or $record.args[0] -ne $fixture -or $record.args[-1] -ne 'spaces العربية') { throw 'Shortcut target, arguments or working directory were changed' }
     if (-not (Get-Process -Id $record.pid -ErrorAction SilentlyContinue)) { throw 'Launched application ended with DigUp' }
     $mode = if ($ProviderHarness) { 'Native provider harness' } else { 'Installed WebView2 app' }
     Write-Output ($mode + ': PASS: discovers and launches a real shortcut; Unicode arguments/cwd preserved; fixture survives parent exit')

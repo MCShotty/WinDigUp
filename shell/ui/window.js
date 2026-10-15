@@ -208,18 +208,22 @@ function chip(title, icon, count, selected, action, number) {
 }
 
 function renderContent() {
+  const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
+  state.renderedGeneration = state.generation;
   thumbnails.disconnect();
   $content.replaceChildren();
-  $content.scrollTop = 0;
-  if (isAppsMode()) { $content.append(applicationGroup()); return; }
-  if (applicationSearch.hits.length) $content.append(applicationGroup());
-  if (!state.info.folders.length) $content.append(chooseFolders());
-  else if (!state.query.trim()) $content.append(home());
-  else if (state.codePhase) $content.append(codeHintOrOff());
-  else if (!state.hasResults || state.filesPending) $content.append(centered(element("div", "spinner")));
-  else if (!state.ranked.length && !state.weaker.length) $content.append(nothingFound());
-  else if (isCode()) $content.append(codeList());
-  else $content.append(grid());
+  if (isAppsMode()) $content.append(applicationGroup());
+  else {
+    if (applicationSearch.hits.length) $content.append(applicationGroup());
+    if (!state.info.folders.length) $content.append(chooseFolders());
+    else if (!state.query.trim()) $content.append(home());
+    else if (state.codePhase) $content.append(codeHintOrOff());
+    else if (!state.hasResults || state.filesPending) $content.append(centered(element("div", "spinner")));
+    else if (!state.ranked.length && !state.weaker.length) $content.append(nothingFound());
+    else if (isCode()) $content.append(codeList());
+    else $content.append(grid());
+  }
+  $content.scrollTop = scroll;
 }
 
 function applicationGroup() {

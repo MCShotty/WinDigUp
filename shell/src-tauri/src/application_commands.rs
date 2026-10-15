@@ -112,7 +112,7 @@ pub async fn search_apps(
         }
         .await;
         match result {
-            Ok(reply) => {
+            Ok(mut reply) => {
                 hits = shell
                     .applications
                     .search(q.trim(), include_hidden.unwrap_or(false));
@@ -120,6 +120,10 @@ pub async fn search_apps(
                     hits,
                     reply["hits"].as_array().map(Vec::as_slice).unwrap_or(&[]),
                 );
+                // Internal candidate IDs are unpaginated. Cache/report only bounded native hits plus preparation state.
+                if let Some(state) = reply.as_object_mut() {
+                    state.remove("hits");
+                }
                 semantic = reply;
                 if !shell.applications.semantic_enabled() {
                     hits = shell

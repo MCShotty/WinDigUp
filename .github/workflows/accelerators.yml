@@ -14,7 +14,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
-          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
           cargo build --release --manifest-path tests/applications/native/Cargo.toml --bin application-provider-check --locked
           cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
       - name: Discover a shortcut, launch and verify its arguments/cwd/lifetime

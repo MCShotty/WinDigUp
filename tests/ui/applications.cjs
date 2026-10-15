@@ -98,6 +98,11 @@ async function setup(page, platform='Win32') {
   await page.waitForFunction(()=>document.querySelectorAll('.app-row').length===150);
   await page.locator('.app-row').nth(120).click();await page.press('#query','Enter');
   assert.equal((await page.evaluate(()=>window.calls.filter(c=>c.command==='launch_app').at(-1).args)).appId,`app:${(120).toString(16).padStart(64,'0')}`);
+  await page.evaluate(()=>{window.calls=[];window.emit('applications',{supported:true,enabled:true,count:150});});
+  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='search_apps').length>=2);
+  await page.waitForFunction(()=>document.querySelectorAll('.app-row').length===150);
+  assert.equal(await page.locator('.app-row.selected').getAttribute('data-result-key'),`app:${(120).toString(16).padStart(64,'0')}`);
+  assert.ok(await page.locator('#content').evaluate(el=>el.scrollTop>0),'Catalog refresh lost the paginated scroll position');
   await page.fill('#query','photo');
   await page.waitForSelector('.app-row');
   assert.equal(await page.locator('.cell').count(),0);

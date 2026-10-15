@@ -6,7 +6,7 @@ mod windows;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -450,13 +450,14 @@ impl Catalog {
             return Vec::new();
         }
         let s = self.snapshot.read().unwrap();
-        words.retain(|word| s.hits.iter().any(|h| h.id == word.id && !h.hidden));
+        let live: HashMap<_, _> = s.hits.iter().map(|h| (h.id.as_str(), h)).collect();
+        words.retain(|word| live.get(word.id.as_str()).is_some_and(|h| !h.hidden));
         let mut seen: HashSet<String> = words.iter().map(|h| h.id.clone()).collect();
         for row in semantic {
             if let Some(id) = row["id"].as_str() {
                 if seen.insert(id.into()) {
-                    if let Some(hit) = s.hits.iter().find(|h| h.id == id && !h.hidden) {
-                        let mut h = hit.clone();
+                    if let Some(hit) = live.get(id).filter(|h| !h.hidden) {
+                        let mut h = (**hit).clone();
                         h.reason = "semantic".into();
                         words.push(h);
                     }

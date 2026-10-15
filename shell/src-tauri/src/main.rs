@@ -1047,6 +1047,7 @@ fn remake_panel(app: &AppHandle) {
 }
 
 fn show_panel(app: &AppHandle) {
+    app.state::<Arc<Shell>>().applications.refresh_if_stale();
     if !app.state::<Arc<Shell>>().is_set_up() {
         later(app, |app| {
             let _ = show_setup(app);
@@ -1087,6 +1088,7 @@ fn toggle_panel(app: &AppHandle) {
 /// `window_search`: a new window takes it as it loads, an open one is told.
 fn show_window(app: &AppHandle) -> tauri::Result<()> {
     let shell = app.state::<Arc<Shell>>().inner().clone();
+    shell.applications.refresh_if_stale();
     if let Some(window) = app.get_webview_window(WINDOW) {
         if let Some((query, kind)) = shell.window_search.lock().unwrap().take() {
             let _ = window.emit("window-search", json!({"query": query, "kind": kind}));
