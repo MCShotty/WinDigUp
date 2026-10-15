@@ -19,7 +19,9 @@ internal static class StartupDiagnostics
 
     public static void Report(Exception error)
     {
-        Write(error.ToString());
+        Write($"HRESULT 0x{error.HResult:X8}: {error}");
+        foreach (System.Collections.DictionaryEntry detail in error.Data)
+            Write($"{detail.Key}: {detail.Value}");
         if (Interlocked.Exchange(ref _reported, 1) != 0) return;
         MessageBox(0, $"WinDigUp could not start.\n\n{error.Message}\n\nDetails: {Path.Combine(Settings.DataDirectory, "startup.log")}",
             "WinDigUp startup error", 0x10);

@@ -12,7 +12,12 @@ public partial class App : Application
         {
             if (args.ExceptionObject is Exception error) StartupDiagnostics.Report(error);
         };
-        UnhandledException += (_, args) => StartupDiagnostics.Report(args.Exception);
+        UnhandledException += (_, args) =>
+        {
+            StartupDiagnostics.Write(args.Message);
+            StartupDiagnostics.Report(args.Exception);
+        };
+        DebugSettings.XamlResourceReferenceFailed += (_, args) => StartupDiagnostics.Write(args.Message);
         StartupDiagnostics.Write($"Starting {typeof(App).Assembly.GetName().Version} on {Environment.OSVersion}");
         try { InitializeComponent(); }
         catch (Exception error) { StartupDiagnostics.Report(error); throw; }
