@@ -25,7 +25,9 @@ jobs:
       - name: Native catalog and helper transport fixtures
         if: ${{ !cancelled() && steps.provider_build.outcome == 'success' }}
         shell: bash
-        run: cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
   policy:
     runs-on: ubuntu-24.04
     steps:
