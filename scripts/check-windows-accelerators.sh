@@ -5,7 +5,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 setup=${1:?the installer}
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+cleanup() {
+  if [[ -n ${app:-} ]] && kill -0 "$app" 2>/dev/null; then kill "$app" 2>/dev/null || true; fi
+  # Windows releases the helper's database handles asynchronously after the parent exits.
+  for attempt in {1..20}; do
+    rm -rf "$work" 2>/dev/null && return
+    sleep 0.25
+  done
+}
+trap cleanup EXIT
 win() { cygpath -m "$1"; }
 MSYS_NO_PATHCONV=1 "$setup" /S
 installed=$(cygpath -u "$LOCALAPPDATA")/DigUp
@@ -38,7 +46,7 @@ cat > "$work/settings.json" <<'JSON'
 {"setUp":true,"updateChecksOff":true,"acceleration":{"backend":"openvino-npu"}}
 JSON
 "$installed/DigUp.exe" --settings "$(win "$work/settings.json")" --index "$(win "$work/index")" \
-  --debug-settings --debug-quit > "$work/ui.txt" 2> "$work/ui-error.txt" &
+  --debug-window "" --debug-settings --debug-quit > "$work/ui.txt" 2> "$work/ui-error.txt" &
 app=$!
 started=$(date +%s)
 while kill -0 "$app" 2>/dev/null && (( $(date +%s) - started < 90 )); do sleep 1; done
