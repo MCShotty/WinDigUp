@@ -259,6 +259,10 @@ jobs:
         if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         shell: pwsh
         run: python scripts/check-app-protocol.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe"
+      - name: Installed folder indexing (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: python scripts/check-windows-indexing.py --app "$env:LOCALAPPDATA\DigUp\DigUp.exe"
       - name: Swift and Rust policy checks
         if: ${{ !cancelled() && steps.package_build.outcome == 'success' }}
         shell: bash
