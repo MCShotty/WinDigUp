@@ -1,0 +1,41 @@
+name: Accelerator policy and model conversion
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Pinned native runtime and execution guard
+        run: |
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch b11461 https://github.com/ggml-org/llama.cpp /tmp/llama
+          test "$(git -C /tmp/llama rev-parse HEAD)" = 4d756bc72bf00a4aacf410ae15a2d315f3db400d
+          git -C /tmp/llama apply "$PWD/scripts/llama.cpp-no-logits.patch" "$PWD/scripts/llama.cpp-accelerator-only.patch"
+          cmake -S /tmp/llama -B /tmp/native -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF \
+            -DGGML_ACCELERATOR_ONLY=ON -DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_COMMON=OFF \
+            -DLLAMA_BUILD_MTMD=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_CURL=OFF
+          cmake --build /tmp/native -j 4
+          g++ -std=c++17 -I /tmp/llama/ggml/include tests/native/accelerator-only.cpp \
+            -L /tmp/native/bin -Wl,-rpath,/tmp/native/bin -lggml -lggml-base -o /tmp/guard
+          /tmp/guard
+      - name: Tiny real EmbeddingGemma 2 conversion and strict NPU tests
+        run: |
+          python3 -m venv /tmp/ov
+          /tmp/ov/bin/pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
+          /tmp/ov/bin/pip install -r worker/openvino/requirements.txt pytest==9.1.1
+          /tmp/ov/bin/python -m pytest worker/openvino/tests -q
+      - name: Script checks
+        run: |
+          node --check shell/ui/settings.js
+          bash -n scripts/build-llama.sh scripts/check-windows-accelerators.sh scripts/package-windows.sh
+      - name: Settings in a real browser
+        run: |
+          npm install --prefix /tmp/digup-ui --no-audit --no-fund playwright@1.61.1
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory shell/ui > /tmp/ui-server.log 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome node tests/ui/acceleration.cjs

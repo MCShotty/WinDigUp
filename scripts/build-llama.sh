@@ -4,8 +4,8 @@
 # Metal shaders are embedded and compiled on first use, so no Metal toolchain is needed. CMake comes from PATH, or from
 # a venv in Vendor/ (needs uv). Does nothing when that build is already there; build.sh runs it every time.
 # On Linux and Windows it builds shared libraries instead, with ggml's backends as modules loaded at run
-# time (GGML_BACKEND_DL): the CPU variants always, CUDA when nvcc is found (CUDACXX, or on PATH; CUDA_ARCHS picks the GPU
-# architectures, default native), else Vulkan when its SDK is. LLAMA_SOURCE / LLAMA_BUILD point at an existing clone and
+# time (GGML_BACKEND_DL): CPU variants for host storage, Vulkan for hardware inference. Its SDK is required.
+# LLAMA_SOURCE / LLAMA_BUILD point at an existing clone and
 # build folder. On Windows it runs in Git for Windows' bash inside the MSVC environment (vcvars64) and
 # leaves DLLs with their import libraries.
 set -euo pipefail
@@ -16,20 +16,20 @@ COMMIT=4d756bc72bf00a4aacf410ae15a2d315f3db400d   # TAG's commit: a tag can be m
 # kept. If it fails, keep this TAG, or bump LlamaEmbedder.vectorVersion and write the reference vectors again
 # (DIGUP_WRITE_REFERENCE=1 swift test --filter ReferenceVectorTests): every index then embeds again.
 PATCH=scripts/llama.cpp-no-logits.patch
+STRICT_PATCH=scripts/llama.cpp-accelerator-only.patch
 SOURCE="${LLAMA_SOURCE:-Vendor/llama.cpp}"
 BUILD="${LLAMA_BUILD:-Vendor/llama-build}"
 OUT=Vendor/llama
 OS=$(uname -s)
 if [[ $OS == Darwin ]]; then
   FLAVOR=metal
-elif command -v "${CUDACXX:-nvcc}" > /dev/null; then
-  FLAVOR=cuda
 elif command -v glslc > /dev/null; then
   FLAVOR=vulkan
 else
-  FLAVOR=cpu
+  echo "Vulkan SDK (glslc) required. CPU-only production builds are disabled." >&2
+  exit 1
 fi
-STAMP="$TAG $(shasum -a 256 "$PATCH" 2>/dev/null | cut -c1-12 || sha256sum "$PATCH" | cut -c1-12) $FLAVOR"
+STAMP="$TAG $(cat "$0" "$PATCH" "$STRICT_PATCH" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-12) $FLAVOR accelerator-only"
 if [[ ( -f "$OUT/lib/libllamacpp.a" || -f "$OUT/lib/libllama.so" || -f "$OUT/lib/llama.dll" ) \
       && "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then
   exit 0
@@ -52,12 +52,14 @@ if [[ "$(git -C "$SOURCE" rev-parse HEAD)" != "$COMMIT" ]]; then
 fi
 # Without the patch, every input token costs 1 MiB of logits that an embedding model never produces (262k vocabulary).
 # Its path is absolute: git -C reads a relative one from the source folder, which LLAMA_SOURCE can put anywhere.
-if git -C "$SOURCE" apply --check "$PWD/$PATCH" 2>/dev/null; then
-  git -C "$SOURCE" apply "$PWD/$PATCH"
-elif ! git -C "$SOURCE" apply --reverse --check "$PWD/$PATCH" 2>/dev/null; then
-  echo "$PATCH doesn't apply to $SOURCE, and isn't applied already: not building it" >&2
-  exit 1
-fi
+for patch in "$PATCH" "$STRICT_PATCH"; do
+  if git -C "$SOURCE" apply --check "$PWD/$patch" 2>/dev/null; then
+    git -C "$SOURCE" apply "$PWD/$patch"
+  elif ! git -C "$SOURCE" apply --reverse --check "$PWD/$patch" 2>/dev/null; then
+    echo "$patch doesn't apply to $SOURCE, and isn't applied already: not building it" >&2
+    exit 1
+  fi
+done
 
 if ! command -v cmake > /dev/null; then
   if [[ ! -x Vendor/cmake-venv/bin/cmake ]]; then
@@ -70,7 +72,7 @@ if [[ $OS == Darwin ]]; then
   GENERATOR=$(command -v ninja > /dev/null && echo Ninja || echo "Unix Makefiles")
   # Only the libraries: no tools, no server, nothing downloaded at build time.
   cmake -S "$SOURCE" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-    -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_MTMD=ON \
+    -DBUILD_SHARED_LIBS=OFF -DGGML_ACCELERATOR_ONLY=ON -DGGML_OPENMP=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_MTMD=ON \
     -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
     -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF > /dev/null
   cmake --build "$BUILD" --config Release -j "$(sysctl -n hw.ncpu)" --target llama mtmd > /dev/null
@@ -104,13 +106,12 @@ else
     fi
   fi
   case $FLAVOR in
-    cuda) GPU=(-DGGML_CUDA=ON "-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS:-native}") ;;
     vulkan) GPU=(-DGGML_VULKAN=ON) ;;
     *) GPU=() ;;
   esac
   # Shared libraries, the backends as modules (every CPU variant, so one build fits any x86-64 or arm64 machine).
   cmake -S "$SOURCE" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release "${COMPILERS[@]}" \
-    -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF "${GPU[@]}" \
+    -DBUILD_SHARED_LIBS=ON -DGGML_ACCELERATOR_ONLY=ON -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF "${GPU[@]}" \
     -DLLAMA_BUILD_MTMD=ON -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF \
     -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF \
     -DLLAMA_CURL=OFF > /dev/null

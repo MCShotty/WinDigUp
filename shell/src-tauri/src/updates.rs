@@ -165,6 +165,15 @@ pub async fn check(app: &AppHandle, asked: bool) {
         let _ = settings.save(&shell.settings_path);
     }
     match result {
+        Ok(Some(update)) if !crate::acceleration::compatible_update(update.download_url.as_str()) => {
+            log(&shell, "ignored an upstream package: this fork requires its own accelerator-only releases");
+            *shell.updates.found.lock().unwrap() = None;
+            changed(app);
+            if asked {
+                app.dialog().message("No accelerator-only update is available from this fork.")
+                    .title("DigUp Updates").show(|_| {});
+            }
+        }
         Ok(Some(update)) => {
             log(&shell, &format!("found {} ({})", update.version, update.download_url));
             *shell.updates.found.lock().unwrap() = Some(update);

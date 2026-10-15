@@ -19,7 +19,7 @@ public final class LlamaEmbedder: Embedder {
     /// when the vectors do, and `ReferenceVectorTests` says when that is: every llama.cpp update must reproduce the
     /// reference vectors, or come with a new version here (then every index embeds again). Indexes record this, not the
     /// llama.cpp build, so an update that leaves the vectors alone keeps them (b11461 made version 1).
-    public static let vectorVersion = 1
+    public static let vectorVersion = 2 // pooling and L2 normalization now execute on the accelerator
 
     /// The llama.cpp release this was built with (`scripts/build-llama.sh`), for logs.
     public static let buildTag = LLAMA_BUILD_TAG
@@ -48,14 +48,28 @@ public final class LlamaEmbedder: Embedder {
     public init(models: LlamaModels, textOnly: Bool, log: URL? = nil) throws {
         let started = Date()
         LlamaLog.shared.send(to: log)
+        let acceleration = try Acceleration.selected()
+        guard acceleration != .openvinoNPU else { throw WorkerError.failed("OpenVINO requires the NPU worker") }
         _ = Self.backend
+        guard ggml_backend_accelerator_only() else {
+            throw WorkerError.failed("The loaded ggml library does not enforce accelerator-only execution")
+        }
+        let device = try Self.selectDevice(acceleration)
+        let deviceName = String(cString: ggml_backend_dev_description(device))
         guard textOnly || models.media != nil else {
             throw WorkerError.notFound("\(LlamaModels.mediaFile) (images and audio) isn't downloaded yet")
         }
         var modelParams = llama_model_default_params()
-        modelParams.n_gpu_layers = Self.cpuOnly ? 0 : 999
-        guard let model = llama_model_load_from_file(models.text.path, modelParams) else {
-            throw WorkerError.failed("can't load \(models.text.path)")
+        modelParams.n_gpu_layers = 999
+        modelParams.split_mode = LLAMA_SPLIT_MODE_NONE
+        // Pin the text and both media encoders to the same physical device. Never pick another backend implicitly.
+        var devices: [ggml_backend_dev_t?] = [device, nil]
+        let loaded = devices.withUnsafeMutableBufferPointer { pinned -> OpaquePointer? in
+            modelParams.devices = pinned.baseAddress
+            return llama_model_load_from_file(models.text.path, modelParams)
+        }
+        guard let model = loaded else {
+            throw WorkerError.failed("can't load the complete model on \(deviceName); CPU fallback is disabled")
         }
         // One input must fit one micro-batch: 2048 tokens (the reference's cut), which also holds a 1120-token image or
         // a 750-token 30 s clip. Queries are short, so the query encoder reserves less and cuts at 512.
@@ -68,6 +82,8 @@ public final class LlamaEmbedder: Embedder {
         params.kv_unified = true   // each input may use the whole context, as in llama-embedding
         params.embeddings = true
         params.pooling_type = LLAMA_POOLING_TYPE_MEAN
+        params.op_offload = true
+        params.offload_kqv = true
         #if !os(macOS)
         params.n_threads = Self.threads
         params.n_threads_batch = Self.threads
@@ -79,7 +95,8 @@ public final class LlamaEmbedder: Embedder {
         var media: OpaquePointer?
         if let mediaFile = models.media, !textOnly {
             var mediaParams = mtmd_context_params_default()
-            mediaParams.use_gpu = !Self.cpuOnly
+            mediaParams.use_gpu = true
+            mediaParams.device = device
             mediaParams.print_timings = false
             mediaParams.warmup = true
             mediaParams.image_min_tokens = 1      // never rescale: images arrive at their final size (ImageSizing)
@@ -104,7 +121,8 @@ public final class LlamaEmbedder: Embedder {
         self.maxTokens = maxTokens
         let known = Self.modelInfo
         info = WorkerInfo(model: known.model, revision: known.revision, runtime: known.runtime, dtype: known.dtype,
-                          dim: embeddingSize, textOnly: textOnly, loadSeconds: nil)
+                          dim: embeddingSize, textOnly: textOnly, loadSeconds: nil,
+                          device: deviceName, executionPolicy: "accelerator-only")
         // The first calls build the Metal pipelines: pay that now (the panel is opening).
         do {
             for _ in 0..<2 { _ = try embedTexts([Prompts.query("warm up")]) }
@@ -114,7 +132,9 @@ public final class LlamaEmbedder: Embedder {
         }
         let seconds = (Date().timeIntervalSince(started) * 100).rounded() / 100
         info = WorkerInfo(model: info.model, revision: info.revision, runtime: info.runtime, dtype: info.dtype,
-                          dim: info.dim, textOnly: textOnly, loadSeconds: seconds)
+                          dim: info.dim, textOnly: textOnly, loadSeconds: seconds,
+                          device: deviceName, executionPolicy: "accelerator-only")
+        LlamaLog.shared.line("accelerator-only: \(deviceName); text, vision, audio, pooling and normalization on GPU")
         LlamaLog.shared.line("ready in \(seconds) s (\(textOnly ? "text-only" : "full"), llama.cpp \(Self.buildTag), "
                              + "vectors \(Self.vectorVersion))")
     }
@@ -306,28 +326,46 @@ public final class LlamaEmbedder: Embedder {
             guard let pooled = llama_get_embeddings_seq(context, sequence) else {
                 throw WorkerError.failed("no pooled embedding for input \(sequence)")
             }
-            var sum = 0.0
-            for i in 0..<embeddingSize { sum += Double(pooled[i]) * Double(pooled[i]) }
-            let scale = sum > 0 ? Float(1 / sum.squareRoot()) : 0
-            return (0..<embeddingSize).map { pooled[$0] * scale }
+            let vector = Array(UnsafeBufferPointer(start: pooled, count: embeddingSize))
+            // Validate the device result; never repair or normalize an invalid vector on the host.
+            let normSquared = vector.reduce(0.0) { $0 + Double($1) * Double($1) }
+            guard vector.allSatisfy(\.isFinite), abs(normSquared - 1) < 0.005 else {
+                throw WorkerError.failed("accelerator returned an invalid embedding")
+            }
+            return vector
         }
     }
 
-    /// The GPU left out: where this machine's speed check found its processor faster than its GPU
-    /// (`MeasuredCosts.Speed.device`; the helpers set it before the model loads), or `DIGUP_DEVICE=cpu`.
-    nonisolated(unsafe) public static var cpuOnly = ProcessInfo.processInfo.environment["DIGUP_DEVICE"] == "cpu"
+    private static func selectDevice(_ acceleration: Acceleration) throws -> ggml_backend_dev_t {
+        let requested = ProcessInfo.processInfo.environment["DIGUP_GPU"]
+        // Prefer a discrete adapter on systems that also expose integrated graphics.
+        for preferred in [GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_IGPU] {
+            for index in 0..<ggml_backend_dev_count() {
+                guard let device = ggml_backend_dev_get(index), ggml_backend_dev_type(device) == preferred else { continue }
+                let registry = String(cString: ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))).lowercased()
+                let name = String(cString: ggml_backend_dev_name(device))
+                let description = String(cString: ggml_backend_dev_description(device)).lowercased()
+                guard registry == (acceleration == .metal ? "metal" : "vulkan") else { continue }
+                guard !["llvmpipe", "lavapipe", "swiftshader", "software", "basic render"].contains(where: description.contains) else {
+                    continue
+                }
+                if let requested, !requested.isEmpty, requested != name { continue }
+                if acceleration == .amdVulkan, !description.contains("amd") && !description.contains("radeon") { continue }
+                if acceleration == .nvidiaVulkan, !description.contains("nvidia") { continue }
+                return device
+            }
+        }
+        throw WorkerError.failed("No compatible \(acceleration.rawValue) hardware GPU\(requested.map { " (\($0))" } ?? "") found. "
+            + "Install the vendor's Vulkan driver. AMD supports RDNA1/RX 5000 and newer. CPU fallback is disabled.")
+    }
 
-    /// A GPU llama.cpp can run on here (Metal on a Mac; CUDA or Vulkan elsewhere, when their backend loaded and found
-    /// one), before `cpuOnly` leaves it out.
-    public static let hasGPU: Bool = {
+    /// Driver/device probe without loading model weights. CPU and software devices cannot pass.
+    public static func verifyGPU() throws -> String {
+        let selected = try Acceleration.selected()
+        guard selected != .openvinoNPU else { throw WorkerError.failed("Probe NPU through its model worker") }
         _ = backend
-        return gpuFound
-    }()
-    nonisolated(unsafe) private static var gpuFound = false
-
-    private static func isGPU(_ device: ggml_backend_dev_t?) -> Bool {
-        let type = ggml_backend_dev_type(device)
-        return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU
+        guard ggml_backend_accelerator_only() else { throw WorkerError.failed("Unverified ggml execution policy") }
+        return String(cString: ggml_backend_dev_description(try selectDevice(selected)))
     }
 
     /// llama.cpp's process-wide setup, once.
@@ -338,16 +376,10 @@ public final class LlamaEmbedder: Embedder {
         loadBackends()
         #endif
         llama_backend_init()
-        #if os(macOS)
-        gpuFound = (0..<ggml_backend_dev_count()).contains { isGPU(ggml_backend_dev_get($0)) }   // Metal
-        #endif
     }()
 
     #if !os(macOS)
-    /// The threads llama.cpp computes on (what runs on the CPU: all of it on a machine without a GPU): every logical
-    /// processor up to 8, where llama.cpp's default is 4; `DIGUP_THREADS` says otherwise. 43 photos, 2026-10-12: an
-    /// i5-8350U laptop (4 cores, 8 threads) 227 s on 4 threads, 174 s on 8; a Core Ultra 9 285K (8 + 16
-    /// cores) 48 s on 4, 31 s on 8, 29–30 s on 12, 40 s on 24 (its slow cores hold the others back).
+    /// Host preprocessing/orchestration threads. The native execution guard disallows CPU model graph computation.
     static let threads: Int32 = {
         let chosen = ProcessInfo.processInfo.environment["DIGUP_THREADS"].flatMap(Int32.init)
         return max(1, chosen ?? Int32(min(ProcessInfo.processInfo.activeProcessorCount, 8)))
@@ -361,23 +393,13 @@ public final class LlamaEmbedder: Embedder {
         var folders: [String] = []
         if let chosen = environment["DIGUP_BACKENDS"], !chosen.isEmpty { folders.append(chosen) }
         if let executable = Bundle.main.executableURL { folders.append(executable.deletingLastPathComponent().path) }
-        for folder in folders where ggml_backend_dev_count() == 0 {
+        for folder in folders {
             ggml_backend_load_all_from_path(folder)
         }
-        if ggml_backend_dev_count() == 0 { ggml_backend_load_all() }
-        gpuFound = (0..<ggml_backend_dev_count()).contains { isGPU(ggml_backend_dev_get($0)) }
-        if cpuOnly {
-            // Unloaded rather than just unused: a GPU backend would still set itself up (Vulkan: seconds).
-            for index in (0..<ggml_backend_reg_count()).reversed() {
-                let registry = ggml_backend_reg_get(index)
-                if (0..<ggml_backend_reg_dev_count(registry)).contains(where: { isGPU(ggml_backend_reg_dev_get(registry, $0)) }) {
-                    ggml_backend_unload(registry)
-                }
-            }
-        }
+        ggml_backend_load_all()
         LlamaLog.shared.line("backends: " + (0..<ggml_backend_reg_count()).map {
             String(cString: ggml_backend_reg_name(ggml_backend_reg_get($0)))
-        }.joined(separator: ", ") + (cpuOnly && gpuFound ? " (the GPU left out: the processor was faster here)" : ""))
+        }.joined(separator: ", ") + " (accelerator-only)")
     }
     #endif
 }

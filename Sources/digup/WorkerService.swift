@@ -6,9 +6,10 @@ import LlamaRuntime
 /// `worker/digup_worker.py` (see `EmbeddingWorker`). The app runs one as its query encoder, so the model's memory
 /// goes back to the system when it exits. llama.cpp's warnings go to stderr.
 func workerService(_ args: Arguments) -> Int32 {
-    let embedder: LlamaEmbedder
+    let embedder: any Embedder
     do {
-        embedder = try LlamaEmbedder(models: try LlamaModels.locate(), textOnly: args.flags.contains("--text-only"))
+        embedder = try makeEmbedder(textOnly: args.flags.contains("--text-only"),
+                                    log: args.indexFolder.appendingPathComponent("worker.log"))
     } catch {
         emit(["ready": false, "error": "\(error)"])
         return 1
@@ -17,6 +18,7 @@ func workerService(_ args: Arguments) -> Int32 {
     let infoFields: [String: Any] = [
         "model": info.model, "revision": info.revision, "runtime": info.runtime, "dtype": info.dtype, "dim": info.dim,
         "text_only": info.textOnly, "load_seconds": info.loadSeconds ?? 0,
+        "device": info.device ?? "", "execution_policy": info.executionPolicy ?? "",
     ]
     emit(["ready": true, "info": infoFields])
     while let line = readLine() {

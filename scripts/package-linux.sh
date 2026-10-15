@@ -24,6 +24,8 @@ helper=shell/src-tauri/helper
 rm -rf "$helper"
 mkdir -p "$helper"
 cp .build/static/release/digup Vendor/pdfium/lib/libpdfium.so Vendor/ffmpeg/bin/ffmpeg Vendor/ffmpeg/bin/ffprobe "$helper/"
+mkdir -p "$helper/openvino"
+cp worker/openvino/*.py worker/openvino/requirements.txt "$helper/openvino/"
 for file in Vendor/llama/lib/*.so*; do
   name=${file##*/}
   if [[ -L $file && $name =~ \.so\.[0-9]+$ ]]; then

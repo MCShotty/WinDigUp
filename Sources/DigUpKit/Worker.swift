@@ -9,9 +9,11 @@ public struct WorkerInfo: Codable, Sendable {
     public let dim: Int
     public let textOnly: Bool
     public let loadSeconds: Double?
+    public let device: String?
+    public let executionPolicy: String?
 
     public init(model: String, revision: String, runtime: String, dtype: String, dim: Int, textOnly: Bool,
-                loadSeconds: Double?) {
+                loadSeconds: Double?, device: String? = nil, executionPolicy: String? = nil) {
         self.model = model
         self.revision = revision
         self.runtime = runtime
@@ -19,6 +21,8 @@ public struct WorkerInfo: Codable, Sendable {
         self.dim = dim
         self.textOnly = textOnly
         self.loadSeconds = loadSeconds
+        self.device = device
+        self.executionPolicy = executionPolicy
     }
 
     /// Vectors from different models, revisions, runtimes or precisions must never share an index.
@@ -73,9 +77,26 @@ public struct WorkerConfig: Sendable {
         return config
     }
 
-    /// $DIGUP_WORKER_DIR: a worker folder to use instead of the built-in runtime (mlx-vlm for evals: `worker`).
+    /// The verified OpenVINO NPU worker, when explicitly selected. Other production worker overrides are disabled.
     public static func fromEnvironment() throws -> WorkerConfig? {
-        try ProcessInfo.processInfo.environment["DIGUP_WORKER_DIR"].map { try python(URL(fileURLWithPath: $0)) }
+        let acceleration = try Acceleration.selected()
+        guard acceleration == .openvinoNPU else { return nil }
+        let env = ProcessInfo.processInfo.environment
+        guard let python = env["DIGUP_OPENVINO_PYTHON"], !python.isEmpty,
+              let models = env["DIGUP_OPENVINO_MODELS"], !models.isEmpty else {
+            throw WorkerError.notFound("OpenVINO NPU needs a Python environment and exported model bundle in Settings → General.")
+        }
+        guard let script = env["DIGUP_OPENVINO_WORKER"].map({ URL(fileURLWithPath: $0) })
+            ?? Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("openvino/digup_openvino.py") else {
+            throw WorkerError.notFound("Cannot locate the bundled OpenVINO worker; set DIGUP_OPENVINO_WORKER")
+        }
+        guard FileManager.default.fileExists(atPath: script.path) else {
+            throw WorkerError.notFound("OpenVINO worker missing at \(script.path)")
+        }
+        var config = WorkerConfig(executable: URL(fileURLWithPath: python),
+                                  arguments: ["-I", script.path, "--models", models])
+        config.environment = ["HF_HUB_OFFLINE": "1", "TOKENIZERS_PARALLELISM": "false", "PYTHONUTF8": "1"]
+        return config
     }
 }
 

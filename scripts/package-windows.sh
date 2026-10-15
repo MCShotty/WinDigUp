@@ -25,6 +25,8 @@ cp .build/release/digup.exe Vendor/llama/lib/*.dll Vendor/pdfium/bin/pdfium.dll 
 cp "$swift_runtime"/*.dll "$helper/"
 cp "$crt"/*.dll "$helper/"   # over the Swift runtime's copies of the same: the newer C++ runtime
 cp Vendor/ffmpeg/bin/ffmpeg.exe Vendor/ffmpeg/bin/ffprobe.exe "$helper/"   # the small static build, no DLLs
+mkdir -p "$helper/openvino"
+cp worker/openvino/*.py worker/openvino/requirements.txt "$helper/openvino/"
 
 # With the release's signing key (TAURI_SIGNING_PRIVATE_KEY, and its password) the packages that update themselves are
 # signed for in-app updates (a .sig beside each). Installed copies check those signatures with the public key in
