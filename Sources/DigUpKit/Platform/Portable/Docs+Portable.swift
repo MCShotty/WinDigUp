@@ -139,7 +139,10 @@ enum RTF {
                     case "bullet": out.append("•")
                     case "uc": unicodeSkip = Int(number) ?? 1
                     case "u":
-                        if let value = Int(number), let scalar = Unicode.Scalar(UInt32(value < 0 ? value + 65536 : value)) {
+                        // RTF writes a signed 16-bit code unit; some producers use its unsigned spelling.
+                        // A broken control word must not trap the entire indexer during integer conversion.
+                        if let value = Int(number), (-32768...65535).contains(value),
+                           let scalar = Unicode.Scalar(UInt32(value < 0 ? value + 65536 : value)) {
                             out.append(scalar)
                         }
                         pendingSkip = unicodeSkip
