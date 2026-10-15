@@ -20,7 +20,7 @@ impl Diagnostics {
     pub fn record(&self, source: &str, event: Value) {
         let time = now();
         let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress"));
-        if event["event"] == "file" && event["state"] == "error" { important = true; }
+        if event["event"] == "file" && matches!(event["state"].as_str(), Some("failed" | "error")) { important = true; }
         {
             let mut runtime = self.runtime.lock().unwrap();
             if source == "applications" {
@@ -133,5 +133,13 @@ mod tests {
         assert_eq!(d.significant().as_array().unwrap().len(),2);
         for n in 0..40 {d.record("index",json!({"event":"error","message":format!("error {n}")}));}
         assert_eq!(d.significant().as_array().unwrap().len(),30);
+    }
+
+    #[test]
+    fn failed_files_are_retained_in_the_significant_timeline() {
+        let d=Diagnostics::new(&std::env::temp_dir().join("digup-file-failure-absent"));
+        d.record("index",json!({"event":"file","state":"failed","path":"broken.pdf","note":"cannot decode PDF"}));
+        for n in 0..120 {d.record("index",json!({"event":"file","state":"done","path":format!("ok-{n}.txt")}));}
+        assert_eq!(d.significant()[0]["event"]["note"],"cannot decode PDF");
     }
 }

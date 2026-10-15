@@ -114,7 +114,7 @@ fn reap(child: &mut Child) -> Option<i32> {
 /// `digup search-service`: started on the first request, and again after it died.
 #[derive(Clone)]
 pub struct SearchService {
-    launch: Launch,
+    launch: Arc<Mutex<Launch>>,
     running: Arc<Mutex<Option<Searching>>>,
     next_id: Arc<AtomicU64>,
     generation: Arc<AtomicU64>,
@@ -146,12 +146,18 @@ impl SearchService {
 
     pub fn new(launch: Launch, on_event: impl Fn(Value) + Send + Sync + 'static) -> SearchService {
         SearchService {
-            launch,
+            launch: Arc::new(Mutex::new(launch)),
             running: Arc::default(),
             next_id: Arc::new(AtomicU64::new(1)),
             generation: Arc::new(AtomicU64::new(0)),
             on_event: Arc::new(on_event),
         }
+    }
+
+    /// Keep the restart command in step with the live folder configuration.
+    /// Updating an existing helper still uses its `folders` protocol operation.
+    pub fn set_arguments(&self, args: Vec<String>) {
+        self.launch.lock().unwrap().args = args;
     }
 
     /// Sends a request and waits for its reply.
@@ -184,8 +190,6 @@ impl SearchService {
         }
         if running.is_none() {
             *running = Some(self.start()?);
-            self.generation
-                .store(running.as_ref().unwrap().number, Ordering::SeqCst);
         }
         let searching = running.as_mut().unwrap();
         let (sender, receiver) = oneshot::channel();
@@ -218,8 +222,11 @@ impl SearchService {
     }
 
     fn start(&self) -> Result<Searching, String> {
-        let (child, stdin, stdout) = self.launch.spawn()?;
+        let launch = self.launch.lock().unwrap().clone();
+        let (child, stdin, stdout) = launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
+        self.generation.store(number, Ordering::SeqCst);
+        let generation = self.generation.clone();
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> = Arc::default();
         let (replies, on_event, slot) =
             (pending.clone(), self.on_event.clone(), self.running.clone());
@@ -235,22 +242,22 @@ impl SearchService {
                             let _ = sender.send(message);
                         }
                     }
-                    None => on_event(message),
+                    None if generation.load(Ordering::SeqCst) == number => on_event(message),
+                    None => {},
                 }
             }
             // Gone: its waiting requests fail (their senders drop here), and the next request starts another.
             replies.lock().unwrap().clear();
             let mut slot = slot.lock().unwrap();
-            if slot
+            let current = slot
                 .as_ref()
-                .is_some_and(|searching| searching.number == number)
-            {
-                if let Some(mut searching) = slot.take() {
-                    reap(&mut searching.child);
-                }
-            }
+                .is_some_and(|searching| searching.number == number);
+            let retired = if current { slot.take() } else { None };
             drop(slot);
-            on_event(json!({"event": "exit"}));
+            if let Some(mut searching) = retired { reap(&mut searching.child); }
+            if current && generation.load(Ordering::SeqCst) == number {
+                on_event(json!({"event": "exit"}));
+            }
         });
         Ok(Searching {
             child,
@@ -261,7 +268,11 @@ impl SearchService {
     }
 
     pub fn stop(&self) {
-        let searching = self.running.lock().unwrap().take();
+        let searching = {
+            let mut running = self.running.lock().unwrap();
+            self.generation.store(0, Ordering::SeqCst);
+            running.take()
+        };
         if let Some(mut searching) = searching {
             // Query caches use transactions. Ending the process also releases a full/blocked stdin pipe.
             searching.pending.lock().unwrap().clear();
@@ -277,6 +288,7 @@ impl SearchService {
 /// code, "owed": whether a sync asked of it never started}; one stopped here doesn't report.
 pub struct IndexService {
     running: Arc<Mutex<Option<Indexing>>>,
+    generation: Arc<AtomicU64>,
     on_event: EventSink,
 }
 
@@ -300,7 +312,7 @@ impl IndexService {
         }
     }
     pub fn new(on_event: impl Fn(Value) + Send + Sync + 'static) -> IndexService {
-        IndexService { running: Arc::default(), on_event: Arc::new(on_event) }
+        IndexService { running: Arc::default(), generation: Arc::new(AtomicU64::new(0)), on_event: Arc::new(on_event) }
     }
 
     pub fn run(&self, launch: &Launch) -> Result<(), String> {
@@ -312,15 +324,20 @@ impl IndexService {
             }
         }
         // Gone, or other folders: (stop it and) start anew.
+        self.generation.store(0, Ordering::SeqCst);
         if let Some(Indexing { child, stdin, .. }) = running.take() {
             stop(child, stdin, "stop");
         }
         let (child, stdin, stdout) = launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
+        self.generation.store(number, Ordering::SeqCst);
+        let generation = self.generation.clone();
         let pid = child.id();
         let (on_event, slot) = (self.on_event.clone(), self.running.clone());
         std::thread::spawn(move || {
-            on_event(json!({"event":"started","pid":pid,"generation":number}));
+            if generation.load(Ordering::SeqCst) == number {
+                on_event(json!({"event":"started","pid":pid,"generation":number}));
+            }
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
                 let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
@@ -329,14 +346,16 @@ impl IndexService {
                         indexing.owed = false;
                     }
                 }
-                on_event(event);
+                if generation.load(Ordering::SeqCst) == number { on_event(event); }
             }
             let mut slot = slot.lock().unwrap();
             if slot.as_ref().is_some_and(|indexing| indexing.number == number) {
                 if let Some(mut indexing) = slot.take() {
                     drop(slot);
                     let status = reap(&mut indexing.child);
-                    on_event(json!({"event": "ended", "status": status, "owed": indexing.owed}));
+                    if generation.load(Ordering::SeqCst) == number {
+                        on_event(json!({"event": "ended", "status": status, "owed": indexing.owed}));
+                    }
                 }
             }
         });
@@ -359,7 +378,11 @@ impl IndexService {
     }
 
     pub fn stop(&self) {
-        if let Some(indexing) = self.running.lock().unwrap().take() {
+        let mut running = self.running.lock().unwrap();
+        self.generation.store(0, Ordering::SeqCst);
+        let retired = running.take();
+        drop(running);
+        if let Some(indexing) = retired {
             stop(indexing.child, indexing.stdin, "stop");
         }
     }

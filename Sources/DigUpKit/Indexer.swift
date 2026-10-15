@@ -96,7 +96,9 @@ public final class Indexer {
         var byInode: [String: FileRecord] = [:]
         for file in existing {
             byPath[file.path] = file
-            byInode["\(file.device):\(file.inode)"] = file
+            // Windows can return metadata without a file ID (a provider may reject opening its handle).
+            // Unknown identities must never turn unrelated files into renames.
+            if file.inode != 0 { byInode["\(file.device):\(file.inode)"] = file }
         }
         let seen = Set(crawl.candidates.map(\.path))
         var movedFrom = Set<String>()
@@ -112,7 +114,8 @@ public final class Indexer {
                         summary.unchanged += 1
                     }
                 } else if let row = byInode["\(file.device):\(file.inode)"], !seen.contains(row.path),
-                          !movedFrom.contains(row.path), row.size == file.size, abs(row.mtime - file.mtime) < 0.001 {
+                          !movedFrom.contains(row.path), row.kind == file.kind,
+                          row.size == file.size, abs(row.mtime - file.mtime) < 0.001 {
                     try store.move(row.id, to: file.path)
                     movedFrom.insert(row.path)
                     summary.moved += 1
@@ -121,12 +124,11 @@ public final class Indexer {
                     summary.added += 1
                 }
             }
-            // A root that went away while it was being walked (a drive ejected mid-crawl) looked emptier than it is:
-            // keep its rows rather than take that for "deleted".
-            let vanished = roots.map { $0.standardizedFileURL.path }
-                .filter { !FileManager.default.fileExists(atPath: $0) }.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+            // Failed listings and roots that disappeared mid-crawl are incomplete evidence, not deletions.
+            let unavailable = Array(crawl.unreadable) + roots.map { $0.standardizedFileURL.path }
+                .filter { !FileManager.default.fileExists(atPath: $0) }
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)
-                && !vanished.contains(where: { row.path.hasPrefix($0) }) {
+                && !unavailable.contains(where: { row.path == $0 || FolderSelection.isInside(row.path, $0) }) {
                 try store.delete(row.id)
                 summary.removed += 1
             }

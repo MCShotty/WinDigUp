@@ -237,6 +237,7 @@ final class IndexService: @unchecked Sendable {
                 "started": started.timeIntervalSince1970,   // the app checks its sync request came before this
                 "visited": summary.crawl.visited, "candidates": summary.crawl.candidates.count,
                 "skipped": summary.crawl.skipped, "skippedFolders": summary.crawl.skippedFolders,
+                "unreadable": summary.crawl.unreadable.sorted(),
             ])
         } catch {
             emit(["event": "error", "message": "sync failed: \(error)", "code": part.code])

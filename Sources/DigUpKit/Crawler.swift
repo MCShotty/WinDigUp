@@ -15,6 +15,8 @@ public struct CrawlReport: Sendable {
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
+    /// Paths whose metadata or directory listing failed. Their cached rows must survive a partial scan.
+    public var unreadable: Set<String> = []
     public var visited = 0
 }
 
@@ -64,11 +66,20 @@ public enum Crawler {
                 FolderSelection.isInside($0, root.path) || FolderSelection.isInside($0, real)
             }.flatMap { [$0, FolderSelection.realPath($0)] }
             #if os(Windows)
-            guard let walker = FileSystem.walk(root, keys: keys) else { continue }
+            guard let walker = FileSystem.walk(root, keys: keys) else {
+                report.unreadable.insert(real)
+                continue
+            }
             #else
             guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                              options: [.skipsHiddenFiles, .skipsPackageDescendants],
-                                             errorHandler: { _, _ in true }) else { continue }
+                                             errorHandler: { url, _ in
+                                                 report.unreadable.insert(FolderSelection.realPath(url.path))
+                                                 return true
+                                             }) else {
+                report.unreadable.insert(real)
+                continue
+            }
             #endif
             func visit(_ url: URL) {
                 report.visited += 1
@@ -79,8 +90,14 @@ public enum Crawler {
                 let values: URLResourceValues? = nil
                 let isDirectory = walker.currentIsDirectory
                 #else
-                let values = try? url.resourceValues(forKeys: Set(keys))
-                let isDirectory = values?.isDirectory == true
+                let values: URLResourceValues
+                do { values = try url.resourceValues(forKeys: Set(keys)) }
+                catch {
+                    report.unreadable.insert(url.path)
+                    walker.skipDescendants()
+                    return
+                }
+                let isDirectory = values.isDirectory == true
                 #endif
                 let isPackage = FileSystem.isPackage(url, values)
                 if isDirectory, !isPackage {
@@ -101,7 +118,12 @@ public enum Crawler {
                     return
                 }
                 func localFileInfo() -> FileInfo? {
-                    guard let info = FileSystem.info(of: url.path), info.isRegular else {
+                    guard let info = FileSystem.info(of: url.path) else {
+                        report.unreadable.insert(url.path)
+                        report.skipped["metadata unavailable", default: 0] += 1
+                        return nil
+                    }
+                    guard info.isRegular else {
                         report.skipped["link or special file", default: 0] += 1
                         return nil
                     }
@@ -151,6 +173,9 @@ public enum Crawler {
                     visit(url)
                 }
             }
+            #if os(Windows)
+            report.unreadable.formUnion(walker.unreadable)
+            #endif
         }
 
         progress("filtering", root: "", path: "", force: true)
