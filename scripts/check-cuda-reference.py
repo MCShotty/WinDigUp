@@ -149,8 +149,9 @@ def main():
                  "document-long": document(None,long_text)}
         worker = Worker(args, False, args.output/"full-worker.log")
         try:
-            report.update(physicalCUDA=True, runtime=worker.info, coldFullSeconds=worker.cold_seconds)
+            report.update(runtime=worker.info, coldFullSeconds=worker.cold_seconds)
             made = {name: worker.embed("text", [text])[0] for name,text in texts.items()}
+            report["physicalCUDA"] = True
             for name, file, budget in [("screen-280","screen.png",280),("photo-140","photo.jpg",140),("frame-70","photo.jpg",70)]:
                 made[name] = worker.embed("image", [str((args.reference/file).resolve())], budget=budget)[0]
             made["speech"] = worker.embed("audio", [str((args.reference/"speech.wav").resolve())])[0]

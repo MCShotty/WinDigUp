@@ -132,6 +132,8 @@ window.ActivityUI = (() => {
       `Configured accelerator: ${inference.configured.backend || "unknown"}`,
       `Verified device: ${inference.verified?.device || "No runtime verification reported"}`,
       inference.verified?.backend ? `Verified backend: ${inference.verified.backend}; precision: ${inference.verified.precision_profile || "reported in runtime details"}` : "",
+      inference.verified?.build_identity ? `Native build: ${inference.verified.build_identity}` : "",
+      inference.verified?.runtime_version ? `CUDA runtime API: ${inference.verified.runtime_version}; driver API: ${inference.verified.driver_version || "unknown"}` : "",
       `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`].filter(Boolean).join("\n");
   }
 
@@ -166,6 +168,7 @@ window.ActivityUI = (() => {
             <p data-key="purpose-note" class="activity-muted"></p></section>
           <section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
+            <p data-key="runtime" class="activity-muted" hidden></p>
             <p data-key="verification" class="activity-verification"></p></section>
         </section>
         <section data-pane="diagnostics" role="tabpanel" aria-label="Activity diagnostics" hidden>
@@ -301,6 +304,11 @@ window.ActivityUI = (() => {
       put("device", verified || "Device not verified yet");
       put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}${inference.verified?.backend ? ` · Running: ${inference.verified.backend}` : ""}`);
       put("encoder", `${inference.model?.state === "ready" ? "Model files: available" : `Model status: ${inference.model?.state || "unknown"}`} · Encoder: ${inference.encoder}`);
+      const receipt = inference.verified || {};
+      const api = value => Number.isInteger(value) ? `${Math.floor(value / 1000)}.${Math.floor((value % 1000) / 10)}` : "unknown";
+      const runtime = [receipt.backend === "nvidia-cuda" && receipt.runtime_version ? `CUDA runtime ${api(receipt.runtime_version)} · Driver API ${api(receipt.driver_version)}` : "",
+        receipt.precision_profile, receipt.build_identity ? `Build ${receipt.build_identity.slice(0, 12)}` : ""].filter(Boolean).join(" · ");
+      put("runtime", runtime); this.get("runtime").hidden = !runtime;
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
       put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),

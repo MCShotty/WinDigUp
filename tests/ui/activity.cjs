@@ -121,6 +121,12 @@ let browser;
     await page.setViewportSize({width:800,height:650});await page.screenshot({path:dir+'/activity-narrow.png'});
     assert.equal(await page.locator('#content').isVisible(),false);
   }
+  await page.evaluate(async()=>{
+    window.fixtureActivity.inference.verified={device:'NVIDIA RTX 2060',backend:'nvidia-cuda',runtime_version:12090,driver_version:13000,precision_profile:'cuda-fp32-v1',build_identity:'0123456789abcdef0123456789abcdef'};
+    await ActivityUI.refresh();
+  });
+  await page.waitForFunction(()=>document.querySelector('[data-key="runtime"]').textContent.includes('CUDA runtime 12.9'));
+  assert.match(await page.locator('[data-key="runtime"]').textContent(),/Driver API 13\.0.*cuda-fp32-v1.*Build 0123456789ab/);
   assert.deepEqual(errors,[]);
   console.log('PASS: activity is independent of helpers; discovery/rescan/pause/error states, on-demand logs, redaction/export, keyboard isolation and Settings integration');
   await browser.close();

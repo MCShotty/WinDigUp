@@ -161,7 +161,19 @@ impl SearchService {
     }
 
     pub fn set_environment(&self, environment: Vec<(String, String)>) {
-        self.launch.lock().unwrap().env = environment;
+        // send/start takes running before launch too. Retire the old generation atomically with its environment;
+        // otherwise a foreground request between stop() and this edit can keep the previous backend alive.
+        let searching = {
+            let mut running = self.running.lock().unwrap();
+            self.launch.lock().unwrap().env = environment;
+            self.generation.store(0, Ordering::SeqCst);
+            running.take()
+        };
+        if let Some(mut searching) = searching {
+            searching.pending.lock().unwrap().clear();
+            let _ = searching.child.kill();
+            let _ = searching.child.wait();
+        }
     }
 
     /// Sends a request and waits for its reply.

@@ -117,6 +117,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn accelerator_environment_retires_the_old_helper_before_new_requests() {
+        let held=Arc::new(AtomicBool::new(false)); let signal=held.clone();
+        let service=python("import os,sys,json,time\nfor line in sys.stdin:\n r=json.loads(line)\n if r['op']=='hold':\n  print('{\"event\":\"holding\"}',flush=True)\n  time.sleep(30)\n print(json.dumps({'id':r['id'],'ok':True,'device':os.getenv('DIGUP_GPU','old')}),flush=True)",move |event| {
+            if event["event"]=="holding" { signal.store(true,Ordering::SeqCst); }
+        });
+        assert_eq!(service.ask(json!({"op":"before"})).await.unwrap()["device"],"old");
+        let copy=service.clone();
+        let pending=tokio::spawn(async move { copy.ask(json!({"op":"hold"})).await });
+        let started=Instant::now();
+        while !held.load(Ordering::SeqCst) && started.elapsed()<Duration::from_secs(15) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(held.load(Ordering::SeqCst));
+        service.set_environment(vec![("DIGUP_GPU".into(),"GPU-selected".into())]);
+        assert!(pending.await.unwrap().is_err());
+        assert_eq!(service.ask(json!({"op":"after"})).await.unwrap()["device"],"GPU-selected");
+        service.stop();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn retired_search_process_cannot_publish_over_its_replacement() {
         use std::sync::Mutex;
         let held = Arc::new(AtomicBool::new(false));

@@ -1610,7 +1610,6 @@ fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
             }
             settings.acceleration.discovery_error.clone()
         };
-        shell.search.stop();
         shell.search.set_environment(shell.helper_environment());
         let counted=shell.clone(); let count_app=app.clone();
         tauri::async_runtime::spawn(async move {
