@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: packages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     if: github.event_name == 'workflow_dispatch'
@@ -314,7 +318,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter 'AccelerationTests|ApplicationStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|WorkerDeadlineTests'
+          swift test --filter 'AccelerationTests|ApplicationStoreTests|WindowsSettingsStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|WorkerDeadlineTests'
           cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked

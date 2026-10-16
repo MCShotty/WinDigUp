@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: activity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   native-and-browser:
     runs-on: ubuntu-24.04
@@ -32,6 +35,8 @@ jobs:
           node tests/ui/search-responsiveness.cjs
           node --check shell/ui/windows-settings.js
           node tests/ui/windows-settings.cjs
+          node --check shell/ui/discovery-settings.js
+          node tests/ui/discovery-settings.cjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

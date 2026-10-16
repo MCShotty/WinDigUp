@@ -92,3 +92,11 @@ body.apps-mode .app-group-title { font-size:23px; font-weight:650; }
 @media (max-width:540px) { .apps-settings-layout { grid-template-columns:1fr; } #apps-list { max-height:220px; } #apps-editors { border-left:0; border-top:1px solid var(--line); padding:18px 0 0; } .app-purpose-state { width:100%; margin-left:0; } }
 @media (prefers-color-scheme:dark) { .app-generic { filter:invert(.75); } }
 @media (forced-colors:active) { .app-row.selected, .app-settings-row[aria-selected=true] { outline:2px solid Highlight; } }
+
+.source-section {border-top:1px solid var(--border, #9a9a9a55);padding:16px 0;margin-top:14px}
+.source-section > summary {font-weight:600;cursor:pointer}
+.source-volumes {display:grid;gap:10px;margin:12px 0}
+.source-volume {display:flex;gap:10px;align-items:center;overflow-wrap:anywhere}
+.source-candidate {display:grid;gap:4px;padding:12px 0;border-top:1px solid var(--border, #9a9a9a55)}
+.source-path {font-size:12px;overflow-wrap:anywhere;opacity:.75}
+.description-attribution {font-size:12px;opacity:.8}

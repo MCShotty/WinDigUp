@@ -127,8 +127,10 @@ const Apps = {
     box.append(this.icon(hit, 128), element("div", "app-name", hit.name));
     if (hit.publisher) box.append(element("div", "app-description", hit.publisher));
     if (hit.purpose || hit.description) box.append(element("p", "", hit.purpose || hit.description));
+    if(hit.descriptionSource){const source=element("button","link description-attribution",`Description: ${hit.descriptionSource.provider||"online source"}`);
+      source.onclick=()=>invoke("open_app_description_source",{appId:hit.id}).catch(fail);box.append(source);}
     if (hit.aliases?.length) box.append(element("p", "app-description", `Aliases: ${hit.aliases.join(", ")}`));
-    box.append(element("p", "app-description", hit.shortcut || "Registered with Windows"));
+    box.append(element("p", "app-description", hit.shortcut || (hit.source?.startsWith("drive:") ? "Discovered on a selected drive" : "Registered with Windows")));
     box.append(element("p", "app-description", hit.reason === "semantic" ? "Matches what this application does" : "Matches the application name or alias"));
     const launch = element("button", "primary", "Launch");
     launch.onclick = async () => { launch.disabled = true; try { await this.launch(hit); } catch (e) { fail(e); } finally { launch.disabled = false; } };
