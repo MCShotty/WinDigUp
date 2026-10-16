@@ -116,6 +116,15 @@ separate workload. Existing app-purpose acceptance gates remain uncalibrated on 
 
 ## Physical acceptance
 
+Hosted regression checks passed for functional revision `90c3357` on 2026-10-16:
+
+- [Native/browser regressions and Windows command/C compilation](https://github.com/MCShotty/WinDigUp/actions/runs/38909496594).
+- [Accelerator policy, model-conversion tests and Windows application discovery/launch fixtures](https://github.com/MCShotty/WinDigUp/actions/runs/38909496351).
+- [Light/dark/scaled browser screenshots](https://github.com/MCShotty/WinDigUp/actions/runs/38909496594/artifacts/12049348160).
+
+These hosted checks do not establish physical accelerator execution or real-model latency. The installer workflow
+also exercises the installed helper and application; its final outcome and download are recorded in PR #7.
+
 Windows RX 7900 XTX input-to-render targets remain to be measured: p95 <=50 ms for 2,000 cached app names,
 <=100 ms for warm keyword search over a representative 100,000-file index on local SSD, and <=300 ms including
 debounce for warm uncached semantic search over 70,000 vectors. Record 100 uncached samples, cached samples
