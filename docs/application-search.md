@@ -1,9 +1,16 @@
 # Windows application search
 
-Press Ctrl+Shift+Space and type an application name. Relevant applications appear in an **Apps** group before file
-results. Enter or double-click launches the selected application. Use `apps: photoshop` to search only applications,
+Press Ctrl+Shift+Space and type an application name. Ordinary searches put files first, with up to three applications
+in a compact **Apps** group. Smart placement can promote one unambiguous exact name or explicit alias; filename
+collisions, file-category queries and ambiguous names keep files first. Settings → Apps → **Apps in ordinary searches**
+also offers **Files first** and **Apps view only**. These preferences preserve application discovery and embeddings.
+Enter or double-click launches the selected application. Use `apps: photoshop` to search only applications,
 or choose **Apps** in the larger window. `apps:` by itself lists the catalog alphabetically; Show All/Show More opens
 the remaining matches. Ctrl+8 selects the Apps filter. Existing file/code filter shortcuts retain their meanings.
+
+App metadata is embedded once per compatible document hash. File search and purpose matching share the text-only
+query encoder and its full-identity LRU cache. Purpose matches are labeled without displaying confidence percentages.
+See [search responsiveness and measurement limits](search-responsiveness.md).
 
 Names and aliases work without model files, selected folders, an accelerator or a running file-search helper. On first
 launch, **Open app launcher now** completes setup without choosing folders or waiting for a model. The existing model

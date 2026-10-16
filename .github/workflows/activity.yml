@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Native activity, catalog and transport contracts
-        run: cargo test --manifest-path tests/applications/native/Cargo.toml --locked
+        run: cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked
       - name: Actual-page browser regressions
         env:
           DIGUP_ACTIVITY_SCREENSHOTS: ${{ runner.temp }}/activity-screenshots
@@ -28,6 +28,8 @@ jobs:
           node tests/ui/activity.cjs
           node tests/ui/apps-editor.cjs
           node tests/ui/bug-regressions.cjs
+          export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
+          node tests/ui/search-responsiveness.cjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
