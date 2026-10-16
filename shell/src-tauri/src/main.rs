@@ -9,6 +9,7 @@ mod acceleration;
 mod accelerator_probe;
 mod activity;
 mod applications;
+mod discovery;
 mod application_commands;
 mod clipboard;
 mod diagnostics;
