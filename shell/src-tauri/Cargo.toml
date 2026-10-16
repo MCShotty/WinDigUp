@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "DigUp for Windows and Linux: the tray icon, the hotkey and the search panel, over DigUp's helper"
 edition = "2021"
 publish = false
+default-run = "digup-shell"
+
+[[bin]]
+name = "digup-discovery"
+path = "src/bin/discovery.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }

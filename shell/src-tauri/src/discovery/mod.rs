@@ -1,5 +1,9 @@
 //! Executable inventory is separate from the accepted, embeddable application catalog.
 pub mod ntfs;
+pub mod db;
+pub mod store;
+#[cfg(windows)]pub mod volume;
+#[cfg(windows)]pub mod ipc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
