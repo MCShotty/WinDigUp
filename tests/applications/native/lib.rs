@@ -314,3 +314,6 @@ mod tests {
             .any(|e| e["message"] == "retired index failed"));
     }
 }
+
+#[path = "../../../shell/src-tauri/src/options.rs"]
+pub mod options;

@@ -4,6 +4,16 @@ use std::path::Path;
 /// Durable per-volume inventory. Batch transactions are committed before a journal checkpoint advances.
 pub struct VolumeStore {pub db:Database}
 impl VolumeStore {
+
+    pub fn recovering(path:&Path)->Result<Self,String>{
+        match Self::open(path){
+            Ok(store)=>Ok(store),
+            Err(error)if error.contains("not a database")||error.contains("malformed")=>{
+                discard_cache(path)?;Self::open(path)
+            },
+            Err(error)=>Err(error),
+        }
+    }
     pub fn open(path:&Path)->Result<Self,String> {
         let db=Database::open(path,false)?;
         let version=db.rows("PRAGMA user_version",&[])?.first().and_then(|r|r[0].parse::<u32>().ok()).unwrap_or(0);
@@ -85,6 +95,16 @@ impl VolumeStore {
 /// User-owned candidates. Reconciliation only removes entries after a complete, successful source pass.
 pub struct CandidateStore {db:Database}
 impl CandidateStore {
+
+    pub fn recovering(path:&Path)->Result<Self,String>{
+        match Self::open(path){
+            Ok(store)=>Ok(store),
+            Err(error)if error.contains("not a database")||error.contains("malformed")=>{
+                discard_cache(path)?;Self::open(path)
+            },
+            Err(error)=>Err(error),
+        }
+    }
     pub fn open(path:&Path)->Result<Self,String> {
         let db=Database::open(path,false)?;
         let version=db.rows("PRAGMA user_version",&[])?.first().and_then(|r|r[0].parse::<u32>().ok()).unwrap_or(0);
@@ -181,4 +201,10 @@ impl CandidateStore {
         }
         let _=std::fs::remove_file(file);
     }
+}
+
+fn discard_cache(path:&Path)->Result<(),String>{
+    for suffix in ["","-wal","-shm"]{let file=std::path::PathBuf::from(format!("{}{suffix}",path.display()));
+        if file.is_file(){std::fs::remove_file(file).map_err(|e|e.to_string())?;}}
+    Ok(())
 }

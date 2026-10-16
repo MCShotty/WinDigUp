@@ -227,13 +227,17 @@ fn connection(pipe:&Pipe,shared:&Shared,root:&Path)->Result<(),String>{
 fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Result<(),String>{
     let volume=volume::Volume::open(id)?;let journal=volume.journal()?;
     let name=format!("{:x}.sqlite",Sha256::digest(id.as_bytes()));let file=root.join(name);
-    let store=VolumeStore::open(&file)?;
+    let store=VolumeStore::recovering(&file)?;
     let old_journal=store.get("journal")?.and_then(|s|s.parse::<u64>().ok());
     let old_cursor=store.get("cursor")?.and_then(|s|s.parse::<i64>().ok());
     let old_serial=store.get("serial")?.and_then(|s|s.parse::<u32>().ok());
     let fresh=full||store.get("complete")?.as_deref()!=Some("true")||old_serial!=Some(volume.serial)
         ||old_journal!=Some(journal.id)||old_cursor.is_none_or(|c|c<journal.first||c<journal.lowest||c>journal.next);
-    let mut records=0u64;
+    if old_serial.is_some_and(|serial|serial!=volume.serial){
+        store.db.run("DELETE FROM launch_links",&[])?;store.db.run("DELETE FROM pending_renames",&[])?;
+    }
+    let identity_scope=format!("{id}|{}",volume.serial);
+    let mut records=0u64;let mut relevant=fresh;
     let mut cursor=if fresh{journal.next}else{old_cursor.unwrap()};
     if fresh{
         store.clear()?;let mut start=0;
@@ -253,6 +257,8 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
         if cursor>=current.next{break}
         let(next,batch)=volume.changes(cursor,journal.id)?;
         if next<=cursor{return Err("NTFS journal did not advance.".into())}
+        relevant|=batch.iter().any(|r|r.executable()||r.reason&0x10000!=0
+            ||(r.directory()&&r.reason&(0x100|0x200|0x800|0x1000|0x2000|0x100000)!=0));
         store.apply(&batch,true)?;
         // Unlinking one hard link must not remove the remaining application's file identity.
         for record in batch.iter().filter(|r|r.reason&(0x200|0x10000)!=0){
@@ -267,7 +273,10 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
     }
     store.put("journal",&journal.id.to_string())?;store.put("cursor",&cursor.to_string())?;
     store.put("serial",&volume.serial.to_string())?;store.put("complete","true")?;
-    let revision=format!("{}-{}-{}",volume.serial,journal.id,cursor);
+    // Unrelated document writes advance the journal cursor without invalidating the executable catalog.
+    if relevant||store.get("application_revision")?.is_none(){store.put("application_revision",&cursor.to_string())?;}
+    let application_revision=store.get("application_revision")?.unwrap_or_else(||cursor.to_string());
+    let revision=format!("{}-{}-{}",volume.serial,journal.id,application_revision);
     if !fresh&&revision==known{return pipe.send(&json!({"version":1,"kind":"complete","revision":revision,"unchanged":true,"records":records}))}
     let mut after=String::new();let mut candidates=0u64;
     loop{
@@ -294,7 +303,7 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
                     let handle=volume::Handle(handle);let mut info=volume::FileInfo::default();
                     if unsafe{volume::GetFileInformationByHandle(handle.0,&mut info)}==0{continue}info.id().text()};
                 let link_name=Path::new(&path).file_name().unwrap_or_default().to_string_lossy();
-                let candidate_id=store.launch_identity(id,&file_id,&parent_id,&link_name)?;
+                let candidate_id=store.launch_identity(&identity_scope,&file_id,&parent_id,&link_name)?;
                 candidates+=1;
                 pipe.send(&json!({"version":1,"kind":"candidate","candidate":{"id":candidate_id,"volume":id,
                     "fileId":file_id,"path":path,"fileStamp":stamp}}))?;

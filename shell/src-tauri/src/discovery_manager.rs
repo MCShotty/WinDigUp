@@ -119,7 +119,7 @@ impl Manager {
     fn run_pass(self:&Arc<Self>,options:&Options,full:bool,requested:bool,cancel:Arc<AtomicBool>)->Result<(),String>{
         use discovery::{store::CandidateStore,volume,ipc::Pipe};
         std::fs::create_dir_all(&self.root).map_err(|e|e.to_string())?;
-        let db=CandidateStore::open(&self.root.join("discovery.sqlite"))?;
+        let db=CandidateStore::recovering(&self.root.join("discovery.sqlite"))?;
         if self.dirty_options.swap(false,Ordering::SeqCst){for volume in &options.volumes{db.set_revision(volume,"")?;}}
         self.publish_cached(&db,options)?;
         let mut failures=vec![];

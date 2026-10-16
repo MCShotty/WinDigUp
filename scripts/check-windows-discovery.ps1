@@ -33,8 +33,8 @@ try {
  if (!(Test-Path $root)) { throw 'Fixture NTFS volume was not mounted' }
  $volume=(& mountvol.exe $root /L | Out-String).Trim()
  if ($volume -notmatch '^\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\$') { throw 'Could not resolve fixture volume GUID' }
- & fsutil.exe usn createjournal m=8388608 a=1048576 $root | Out-Null
- if ($LASTEXITCODE -ne 0) { throw 'Could not create disposable USN journal' }
+ $journalOutput=& fsutil.exe usn createjournal m=8388608 a=1048576 ($letter+':') 2>&1
+ if ($LASTEXITCODE -ne 0) { throw ('Could not create disposable USN journal: '+($journalOutput -join ' ')) }
  $portableFolder=Join-Path $root 'Portable العربية';New-Item -ItemType Directory $portableFolder | Out-Null
  $portable=Join-Path $portableFolder 'DigUp Portable Fixture.exe'
  Copy-Item (Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe') $portable

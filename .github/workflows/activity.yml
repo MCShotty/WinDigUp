@@ -61,7 +61,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: discovery-build-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            tests/applications/native/target
+          key: discovery-windows-2025-v1-${{ hashFiles('tests/applications/native/Cargo.lock') }}
       - name: Build the real discovery component and portable fixture
+        id: discovery-build
         shell: pwsh
         run: |
           cargo build --release --locked --manifest-path tests/applications/native/Cargo.toml --bin digup-discovery-fixture
@@ -70,6 +78,13 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "$env:RUNNER_TEMP/app-launch-fixture.res" "/Fe:$env:RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.discovery-build-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            tests/applications/native/target
+          key: discovery-windows-2025-v1-${{ hashFiles('tests/applications/native/Cargo.lock') }}
       - name: Disposable NTFS volume and standard-user permission boundary
         shell: pwsh
         run: scripts/check-windows-discovery.ps1 -Component "$PWD/tests/applications/native/target/release/digup-discovery-fixture.exe" -ComponentOnly

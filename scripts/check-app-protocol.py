@@ -64,6 +64,14 @@ def main():
             assert state["inference_verified"] is True, "Successful query inference was not distinguished from encoder loading"
             assert service.request("apps_index_step")["embedded"] == 1
             assert service.request("apps_index_step")["embedded"] == 2
+            setting = {"id": "setting:display", "name": "Display", "text": "Photo display for portraits", "hash": hashlib.sha256(b"Photo display for portraits").hexdigest()}
+            state = service.request("settings_catalog", revision="settings-one", documents=[setting])
+            assert state["total"] == 1 and state["embedded"] == 0
+            assert service.request("settings_index_step")["embedded"] == 1
+            settings_hit = service.request("settings_search", q="retouch portrait", revision="settings-one")
+            assert all(h["id"].startswith("setting:") for h in settings_hit["hits"]), settings_hit
+            assert service.request("apps_status")["total"] == 2, "Settings modified the app store"
+            assert len(list((root / "index").rglob("windows-settings.sqlite"))) == 1
             first = service.request("apps_search", q="retouch portrait", revision="one")
             second = service.request("apps_search", q="retouch portrait", revision="one")
             assert first["hits"] == second["hits"] and first["hits"][0]["id"] == documents[0]["id"]
@@ -83,6 +91,8 @@ def main():
             assert service.request("apps_status")["inference_verified"] is False, "Encoder loading was reported as inference"
             state = service.request("apps_search", q="retouch portrait", revision="two")
             assert state["embedded"] == 0 and not state["hits"], "Changed runtime reused incompatible vectors"
+            state = service.request("settings_search", q="retouch portrait", revision="settings-one")
+            assert state["embedded"] == 0 and not state["hits"], "Settings retained incompatible runtime vectors"
         finally:
             service.close()
         env["DIGUP_APP_TEST_FAILURE"] = "1"

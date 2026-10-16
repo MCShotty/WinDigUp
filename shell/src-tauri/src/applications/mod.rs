@@ -560,9 +560,10 @@ impl Catalog {
         let semantic_enabled = self.semantic_enabled();
         let s = self.snapshot.read().unwrap();
         let docs: Vec<Value> = if semantic_enabled {
-            s.hits
-                .iter()
-                .filter(|h| !h.hidden)
+            let mut candidates=s.hits.iter().filter(|h|!h.hidden).collect::<Vec<_>>();
+            let priority=|h:&Hit|if !h.purpose.is_empty()||!h.aliases.is_empty(){0}else if !h.source.starts_with("drive:"){1}else{2};
+            candidates.sort_by(|a,b|priority(a).cmp(&priority(b)).then_with(||a.name.cmp(&b.name)).then_with(||a.id.cmp(&b.id)));
+            candidates.into_iter()
                 .take(20_000)
                 .map(|h| {
                     // Identity and user purpose come first, inside the existing 512-token text profile.
