@@ -15,11 +15,7 @@ func workerService(_ args: Arguments) -> Int32 {
         return 1
     }
     let info = embedder.info
-    let infoFields: [String: Any] = [
-        "model": info.model, "revision": info.revision, "runtime": info.runtime, "dtype": info.dtype, "dim": info.dim,
-        "text_only": info.textOnly, "load_seconds": info.loadSeconds ?? 0,
-        "device": info.device ?? "", "execution_policy": info.executionPolicy ?? "",
-    ]
+    let infoFields = info.fields
     emit(["ready": true, "info": infoFields])
     while let line = readLine() {
         guard let data = line.data(using: .utf8),

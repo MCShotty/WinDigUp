@@ -6,6 +6,9 @@
 // Runs on a machine without any GPU. It must reject arithmetic before changing the output buffer.
 int main(int argc, char ** argv) {
     if (!ggml_backend_accelerator_only()) { return 1; }
+    if (ggml_backend_accelerator_policy_version() != 2) { return 8; }
+    if (ggml_backend_vulkan_vendor_allowed(0x10de)) { return 9; }
+    if (!ggml_backend_vulkan_vendor_allowed(0x1002) || !ggml_backend_vulkan_vendor_allowed(0x8086)) { return 10; }
     if (argc > 1) { ggml_backend_load_all_from_path(argv[1]); } else { ggml_backend_load_all(); }
     auto backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (!backend) { return 7; }

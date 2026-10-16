@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod acceleration;
+mod accelerator_probe;
 mod activity;
 mod applications;
 mod application_commands;
@@ -177,11 +178,7 @@ impl Shell {
     }
 
     fn index_folder(&self) -> Option<PathBuf> {
-        self.options.index_folder().map(|folder| {
-            if self.settings.lock().unwrap().acceleration.backend == "openvino-npu" && !folder.ends_with("openvino-npu") {
-                folder.join("openvino-npu")
-            } else { folder }
-        })
+        self.options.index_folder().map(|base| self.settings.lock().unwrap().acceleration.index_directory(&base))
     }
 
     fn index_arguments(&self) -> Vec<String> {
@@ -208,7 +205,7 @@ impl Shell {
     }
 
     fn model_ready(&self) -> bool {
-        self.model_state.lock().unwrap()["state"] == "ready"
+        self.settings.lock().unwrap().acceleration.ready() && self.model_state.lock().unwrap()["state"] == "ready"
     }
 
     /// The panel sits centered in a window that fills the screen (Settings, on Wayland only).
@@ -662,7 +659,7 @@ fn main() {
             app_state, activity_snapshot, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration,
+            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
             search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps, indexing_diagnostics
         ])
         .build(tauri::generate_context!())
@@ -783,6 +780,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     shell.diagnostics.record("shell", json!({"event":"startup","build":env!("DIGUP_BUILD"),
         "backend":shell.settings.lock().unwrap().acceleration.backend,"folders":shell.folders(),"index":shell.index_folder()}));
     application_commands::start(&handle, &shell);
+    discover_initial_accelerator(&handle, &shell);
     if shell.settings.lock().unwrap().delete_code_index {
         delete_code_index(&shell);
     }
@@ -822,16 +820,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     tauri::async_runtime::spawn(async move {
         if let Ok(reply) = warm.search.ask(json!({"op": "status"})).await {
             // What's indexed already, before any index helper says (none runs while indexing is held or paused).
-            {
-                let mut status = warm.status.lock().unwrap();
-                if status.files == 0 && reply["files"].is_u64() {
-                    status.apply(&json!({"event": "counts", "files": reply["files"], "searchable": reply["searchable"],
-                                         "pending": reply["pending"], "unfinished": reply["unfinished"]}));
-                    if status.activity == status::Activity::Starting && (status.paused || status.held_until.is_some()) {
-                        status.activity = status::Activity::Idle;
-                    }
-                }
-            }
+            apply_cached_counts(&warm, &reply);
             changed(&counted);
         }
     });
@@ -1579,9 +1568,69 @@ fn set_update_checks(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), Strin
     settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
 }
 
+/// A separate process owns metadata discovery, with no model weights or inference.
+#[tauri::command]
+async fn accelerator_devices(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    let launch = shell.launch(vec!["accelerator".into(), "--list".into(), "--json".into()], "accelerators.log");
+    tauri::async_runtime::spawn_blocking(move || accelerator_probe::run(&launch, Duration::from_secs(15)))
+        .await.map_err(|e|e.to_string())?
+}
+
+fn apply_cached_counts(shell: &Shell, reply: &Value) {
+    // Hold settings until counts are applied, so a discovery-driven scope change cannot interleave.
+    let settings = shell.settings.lock().unwrap();
+    if settings.acceleration.discovery_pending { return; }
+    if let Some(base) = shell.options.index_folder() {
+        let expected = settings.acceleration.index_directory(&base).join("index.sqlite");
+        shell.status.lock().unwrap().cached_counts(reply, &expected);
+    }
+}
+
+fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
+    if !shell.settings.lock().unwrap().acceleration.discovery_pending { return; }
+    let app=app.clone(); let shell=shell.clone();
+    std::thread::spawn(move || {
+        let launch=shell.launch(vec!["accelerator".into(),"--list".into(),"--json".into()],"accelerators.log");
+        let result=accelerator_probe::run(&launch,Duration::from_secs(15));
+        let error={
+            let mut settings=shell.settings.lock().unwrap();
+            if !settings.acceleration.discovery_pending { return; }
+            let base=shell.options.index_folder();
+            let old_index=base.as_ref().map(|base| settings.acceleration.index_directory(base));
+            let resolution=result.as_ref().map_err(String::clone).and_then(|probe|settings.acceleration.resolve_discovery(probe));
+            if let Err(error)=resolution {
+                settings.acceleration.discovery_pending=false;
+                settings.acceleration.discovery_error=Some(error);
+            }
+            if let Err(error)=settings.save(&shell.settings_path) {
+                settings.acceleration.discovery_error=Some(format!("Can't save the initial accelerator choice: {error}"));
+            }
+            if old_index != base.as_ref().map(|base| settings.acceleration.index_directory(base)) {
+                shell.status.lock().unwrap().reset_for_index();
+            }
+            settings.acceleration.discovery_error.clone()
+        };
+        shell.search.set_environment(shell.helper_environment());
+        let counted=shell.clone(); let count_app=app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(reply)=counted.search.ask(json!({"op":"status"})).await {
+                apply_cached_counts(&counted,&reply);
+                changed(&count_app);
+            }
+        });
+        *shell.app_sync.blocking_lock()=None;
+        shell.diagnostics.record("accelerator",json!({"event":"discovery","error":error,"probe":result.ok()}));
+        if let Some(message)=error { model_event(&app,json!({"event":"error","message":message})); }
+        else if shell.model_ready() { measure_then_index(&app); }
+        let _=app.emit("acceleration",shell.settings.lock().unwrap().acceleration.clone());
+        changed(&app);
+    });
+}
+
 /// Applying an inference configuration restarts all helpers together so query and index vectors cannot mix runtimes.
 #[tauri::command]
 fn set_acceleration(app: AppHandle, shell: State<'_, Arc<Shell>>, acceleration: acceleration::Acceleration) -> Result<(), String> {
+    let acceleration = acceleration.confirmed();
     acceleration.validate()?;
     {
         let mut settings = shell.settings.lock().unwrap();
@@ -1985,7 +2034,12 @@ fn model_event(app: &AppHandle, event: Value) {
         "waiting" => json!({"state": "waiting"}),
         // Where it got to stays shown while it waits to try again.
         "retry" => json!({"state": "downloading", "bytes": before["bytes"], "total": before["total"], "problem": event["message"]}),
-        "done" => json!({"state": "ready"}),
+        "done" => {
+            let config=shell.settings.lock().unwrap().acceleration.clone();
+            if let Some(message)=config.discovery_error { json!({"state":"failed","message":message}) }
+            else if config.selection_required { json!({"state":"failed","message":"Re-select your GPU in Settings after the NVIDIA CUDA upgrade."}) }
+            else { json!({"state":"ready"}) }
+        },
         "error" => json!({"state": "failed", "message": event["message"]}),
         _ => return,
     };
@@ -2002,6 +2056,7 @@ fn model_event(app: &AppHandle, event: Value) {
 /// the index; estimates on Linux and Windows go by it until indexing has measured enough itself), then indexing.
 fn measure_then_index(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
+    if !shell.settings.lock().unwrap().acceleration.ready() { return; }
     // A Mac times itself without the model (Metal, and Vision for the OCR that indexing runs there).
     if cfg!(target_os = "macos") {
         return run_index(app);

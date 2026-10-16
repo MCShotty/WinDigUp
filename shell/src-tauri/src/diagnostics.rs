@@ -30,15 +30,21 @@ impl Diagnostics {
                 runtime["applicationState"] = state;
             }
             if source == "search" && event["event"] == "encoder" {
-                runtime["encoder"] = json!({"state":event["state"],"updatedAt":time,"message":event["error"]});
+                let message = if event["state"] == "ready" && event["inference_verified"] != true {
+                    runtime["encoder"]["message"].clone()
+                } else { event["error"].clone() };
+                runtime["encoder"] = json!({"state":event["state"],"updatedAt":time,"message":message});
             }
             let verified = event["execution_policy"] == "accelerator-only"
                 && event["device"].as_str().is_some_and(|device| !device.is_empty())
                 && event.get("error").is_none()
                 && ((source == "speed" && event["measured"] == true)
-                    || (source == "search" && event["event"] == "encoder" && event["state"] == "ready"));
+                    || (source == "search" && event["event"] == "encoder" && event["state"] == "ready" && event["inference_verified"] == true));
             if verified {
                 runtime["verified"] = json!({"device":event["device"],"executionPolicy":"accelerator-only","at":time,"source":source});
+                for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"] {
+                    if let Some(value) = event.get(key) { runtime["verified"][key] = value.clone(); }
+                }
             }
         }
         let entry = json!({"time": time, "source": source, "event": event});
@@ -112,6 +118,10 @@ mod tests {
         let diagnostics=Diagnostics::new(&dir);
         diagnostics.record("speed",json!({"device":"CPU","measured":true}));
         assert!(diagnostics.runtime()["verified"].is_null());
+        diagnostics.record("search",json!({"event":"encoder","state":"ready","device":"RTX 2060","execution_policy":"accelerator-only","inference_verified":false}));
+        assert!(diagnostics.runtime()["verified"].is_null(), "loading an encoder is not inference");
+        diagnostics.record("search",json!({"event":"encoder","state":"ready","device":"RTX 2060","execution_policy":"accelerator-only","inference_verified":true}));
+        assert_eq!(diagnostics.runtime()["verified"]["device"], "RTX 2060");
         diagnostics.record("speed",json!({"device":"RX 7900 XTX","measured":true,"execution_policy":"accelerator-only"}));
         for n in 0..110 { diagnostics.record("index",json!({"event":"scan_progress","visited":n})); }
         assert_eq!(diagnostics.runtime()["verified"]["device"],"RX 7900 XTX");
@@ -133,6 +143,16 @@ mod tests {
         assert_eq!(d.significant().as_array().unwrap().len(),2);
         for n in 0..40 {d.record("index",json!({"event":"error","message":format!("error {n}")}));}
         assert_eq!(d.significant().as_array().unwrap().len(),30);
+    }
+
+    #[test]
+    fn retry_does_not_hide_a_cuda_failure_before_successful_inference() {
+        let d=Diagnostics::new(&std::env::temp_dir().join("digup-retry-failure-absent"));
+        d.record("search",json!({"event":"encoder","state":"unavailable","error":"insufficient_vram"}));
+        d.record("search",json!({"event":"encoder","state":"ready","inference_verified":false}));
+        assert_eq!(d.runtime()["encoder"]["message"],"insufficient_vram");
+        d.record("search",json!({"event":"encoder","state":"ready","inference_verified":true}));
+        assert!(d.runtime()["encoder"]["message"].is_null());
     }
 
     #[test]

@@ -72,7 +72,7 @@ With the .deb, DigUp tells you when there's a new version and opens its release 
 
 ## Using it
 
-This fork adds accelerator-only AMD Vulkan (RDNA1/RX 5000 and newer), NVIDIA Vulkan and Intel OpenVINO NPU modes.
+This fork adds accelerator-only AMD Vulkan (RDNA1/RX 5000 and newer), NVIDIA CUDA (RTX 20-series and newer) and Intel OpenVINO NPU modes. NVIDIA cannot execute through Vulkan.
 See [acceleration setup, requirements and hardware validation limits](docs/acceleration.md).
 
 On Windows, this fork also finds and launches registered applications. Type a name or use `apps:`; application names

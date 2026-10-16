@@ -38,9 +38,11 @@ pub fn snapshot(input: Input) -> Value {
     let work = if phase == "finishing" { &state["finishing"] } else { &state["indexing"] };
     let total = work["total"].as_u64().filter(|n| *n > 0);
     let done = total.map(|n| work["done"].as_u64().unwrap_or(0).min(n));
-    let semantic_verified = semantic["encoder"] == "ready" && semantic["execution_policy"] == "accelerator-only"
+    let semantic_verified = semantic["encoder"] == "ready" && semantic["inference_verified"] == true && semantic["execution_policy"] == "accelerator-only"
         && semantic["device"].as_str().is_some_and(|s| !s.is_empty());
-    let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"]}) }
+    let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"] ,
+        "backend":semantic["backend"],"device_id":semantic["device_id"],"driver_version":semantic["driver_version"],
+        "runtime_version":semantic["runtime_version"],"precision_profile":semantic["precision_profile"],"build_identity":semantic["build_identity"]}) }
         else { runtime["verified"].clone() };
     let encoder = if helpers["search"]["running"] == false { "stopped" }
         else { runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown") };
@@ -50,7 +52,12 @@ pub fn snapshot(input: Input) -> Value {
     if catalog["enabled"] == false || catalog["semanticEnabled"] == false { purpose["state"]=json!("disabled"); }
     else if state["model"]["state"] == "failed" { purpose["state"]=json!("unavailable");purpose["message"]=state["model"]["message"].clone(); }
     else if state["model"]["state"] != "ready" { purpose["state"]=json!("preparing"); }
-    let inference_error = if state["model"]["state"] == "failed" { &state["model"]["message"] } else { &runtime["encoder"]["message"] };
+    if helpers["search"]["error"].is_string() && catalog["enabled"] != false && catalog["semanticEnabled"] != false {
+        purpose["state"]=json!("unavailable"); purpose["message"]=helpers["search"]["error"].clone();
+    }
+    let inference_error = if state["model"]["state"] == "failed" { &state["model"]["message"] }
+        else if helpers["search"]["error"].is_string() { &helpers["search"]["error"] }
+        else { &runtime["encoder"]["message"] };
     json!({
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
         "files":{"schemaVersion":1,"phase":phase,"line":state["line"],
@@ -74,7 +81,7 @@ mod tests {
     use super::*;
     fn fixture(state: Value) -> Value {
         snapshot(Input { state, catalog:json!({"supported":true,"enabled":true,"count":663}),
-            semantic:json!({"state":"ready","total":663,"embedded":663,"encoder":"ready","device":"AMD Radeon RX 7900 XTX","execution_policy":"accelerator-only"}),
+            semantic:json!({"state":"ready","total":663,"embedded":663,"encoder":"ready","device":"AMD Radeon RX 7900 XTX","execution_policy":"accelerator-only","inference_verified":true}),
             configured:json!({"backend":"vulkan"}),helpers:json!({"index":{"pid":42},"search":{"running":false}}),
             runtime:json!({}),events:json!([]),has_folders:true,blocked_by:None })
     }

@@ -184,6 +184,15 @@ def main():
                 "PDFium's above)", need(pdfium / "licenses/icu.txt")),
     ]
     if windows:
+        cuda = VENDOR / "cuda"
+        record = json.loads(need(cuda / "redistribution.json"))
+        if record["version"] != "12.9.1" or record["platform"] != "windows-x86_64":
+            sys.exit("notices: pinned Windows CUDA redistribution is missing")
+        licenses = sorted((cuda / "licenses").rglob("*"))
+        licenses = [path for path in licenses if path.is_file()]
+        if not licenses:
+            sys.exit("notices: CUDA redistribution license files are missing")
+        parts += [section("NVIDIA CUDA 12.9.1 redistributable components", *[need(path) for path in licenses])]
         parts += [section("Microsoft Visual C++ runtime and WebView2",
                           "DigUp's helper ships Microsoft's Visual C++ runtime libraries, which their license allows "
                           "redistributing, and the app's window uses the Microsoft Edge WebView2 runtime that Windows "

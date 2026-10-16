@@ -25,10 +25,14 @@ public final class LlamaEmbedder: Embedder {
     public static let buildTag = LLAMA_BUILD_TAG
 
     /// What every LlamaEmbedder reports (its `vectorSource` goes into index fingerprints), known without loading it.
-    public static let modelInfo = WorkerInfo(model: "google/embeddinggemma-2", revision: LlamaModels.revision,
-                                             runtime: "llama.cpp-vectors\(vectorVersion)",
-                                             dtype: "text-q8_0+mmproj-q8_0", dim: 768, textOnly: false,
-                                             loadSeconds: nil)
+    public static let buildIdentity = LLAMA_BUILD_ID
+    public static var modelInfo: WorkerInfo {
+        let cuda = (try? Acceleration.selected()) == .nvidiaCUDA
+        return WorkerInfo(model: "google/embeddinggemma-2", revision: LlamaModels.revision,
+            runtime: "llama.cpp-vectors\(vectorVersion)", dtype: "text-q8_0+mmproj-q8_0", dim: 768,
+            textOnly: false, loadSeconds: nil, backend: cuda ? "nvidia-cuda" : nil,
+            precisionProfile: cuda ? Acceleration.cudaPrecision : nil, buildIdentity: cuda ? buildIdentity : nil)
+    }
 
     public private(set) var info: WorkerInfo
     private var model: OpaquePointer?
@@ -49,12 +53,14 @@ public final class LlamaEmbedder: Embedder {
         let started = Date()
         LlamaLog.shared.send(to: log)
         let acceleration = try Acceleration.selected()
+        try Acceleration.requireInferenceReady()
         guard acceleration != .openvinoNPU else { throw WorkerError.failed("OpenVINO requires the NPU worker") }
         _ = Self.backend
-        guard ggml_backend_accelerator_only() else {
+        guard ggml_backend_accelerator_only(), ggml_backend_accelerator_policy_version() == 2 else {
             throw WorkerError.failed("The loaded ggml library does not enforce accelerator-only execution")
         }
         let device = try Self.selectDevice(acceleration)
+        let deviceInfo = Self.describe(device)
         let deviceName = String(cString: ggml_backend_dev_description(device))
         guard textOnly || models.media != nil else {
             throw WorkerError.notFound("\(LlamaModels.mediaFile) (images and audio) isn't downloaded yet")
@@ -69,7 +75,7 @@ public final class LlamaEmbedder: Embedder {
             return llama_model_load_from_file(models.text.path, modelParams)
         }
         guard let model = loaded else {
-            throw WorkerError.failed("can't load the complete model on \(deviceName); CPU fallback is disabled")
+            throw WorkerError.failed(LlamaLog.shared.failure("can't load the complete model on \(deviceName); CPU fallback is disabled"))
         }
         // One input must fit one micro-batch: 2048 tokens (the reference's cut), which also holds a 1120-token image or
         // a 750-token 30 s clip. Queries are short, so the query encoder reserves less and cuts at 512.
@@ -84,19 +90,25 @@ public final class LlamaEmbedder: Embedder {
         params.pooling_type = LLAMA_POOLING_TYPE_MEAN
         params.op_offload = true
         params.offload_kqv = true
+        if acceleration == .nvidiaCUDA {
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED
+            params.type_k = GGML_TYPE_F32
+            params.type_v = GGML_TYPE_F32
+        }
         #if !os(macOS)
         params.n_threads = Self.threads
         params.n_threads_batch = Self.threads
         #endif
         guard let context = llama_init_from_model(model, params) else {
             llama_model_free(model)
-            throw WorkerError.failed("can't create a llama.cpp context")
+            throw WorkerError.failed(LlamaLog.shared.failure("can't create a llama.cpp context"))
         }
         var media: OpaquePointer?
         if let mediaFile = models.media, !textOnly {
             var mediaParams = mtmd_context_params_default()
             mediaParams.use_gpu = true
             mediaParams.device = device
+            if acceleration == .nvidiaCUDA { mediaParams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED }
             mediaParams.print_timings = false
             mediaParams.warmup = true
             mediaParams.image_min_tokens = 1      // never rescale: images arrive at their final size (ImageSizing)
@@ -108,7 +120,7 @@ public final class LlamaEmbedder: Embedder {
             if media == nil {
                 llama_free(context)
                 llama_model_free(model)
-                throw WorkerError.failed("can't load \(mediaFile.path)")
+                throw WorkerError.failed(LlamaLog.shared.failure("can't load \(mediaFile.path)"))
             }
         }
         self.model = model
@@ -122,7 +134,10 @@ public final class LlamaEmbedder: Embedder {
         let known = Self.modelInfo
         info = WorkerInfo(model: known.model, revision: known.revision, runtime: known.runtime, dtype: known.dtype,
                           dim: embeddingSize, textOnly: textOnly, loadSeconds: nil,
-                          device: deviceName, executionPolicy: "accelerator-only")
+                          device: deviceName, executionPolicy: "accelerator-only", backend: acceleration.rawValue,
+                          deviceId: deviceInfo?.stableID, driverVersion: deviceInfo?.driverVersion,
+                          runtimeVersion: deviceInfo?.runtimeVersion, precisionProfile: known.precisionProfile,
+                          buildIdentity: known.buildIdentity)
         // The first calls build the Metal pipelines: pay that now (the panel is opening).
         do {
             for _ in 0..<2 { _ = try embedTexts([Prompts.query("warm up")]) }
@@ -133,7 +148,9 @@ public final class LlamaEmbedder: Embedder {
         let seconds = (Date().timeIntervalSince(started) * 100).rounded() / 100
         info = WorkerInfo(model: info.model, revision: info.revision, runtime: info.runtime, dtype: info.dtype,
                           dim: info.dim, textOnly: textOnly, loadSeconds: seconds,
-                          device: deviceName, executionPolicy: "accelerator-only")
+                          device: deviceName, executionPolicy: "accelerator-only", backend: info.backend,
+                          deviceId: info.deviceId, driverVersion: info.driverVersion, runtimeVersion: info.runtimeVersion,
+                          precisionProfile: info.precisionProfile, buildIdentity: info.buildIdentity)
         LlamaLog.shared.line("accelerator-only: \(deviceName); text, vision, audio, pooling and normalization on GPU")
         LlamaLog.shared.line("ready in \(seconds) s (\(textOnly ? "text-only" : "full"), llama.cpp \(Self.buildTag), "
                              + "vectors \(Self.vectorVersion))")
@@ -207,7 +224,7 @@ public final class LlamaEmbedder: Embedder {
                 for i in 0..<count { try add(token: tokens[i]) }
             } else {
                 guard mtmd_encode_chunk(media, chunk) == 0, let rows = mtmd_get_output_embd(media) else {
-                    throw LlamaError("the encoder failed on \(path)")
+                    throw LlamaError(LlamaLog.shared.failure("the encoder failed on \(path)"))
                 }
                 try add(rows: rows, count: mtmd_input_chunk_get_n_tokens(chunk))
             }
@@ -291,6 +308,7 @@ public final class LlamaEmbedder: Embedder {
 
     /// Drops everything added so far, including an input that failed halfway.
     private func reset() {
+        LlamaLog.shared.clearFailure()
         llama_batch_ext_clear(batch)
         sequences = 0
         tokens = 0
@@ -321,7 +339,7 @@ public final class LlamaEmbedder: Embedder {
     private func run() throws -> [[Float]] {
         defer { reset() }
         let status = llama_process(context, LLAMA_PROCESS_TYPE_ENCODE, batch)
-        guard status == 0 else { throw WorkerError.failed("llama_process failed (\(status))") }
+        guard status == 0 else { throw WorkerError.failed(LlamaLog.shared.failure("llama_process failed (\(status))")) }
         return try (0..<sequences).map { sequence in
             guard let pooled = llama_get_embeddings_seq(context, sequence) else {
                 throw WorkerError.failed("no pooled embedding for input \(sequence)")
@@ -336,36 +354,119 @@ public final class LlamaEmbedder: Embedder {
         }
     }
 
+    private static func describe(_ device: ggml_backend_dev_t) -> AcceleratorDevice? {
+        let registry = String(cString: ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))).lowercased()
+        let type = ggml_backend_dev_type(device)
+        var native = ggml_accelerator_device_info()
+        let hasInfo = ggml_backend_dev_accelerator_info(device, &native)
+        if registry != "metal" && (!hasInfo || native.policy_version != 2) { return nil }
+        let stable = withUnsafePointer(to: &native.stable_id) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: 96) { String(cString: $0) }
+        }
+        return AcceleratorDevice(id: String(cString: ggml_backend_dev_name(device)), backend: registry,
+            name: String(cString: ggml_backend_dev_description(device)), vendorID: native.vendor_id, stableID: stable,
+            hardware: type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU,
+            computeCapability: native.compute_capability > 0 ? Int(native.compute_capability) : nil,
+            driverVersion: native.driver_version > 0 ? Int(native.driver_version) : nil,
+            runtimeVersion: native.runtime_version > 0 ? Int(native.runtime_version) : nil)
+    }
+
     private static func selectDevice(_ acceleration: Acceleration) throws -> ggml_backend_dev_t {
         let requested = ProcessInfo.processInfo.environment["DIGUP_GPU"]
-        // Prefer a discrete adapter on systems that also expose integrated graphics.
+        if acceleration == .nvidiaCUDA, requested?.hasPrefix("Vulkan") == true {
+            throw WorkerError.failed("A Vulkan device identifier cannot select CUDA. Re-select the GPU in Settings.")
+        }
         for preferred in [GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_IGPU] {
             for index in 0..<ggml_backend_dev_count() {
-                guard let device = ggml_backend_dev_get(index), ggml_backend_dev_type(device) == preferred else { continue }
-                let registry = String(cString: ggml_backend_reg_name(ggml_backend_dev_backend_reg(device))).lowercased()
-                let name = String(cString: ggml_backend_dev_name(device))
-                let description = String(cString: ggml_backend_dev_description(device)).lowercased()
-                guard registry == (acceleration == .metal ? "metal" : "vulkan") else { continue }
-                guard !["llvmpipe", "lavapipe", "swiftshader", "software", "basic render"].contains(where: description.contains) else {
-                    continue
-                }
-                if let requested, !requested.isEmpty, requested != name { continue }
-                if acceleration == .amdVulkan, !description.contains("amd") && !description.contains("radeon") { continue }
-                if acceleration == .nvidiaVulkan, !description.contains("nvidia") { continue }
+                guard let device = ggml_backend_dev_get(index), ggml_backend_dev_type(device) == preferred,
+                      let value = describe(device), acceleration.accepts(value), value.matches(requested) else { continue }
                 return device
             }
         }
-        throw WorkerError.failed("No compatible \(acceleration.rawValue) hardware GPU\(requested.map { " (\($0))" } ?? "") found. "
-            + "Install the vendor's Vulkan driver. AMD supports RDNA1/RX 5000 and newer. CPU fallback is disabled.")
+        if acceleration == .nvidiaCUDA {
+            for index in 0..<ggml_backend_dev_count() {
+                guard let device = ggml_backend_dev_get(index), let value = describe(device),
+                      value.backend == "cuda", value.matches(requested) else { continue }
+                if !Acceleration.cudaComputeCapabilities.contains(value.computeCapability ?? 0) {
+                    throw WorkerError.failed("Unsupported CUDA GPU: \(value.name) (SM \(value.computeCapability ?? 0)). This build targets RTX 20/30/40/50-series (SM 75/86/89/120).")
+                }
+                if (value.driverVersion ?? 0) < 12090 {
+                    throw WorkerError.failed("Insufficient NVIDIA driver for \(value.name). Install driver 576.57 or newer (CUDA driver API 12.9 or newer).")
+                }
+            }
+        }
+        let hint = acceleration == .nvidiaCUDA
+            ? "CUDA requires RTX 20-series or newer and NVIDIA driver 576.57 or newer. Check the CUDA runtime and device selection in Settings."
+            : "NVIDIA cannot use Vulkan. AMD requires a current Vulkan driver and RDNA1/RX 5000 or newer."
+        throw WorkerError.failed("No compatible \(acceleration.rawValue) hardware GPU\(requested.flatMap { $0.isEmpty ? nil : " (\($0))" } ?? "") found. \(hint) CPU fallback is disabled.")
     }
 
-    /// Driver/device probe without loading model weights. CPU and software devices cannot pass.
-    public static func verifyGPU() throws -> String {
+    public static func verifyDevice() throws -> AcceleratorDevice {
         let selected = try Acceleration.selected()
+        try Acceleration.requireInferenceReady()
         guard selected != .openvinoNPU else { throw WorkerError.failed("Probe NPU through its model worker") }
         _ = backend
-        guard ggml_backend_accelerator_only() else { throw WorkerError.failed("Unverified ggml execution policy") }
-        return String(cString: ggml_backend_dev_description(try selectDevice(selected)))
+        guard ggml_backend_accelerator_only(), ggml_backend_accelerator_policy_version() == 2 else {
+            throw WorkerError.failed("Unverified native accelerator policy")
+        }
+        let device = try selectDevice(selected)
+        guard let value = describe(device) else { throw WorkerError.failed("Device metadata is unavailable") }
+        return value
+    }
+
+    public static func verifyGPU() throws -> String { try verifyDevice().name }
+
+    /// No weights or inference. CUDA dependencies are dynamically loaded and cannot prevent the GUI from starting.
+    public static func deviceInventory() throws -> [String: Any] {
+        _ = backend
+        guard ggml_backend_accelerator_only(), ggml_backend_accelerator_policy_version() == 2 else {
+            throw WorkerError.failed("The loaded native libraries do not implement accelerator policy 2")
+        }
+        var devices: [[String: Any]] = []
+        for index in 0..<ggml_backend_dev_count() {
+            guard let device = ggml_backend_dev_get(index), let value = describe(device) else { continue }
+            let acceleration: Acceleration = value.backend == "cuda" ? .nvidiaCUDA : value.backend == "metal" ? .metal : .vulkan
+            let available = acceleration.accepts(value)
+            var fields = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]
+            fields["available"] = available
+            if !available {
+                if value.backend == "cuda", !Acceleration.cudaComputeCapabilities.contains(value.computeCapability ?? 0) {
+                    fields["errorCode"] = "unsupported_device"; fields["message"] = "This CUDA build supports RTX 20/30/40/50-series (SM 75/86/89/120)."
+                } else if value.backend == "cuda", (value.driverVersion ?? 0) < 12090 {
+                    fields["errorCode"] = "insufficient_driver"; fields["message"] = "Install NVIDIA driver 576.57 or newer (CUDA driver API 12.9 or newer)."
+                } else { fields["errorCode"] = "unsupported_device"; fields["message"] = "Unsupported hardware device" }
+            }
+            devices.append(fields)
+        }
+        let registers = (0..<ggml_backend_reg_count()).map { String(cString: ggml_backend_reg_name(ggml_backend_reg_get($0))).lowercased() }
+        let folder = Bundle.main.executableURL?.deletingLastPathComponent()
+        var backends: [[String: Any]] = []
+        for name in ["cuda", "vulkan"] {
+            let ready = devices.contains { $0["backend"] as? String == name && $0["available"] as? Bool == true }
+            var fields: [String: Any] = ["backend": name, "state": ready ? "available" : "unavailable"]
+            if !ready {
+                var code = registers.contains(name) ? "device_unavailable" : "backend_unavailable"
+                var message = name == "cuda" ? "CUDA is unavailable. Check NVIDIA driver 576.57 or newer and the app-local CUDA runtime." : "No supported non-NVIDIA Vulkan GPU is available."
+                if let unavailable = devices.first(where: { $0["backend"] as? String == name && $0["errorCode"] != nil }) {
+                    code = unavailable["errorCode"] as? String ?? code; message = unavailable["message"] as? String ?? message
+                }
+                #if os(Windows)
+                if name == "cuda" {
+                    let system = ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:\\Windows"
+                    if !FileManager.default.fileExists(atPath: system + "\\System32\\nvcuda.dll") {
+                        code = "driver_missing"; message = "Install an NVIDIA driver supporting CUDA 12.9.1 (576.57 or newer)."
+                    } else if let folder, ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll", "ggml-cuda.dll"].contains(where: { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }) {
+                        code = "runtime_missing"; message = "The packaged CUDA runtime is incomplete. Reinstall WinDigUp."
+                    }
+                }
+                #endif
+                fields["errorCode"] = code; fields["message"] = message
+            }
+            backends.append(fields)
+        }
+        _ = folder
+        return ["schemaVersion": 1, "probeOnly": true, "devices": devices, "backends": backends,
+                "policyVersion": 2, "buildIdentity": buildIdentity, "precisionProfile": Acceleration.cudaPrecision]
     }
 
     /// llama.cpp's process-wide setup, once.
@@ -386,8 +487,7 @@ public final class LlamaEmbedder: Embedder {
     }()
 
     /// On Linux and Windows ggml's backends are shared libraries (GGML_BACKEND_DL, scripts/build-llama.sh): the CPU
-    /// variants always, CUDA or Vulkan when the machine has them. They're looked for in $DIGUP_BACKENDS, then beside this
-    /// executable, then wherever ggml itself looks; whatever loads and works is what the model runs on.
+    /// storage variants, CUDA for NVIDIA and Vulkan for non-NVIDIA hardware. Selection always pins the requested registry/device.
     private static func loadBackends() {
         let environment = ProcessInfo.processInfo.environment
         var folders: [String] = []
@@ -423,11 +523,20 @@ final class LlamaLog: @unchecked Sendable {
     private let lock = NSLock()
     private var file: FileHandle?             // nil: stderr
     private var level = GGML_LOG_LEVEL_INFO   // CONT continues the previous message, at its level
+    private var recent = ""
+
+    func clearFailure() { lock.withLock { recent = "" } }
+
+    func failure(_ fallback: String) -> String {
+        guard (try? Acceleration.selected()) == .nvidiaCUDA else { return fallback }
+        return lock.withLock { Acceleration.cudaFailure(diagnostic: recent, fallback: fallback) }
+    }
 
     func send(to url: URL?) {
         lock.withLock {
             try? file?.close()
             file = nil
+            recent = ""
             guard let url else { return }
             if !FileManager.default.fileExists(atPath: url.path) {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -446,6 +555,7 @@ final class LlamaLog: @unchecked Sendable {
         lock.withLock {
             if level != GGML_LOG_LEVEL_CONT { self.level = level }
             guard self.level.rawValue >= GGML_LOG_LEVEL_WARN.rawValue else { return }
+            recent = String((recent + text).suffix(16_384))
             (file ?? .standardError).write(Data(text.utf8))
         }
     }

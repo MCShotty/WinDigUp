@@ -20,6 +20,36 @@ installed=$(cygpath -u "$LOCALAPPDATA")/DigUp
 helper=$installed/helper/digup.exe
 test -f "$installed/DigUp.exe"
 test -f "$installed/helper/ggml-vulkan.dll"
+test -f "$installed/helper/ggml-cuda.dll"
+test -f "$installed/helper/cudart64_12.dll"
+test -f "$installed/helper/cublas64_12.dll"
+test -f "$installed/helper/cublasLt64_12.dll"
+test ! -f "$installed/helper/nvcuda.dll"
+python=python3
+python3 -c '' 2>/dev/null || python=python
+"$python" - "$(win "$installed/helper")" <<'PYCUDA'
+import hashlib,json,sys
+from pathlib import Path
+root=Path(sys.argv[1]); record=json.loads((root/'cuda-runtime.json').read_text())
+assert record['version']=='12.9.1' and record['schemaVersion']==1
+for name,expected in record['files'].items():
+ with (root/name).open('rb') as f: assert hashlib.file_digest(f,'sha256').hexdigest()==expected,name
+assert json.loads((root/'native-runtime.json').read_text())['policyVersion']==2
+PYCUDA
+PATH="/c/Windows/System32:/c/Windows" DIGUP_ACCELERATOR=nvidia-cuda "$helper" accelerator --list --json > "$work/devices.json" 2> "$work/devices-error.txt"
+"$python" - "$(win "$work/devices.json")" <<'PYDEVICES'
+import json,sys
+p=json.load(open(sys.argv[1])); assert p['schemaVersion']==1 and p['probeOnly']
+assert all(d['vendorID']!=0x10de for d in p['devices'] if d['backend']=='vulkan')
+PYDEVICES
+if DIGUP_ACCELERATOR=nvidia-vulkan "$helper" accelerator > "$work/removed.txt" 2>&1; then
+  echo "Removed NVIDIA Vulkan backend was accepted" >&2; exit 1
+fi
+grep -q 'NVIDIA Vulkan has been removed' "$work/removed.txt"
+if DIGUP_ACCELERATOR=nvidia-cuda GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 "$helper" accelerator > "$work/spill.txt" 2>&1; then
+  echo "CUDA managed-memory override was accepted" >&2; exit 1
+fi
+grep -q 'managed-memory spill is disabled' "$work/spill.txt"
 test -f "$installed/helper/openvino/digup_openvino.py"
 # No developer tools/runtime on PATH: DLLs and VC/Swift runtimes must be app-local.
 if PATH="/c/Windows/System32:/c/Windows" DIGUP_DEVICE=cpu "$helper" accelerator > "$work/cpu.txt" 2>&1; then
@@ -62,3 +92,10 @@ grep -q '"cpuOption":false' "$work/ui.txt"
 grep -q '"activitySchema":1' "$work/ui.txt"
 grep -q '"activityRendered":true' "$work/ui.txt"
 echo "PASS: installed Windows GUI launches; CPU and invalid backend selection rejected"
+# A reinstall replaces the private runtime folder, including obsolete dependencies, without touching app data.
+printf '%s\n' obsolete > "$installed/helper/obsolete-cuda-fixture.dll"
+MSYS_NO_PATHCONV=1 "$setup" /S
+test ! -f "$installed/helper/obsolete-cuda-fixture.dll"
+test -f "$installed/helper/cuda-runtime.json"
+PATH="/c/Windows/System32:/c/Windows" DIGUP_ACCELERATOR=nvidia-cuda "$helper" accelerator --list --json > "$work/reinstalled-devices.json"
+echo "PASS: CUDA dependency manifest, removed NVIDIA Vulkan, clean-PATH discovery and runtime replacement"

@@ -15,6 +15,14 @@ pub mod diagnostics;
 pub mod helper;
 #[path = "../../../shell/src-tauri/src/status.rs"]
 pub mod status;
+#[path = "../../../shell/src-tauri/src/acceleration.rs"]
+pub mod acceleration;
+#[path = "../../../shell/src-tauri/src/accelerator_probe.rs"]
+pub mod accelerator_probe;
+#[path = "../../../shell/src-tauri/src/hours.rs"]
+pub mod hours;
+#[path = "../../../shell/src-tauri/src/settings.rs"]
+pub mod settings;
 
 #[cfg(test)]
 mod tests {
@@ -106,6 +114,64 @@ mod tests {
         );
         assert_ne!(previous, service.generation());
         service.stop();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn accelerator_environment_retires_the_old_helper_before_new_requests() {
+        let held=Arc::new(AtomicBool::new(false)); let signal=held.clone();
+        let service=python("import os,sys,json,time\nfor line in sys.stdin:\n r=json.loads(line)\n if r['op']=='hold':\n  print('{\"event\":\"holding\"}',flush=True)\n  time.sleep(30)\n print(json.dumps({'id':r['id'],'ok':True,'device':os.getenv('DIGUP_GPU','old')}),flush=True)",move |event| {
+            if event["event"]=="holding" { signal.store(true,Ordering::SeqCst); }
+        });
+        assert_eq!(service.ask(json!({"op":"before"})).await.unwrap()["device"],"old");
+        let copy=service.clone();
+        let pending=tokio::spawn(async move { copy.ask(json!({"op":"hold"})).await });
+        let started=Instant::now();
+        while !held.load(Ordering::SeqCst) && started.elapsed()<Duration::from_secs(15) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(held.load(Ordering::SeqCst));
+        service.set_environment(vec![("DIGUP_GPU".into(),"GPU-selected".into())]);
+        assert!(pending.await.unwrap().is_err());
+        assert_eq!(service.ask(json!({"op":"after"})).await.unwrap()["device"],"GPU-selected");
+        service.stop();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fatal_cuda_helpers_remain_stopped_until_explicit_retry() {
+        use std::sync::Mutex;
+        let directory=std::env::temp_dir().join(format!("digup-fatal-cuda-{}",std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let log=directory.join("worker.log");
+        std::fs::write(&log,"previous process: unsupported op\n").unwrap();
+        let events=Arc::new(Mutex::new(Vec::new())); let record=events.clone();
+        let service=SearchService::new(Launch {
+            program:PathBuf::from(if cfg!(windows){"python"}else{"python3"}),
+            args:vec!["-u".into(),"-c".into(),"import sys; sys.stdin.readline(); print('CUDA error: out of memory',file=sys.stderr,flush=True); sys.exit(1)".into()],
+            env:vec![("DIGUP_ACCELERATOR".into(),"nvidia-cuda".into())],log:Some(log.clone()),background:false,
+        },move |event|record.lock().unwrap().push(event));
+        assert!(service.ask(json!({"op":"search"})).await.unwrap_err().contains("insufficient_vram"));
+        let generation=service.generation();
+        let error=service.ask(json!({"op":"search"})).await.unwrap_err();
+        assert!(error.contains("insufficient_vram"),"{error}");
+        assert_eq!(service.generation(),generation,"a keystroke restarted failed CUDA inference");
+        assert_eq!(service.snapshot()["running"],false);
+        assert!(service.snapshot()["error"].as_str().unwrap().contains("insufficient_vram"));
+        service.stop();
+        assert!(service.snapshot()["error"].is_null());
+        assert!(service.ask(json!({"op":"explicit-retry"})).await.is_err());
+        assert_ne!(service.generation(),generation,"explicit retry did not create a new generation");
+        service.stop();
+        // The current process's offset must exclude an older memory failure from its classification.
+        std::fs::write(&log,"previous process: CUDA error: out of memory\n").unwrap();
+        let second=SearchService::new(Launch {
+            program:PathBuf::from(if cfg!(windows){"python"}else{"python3"}),
+            args:vec!["-u".into(),"-c".into(),"import sys; sys.stdin.readline(); print('unsupported operation in CUDA',file=sys.stderr,flush=True); sys.exit(1)".into()],
+            env:vec![("DIGUP_ACCELERATOR".into(),"nvidia-cuda".into())],log:Some(log),background:false,
+        }, |_|{});
+        assert!(second.ask(json!({"op":"search"})).await.is_err());
+        assert!(second.ask(json!({"op":"search"})).await.unwrap_err().contains("unsupported_operation"));
+        second.stop();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

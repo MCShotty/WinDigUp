@@ -47,6 +47,7 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
 
     private var encoder: (any Embedder)?
     private var encoderState = "stopped"
+    private var encoderPerformedInference = false
     private var vectorCache: [String: [Float]] = [:]
     private var lastQuery = Date()
     private var warnedAboutSource = false
@@ -146,9 +147,12 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             let fingerprint = try applicationFingerprint(encoder)
             try store.prepare(fingerprint: fingerprint)
             if let document = try store.pending() {
-                let values = try encoder.embedTexts([Prompts.document(title: document.name, text: document.text)])
+                let values: [[Float]]
+                do { values = try encoder.embedTexts([Prompts.document(title: document.name, text: document.text)]) }
+                catch { failEncoder(error); throw error }
                 guard let vector = values.first else { throw CLIError("the accelerator returned no application vector") }
                 try store.save(vector, for: document, fingerprint: fingerprint)
+                recordInference(encoder)
             }
             return try applicationState(store)
         case "apps_search":
@@ -339,7 +343,7 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     private func applicationFingerprint(_ worker: any Embedder) throws -> String {
         let backend = try Acceleration.selected()
         return ApplicationStore.fingerprint(info: worker.info, backend: backend.rawValue,
-            runtimeBuild: backend == .openvinoNPU ? "" : LlamaEmbedder.buildTag)
+            runtimeBuild: backend == .openvinoNPU ? "" : backend == .nvidiaCUDA ? LlamaEmbedder.buildIdentity : LlamaEmbedder.buildTag)
     }
 
     private func applicationState(_ store: ApplicationStore) throws -> [String: Any] {
@@ -348,11 +352,13 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             : counts.embedded < counts.total || encoderState != "ready" ? "preparing" : "ready"
         var reply: [String: Any] = ["ok": true, "revision": store.revision, "state": state,
             "total": counts.total, "embedded": counts.embedded, "encoder": encoderState,
+            "inference_verified": encoderPerformedInference,
             "ranking_version": ApplicationStore.rankingVersion, "ranking_calibrated": false]
         if let encoder {
             reply["fingerprint"] = try applicationFingerprint(encoder)
             reply["device"] = encoder.info.device ?? ""
             reply["execution_policy"] = encoder.info.executionPolicy ?? ""
+            for (key, value) in encoder.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"].contains(key) { reply[key] = value }
         }
         if let encoderError { reply["message"] = encoderError }
         return reply
@@ -361,17 +367,21 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     /// The query's vector (cached), or nil when the encoder can't run: keyword results still work.
     private func vector(for text: String, code: Bool) -> [Float]? {
         lastQuery = Date()
-        let key = (code ? "code\u{0}" : "") + text
+        let key = (embedderSource() ?? Acceleration.cacheKey) + "\u{0}" + (code ? "code\u{0}" : "") + text
         if let cached = vectorCache[key] { return cached }
         guard let encoder = runningEncoder() else { return nil }
         do {
-            let values = try encoder.embedTexts([code ? Prompts.codeQuery(text) : Prompts.query(text)]).first ?? []
+            guard let values = try encoder.embedTexts([code ? Prompts.codeQuery(text) : Prompts.query(text)]).first,
+                  values.count == encoder.info.dim, values.allSatisfy({ $0.isFinite }),
+                  abs(values.reduce(0.0) { $0 + Double($1) * Double($1) } - 1) < 0.005
+            else { throw CLIError("the accelerator returned an invalid query vector") }
+            recordInference(encoder)
             if vectorCache.count > 256 { vectorCache.removeAll() }
             vectorCache[key] = values
             return values
         } catch {
             FileHandle.standardError.write(Data("encoder: \(error)\n".utf8))
-            stopEncoder()   // the next query starts a new one
+            failEncoder(error)
             return nil
         }
     }
@@ -386,9 +396,11 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             encoder = worker
             encoderState = "ready"
             encoderError = nil
-            write(["event": "encoder", "state": "ready", "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
-                  "source": worker.info.vectorSource, "device": worker.info.device ?? "",
-                  "execution_policy": worker.info.executionPolicy ?? ""])
+            var receipt = worker.info.fields
+            receipt["event"] = "encoder"; receipt["state"] = "ready"; receipt["source"] = worker.info.vectorSource
+            receipt["inference_verified"] = false
+            receipt["seconds"] = (Date().timeIntervalSince(started) * 100).rounded() / 100
+            write(receipt)
             return worker
         } catch {
             encoderState = "unavailable"
@@ -401,8 +413,24 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     private func stopEncoder() {
         encoder?.close()
         encoder = nil
+        encoderPerformedInference = false
         vectorCache.removeAll()
         if encoderState != "unavailable" { encoderState = "stopped" }
+    }
+
+    private func recordInference(_ worker: any Embedder) {
+        guard !encoderPerformedInference else { return }
+        encoderPerformedInference = true
+        var receipt = worker.info.fields
+        receipt["event"] = "encoder"; receipt["state"] = "ready"; receipt["inference_verified"] = true
+        write(receipt)
+    }
+
+    private func failEncoder(_ error: Error) {
+        stopEncoder()
+        encoderState = "unavailable"
+        encoderError = String("\(error)".prefix(300))
+        write(["event":"encoder", "state":"unavailable", "error":encoderError ?? "Inference failed"])
     }
 
     /// After `idleSeconds` without a query the model and the vectors go (their memory back to the system).

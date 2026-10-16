@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -119,6 +119,7 @@ pub struct SearchService {
     next_id: Arc<AtomicU64>,
     generation: Arc<AtomicU64>,
     on_event: EventSink,
+    failure: Arc<Mutex<Option<String>>>,
 }
 
 struct Searching {
@@ -127,6 +128,28 @@ struct Searching {
     number: u64,
     /// Replies still to come, by request id. Each process has its own, so one that dies fails only its own requests.
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    cuda: bool,
+    log: Option<PathBuf>,
+    log_offset: u64,
+}
+
+/// Read only this worker's bounded stderr after a fatal CUDA exit, never while capturing Activity.
+fn cuda_failure(log: Option<&std::path::Path>, offset: u64) -> String {
+    let text = log.and_then(|path| {
+        let mut file = std::fs::File::open(path).ok()?;
+        let end = file.metadata().ok()?.len();
+        file.seek(SeekFrom::Start(offset.min(end).max(end.saturating_sub(32_768)))).ok()?;
+        let mut bytes = Vec::new(); file.take(32_768).read_to_end(&mut bytes).ok()?;
+        Some(String::from_utf8_lossy(&bytes).to_lowercase())
+    }).unwrap_or_default();
+    let reason = if text.contains("out of memory") || text.contains("cudaerrormemoryallocation") || text.contains("cublas_status_alloc_failed") || text.contains("failed to allocate") {
+        "insufficient_vram: CUDA ran out of GPU memory. Free GPU memory, then retry purpose matching or restart DigUp."
+    } else if text.contains("unsupported op") || text.contains("not supported") || text.contains("no kernel image") || text.contains("accelerator-only: refusing") {
+        "unsupported_operation: The selected CUDA device could not execute a required operation. Check Activity details and the installed driver."
+    } else {
+        "cuda_worker_failed: The CUDA helper stopped unexpectedly. Check Activity details, then retry purpose matching or restart DigUp."
+    };
+    format!("{reason} CPU inference and automatic backend fallback are disabled.")
 }
 
 impl SearchService {
@@ -135,7 +158,7 @@ impl SearchService {
             Ok(running) => match running.as_ref() {
                 Some(worker) => json!({"pid":worker.child.id(),"generation":worker.number,
                     "pending":worker.pending.try_lock().ok().map(|pending| pending.len())}),
-                None => json!({"running":false}),
+                None => json!({"running":false,"error":self.failure.lock().unwrap().clone()}),
             },
             Err(_) => json!({"busy":true}),
         }
@@ -151,6 +174,7 @@ impl SearchService {
             next_id: Arc::new(AtomicU64::new(1)),
             generation: Arc::new(AtomicU64::new(0)),
             on_event: Arc::new(on_event),
+            failure: Arc::default(),
         }
     }
 
@@ -158,6 +182,23 @@ impl SearchService {
     /// Updating an existing helper still uses its `folders` protocol operation.
     pub fn set_arguments(&self, args: Vec<String>) {
         self.launch.lock().unwrap().args = args;
+    }
+
+    pub fn set_environment(&self, environment: Vec<(String, String)>) {
+        // send/start takes running before launch too. Retire the old generation atomically with its environment;
+        // otherwise a foreground request between stop() and this edit can keep the previous backend alive.
+        let searching = {
+            let mut running = self.running.lock().unwrap();
+            self.launch.lock().unwrap().env = environment;
+            *self.failure.lock().unwrap() = None;
+            self.generation.store(0, Ordering::SeqCst);
+            running.take()
+        };
+        if let Some(mut searching) = searching {
+            searching.pending.lock().unwrap().clear();
+            let _ = searching.child.kill();
+            let _ = searching.child.wait();
+        }
     }
 
     /// Sends a request and waits for its reply.
@@ -171,7 +212,7 @@ impl SearchService {
             .map_err(|error| error.to_string())??;
         let reply = reply
             .await
-            .map_err(|_| "DigUp's helper stopped".to_string())?;
+            .map_err(|_| self.failure.lock().unwrap().clone().unwrap_or_else(|| "DigUp's helper stopped".into()))?;
         match reply.get("ok") {
             Some(Value::Bool(false)) => Err(reply["error"]
                 .as_str()
@@ -184,10 +225,16 @@ impl SearchService {
     fn send(&self, id: u64, request: &Value) -> Result<oneshot::Receiver<Value>, String> {
         let mut running = self.running.lock().unwrap();
         if let Some(searching) = running.as_mut() {
-            if !matches!(searching.child.try_wait(), Ok(None)) {
+            let state = searching.child.try_wait();
+            if !matches!(&state, Ok(None)) {
+                let success = matches!(state, Ok(Some(status)) if status.success());
+                if searching.cuda && !success {
+                    *self.failure.lock().unwrap() = Some(cuda_failure(searching.log.as_deref(), searching.log_offset));
+                }
                 *running = None;
             }
         }
+        if let Some(error) = self.failure.lock().unwrap().as_ref() { return Err(error.clone()); }
         if running.is_none() {
             *running = Some(self.start()?);
         }
@@ -212,17 +259,22 @@ impl SearchService {
                 .is_some_and(|searching| searching.number == number)
             {
                 if let Some(mut searching) = running.take() {
+                    if searching.cuda {
+                        *self.failure.lock().unwrap() = Some(cuda_failure(searching.log.as_deref(), searching.log_offset));
+                    }
                     let _ = searching.child.kill();
                     let _ = searching.child.wait();
                 }
             }
-            return Err(format!("DigUp's helper isn't answering: {error}"));
+            return Err(self.failure.lock().unwrap().clone().unwrap_or_else(|| format!("DigUp's helper isn't answering: {error}")));
         }
         Ok(receiver)
     }
 
     fn start(&self) -> Result<Searching, String> {
         let launch = self.launch.lock().unwrap().clone();
+        let cuda = launch.env.iter().any(|(key,value)|key == "DIGUP_ACCELERATOR" && value == "nvidia-cuda");
+        let log_offset = launch.log.as_ref().and_then(|path|std::fs::metadata(path).ok()).map(|file|file.len()).unwrap_or(0);
         let (child, stdin, stdout) = launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
         self.generation.store(number, Ordering::SeqCst);
@@ -230,6 +282,7 @@ impl SearchService {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> = Arc::default();
         let (replies, on_event, slot) =
             (pending.clone(), self.on_event.clone(), self.running.clone());
+        let failure = self.failure.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
@@ -246,16 +299,27 @@ impl SearchService {
                     None => {},
                 }
             }
-            // Gone: its waiting requests fail (their senders drop here), and the next request starts another.
-            replies.lock().unwrap().clear();
+            // Retire a fatal CUDA generation before failing requests, so their next keystroke cannot restart it.
             let mut slot = slot.lock().unwrap();
             let current = slot
                 .as_ref()
                 .is_some_and(|searching| searching.number == number);
+            let cuda = current && slot.as_ref().unwrap().cuda;
+            let fatal = if cuda {
+                let searching = slot.as_mut().unwrap();
+                let code = reap(&mut searching.child);
+                (code != Some(0)).then(|| cuda_failure(searching.log.as_deref(), searching.log_offset))
+            } else { None };
+            if let Some(error) = &fatal { *failure.lock().unwrap() = Some(error.clone()); }
             let retired = if current { slot.take() } else { None };
             drop(slot);
-            if let Some(mut searching) = retired { reap(&mut searching.child); }
+            if let Some(mut searching) = retired { if !cuda { reap(&mut searching.child); } }
+            replies.lock().unwrap().clear();
             if current && generation.load(Ordering::SeqCst) == number {
+                if let Some(error) = fatal {
+                    on_event(json!({"event":"encoder","state":"unavailable","error":error,
+                        "error_code":error.split(':').next().unwrap_or("cuda_worker_failed")}));
+                }
                 on_event(json!({"event": "exit"}));
             }
         });
@@ -264,6 +328,9 @@ impl SearchService {
             stdin: Arc::new(Mutex::new(stdin)),
             number,
             pending,
+            cuda,
+            log: launch.log,
+            log_offset,
         })
     }
 
@@ -271,6 +338,7 @@ impl SearchService {
         let searching = {
             let mut running = self.running.lock().unwrap();
             self.generation.store(0, Ordering::SeqCst);
+            *self.failure.lock().unwrap() = None;
             running.take()
         };
         if let Some(mut searching) = searching {

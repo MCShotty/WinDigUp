@@ -9,45 +9,64 @@ The application, file/database access, search scoring, decoding, image/audio pre
 preparation, tokenization and tensor transfers still use the host CPU. A Windows desktop application cannot use
 zero CPU. Offline model export also uses the CPU; it never runs as an inference fallback.
 
-## AMD and NVIDIA
+## AMD Vulkan and NVIDIA CUDA
 
-In **Settings → General → Model acceleration**, choose AMD Vulkan or NVIDIA Vulkan, then **Apply and Restart DigUp**.
-Leave the GPU device blank for automatic selection, or enter `Vulkan0`, `Vulkan1`, etc. to pin a device.
-The helper's `accelerator` command reports the selected physical adapter without loading model weights.
+Choose **AMD Vulkan — RDNA1 / RX 5000 and newer** or **NVIDIA CUDA — RTX 20-series and newer** in
+Settings → General → Model acceleration, then Apply and Restart DigUp. Generic Vulkan accepts non-NVIDIA hardware
+only. NVIDIA Vulkan has been removed, including native discovery and visibility overrides.
 
-| AMD architecture | Typical discrete cards | Execution path |
+| Hardware | Execution path | Driver requirement |
 | --- | --- | --- |
-| RDNA1 | RX 5000, including 5500 XT, 5600 XT, 5700 XT | Standard Vulkan compute shaders |
-| RDNA2 | RX 6000 | Standard Vulkan shaders; optional capabilities detected at runtime |
-| RDNA3 | RX 7000, including RX 7900 XTX | Same Vulkan backend |
-| RDNA4 and newer | RX 9000 and successors with compatible Vulkan drivers | Same capability-based backend |
+| AMD RDNA1 / RX 5000 | Standard Vulkan compute shaders | Current vendor Vulkan 1.3 driver |
+| AMD RDNA2 / RX 6000 | Vulkan; optional features detected | Current vendor Vulkan 1.3 driver |
+| AMD RDNA3 / RX 7000, including RX 7900 XTX | Vulkan | Current vendor Vulkan 1.3 driver |
+| AMD RDNA4 / RX 9000 and newer compatible hardware | Vulkan | Compatible vendor Vulkan driver |
+| NVIDIA RTX 20/30/40/50 desktop and laptop GPUs | CUDA, compute capability 7.5+ | NVIDIA 576.57 or newer, supporting CUDA 12.9 |
 
-Install a current AMD Adrenalin or NVIDIA driver with Vulkan 1.3 support. No ROCm, HIP, CUDA toolkit or cooperative
-matrix extension is required. Newer optional GPU features are never a prerequisite for the standard shader path.
-The build includes Vulkan even if CUDA tools are installed. Software/virtual Vulkan adapters are rejected.
-Quantized Q8 model weights stay on the selected GPU; FP16 activation conversion is disabled because EmbeddingGemma 2
-can exceed FP16's numeric range. Out-of-memory errors never spill model computation onto CPU.
+Windows installers bundle CUDA 12.9.1 runtime dependencies. Users install the NVIDIA driver; the CUDA Toolkit is not
+required. No ROCm, HIP or cooperative-matrix extension is required for AMD. Memory requirements depend on the
+workload and precision profile; model allocation failure stops inference instead of moving computation to CPU.
 
-The patched ggml library checks the entire schedule before submission and rejects numerical operations on a CPU or
-host accelerator backend. It also checks direct/asynchronous graph and opaque graph-plan execution. A CPU backend
-remains installed for host storage and transfers; its presence in a log does not mean CPU inference is enabled.
-The Swift helper verifies the loaded library's compiled enforcement flag and pins text, vision and audio to the
-same device. Vector version 2 rebuilds existing GPU indexes for accelerator normalization.
-OpenMP is disabled in the native build: the storage backend needs no CPU compute pool or extra OpenMP runtime DLL.
+Use Refresh devices to list adapters without model weights. A listed device is available, not yet verified running
+the model. Activity records a separate receipt after actual inference. Device IDs and stable UUIDs belong to their
+backend; Vulkan0 cannot identify CUDA0. Explicit selections never fall through to another GPU or backend.
 
-For the CLI in PowerShell:
+Saved NVIDIA Vulkan preferences migrate to CUDA. Old numbered Vulkan pins require re-selection because excluding
+NVIDIA can change numbering. The migration retains folders, annotations and legacy indexes. Fresh installations
+resolve an initial supported GPU in the background; legacy generic Vulkan retains eligible non-NVIDIA hardware.
+OpenVINO selection remains explicit. Discovery errors leave native app name search and launching available.
+
+CUDA uses the existing Q8 GGUF weights with the initial **cuda-fp32-v1** precision profile: FP32 dequantization and
+pedantic cuBLAS matrix operations on the GPU, FP32 attention buffers, and disabled flash-attention/fusion paths.
+The compiled policy prevents unsafe FP16 activation down-conversion and managed-memory spill overrides. This is a
+correctness-first profile; no performance improvement is claimed without physical-device measurements.
+AMD also avoids unsafe FP16 activation conversion. Pooling and L2 normalization run on the selected accelerator.
+
+The patched ggml core rejects CPU/host numerical graph execution before schedule submission and on direct,
+asynchronous and graph-plan paths. A CPU module remains for storage and transfers. Its presence in logs does not
+establish CPU inference. The helper verifies native policy version 2 and pins text, vision and audio to one device.
+
+CUDA stores file/code/app vectors under `<base-index>/nvidia-cuda/`. The Windows app catalog and icons remain under
+`<base-index>/applications/`; annotations remain in settings. `--index` always names the base directory, even when its
+last component happens to be a backend name. CUDA fingerprints include full model revision, native build and precision
+profile. Switching accelerators retains other backend indexes and prepares compatible vectors separately.
 
 ```powershell
-$env:DIGUP_ACCELERATOR = 'amd-vulkan' # or nvidia-vulkan / vulkan
-# Optional: $env:DIGUP_GPU = 'Vulkan0'
+$env:DIGUP_ACCELERATOR = 'nvidia-cuda' # AMD: amd-vulkan; NPU: openvino-npu
+# Optional: use a CUDA device ID or the stable GPU UUID from discovery.
+# $env:DIGUP_GPU = 'CUDA0'
+& 'C:\Users\YOUR_NAME\AppData\Local\DigUp\helper\digup.exe' accelerator --list --json
 & 'C:\Users\YOUR_NAME\AppData\Local\DigUp\helper\digup.exe' accelerator
 ```
+
+An explicit `DIGUP_ACCELERATOR=nvidia-vulkan` request is rejected with migration guidance. CUDA failures never
+activate Vulkan or CPU. Older NVIDIA architectures are unsupported; native application launching still works.
 
 ## Intel NPU (OpenVINO)
 
 The Core Ultra 7 258V has an Intel NPU. Install Intel's current Windows NPU driver and use 64-bit Python 3.12.
 NPU mode requires the complete Transformers **google/embeddinggemma-2** checkpoint, including its vision/audio
-weights and processor. The application's GGUF files are for Vulkan and cannot be loaded by OpenVINO.
+weights and processor. The application's GGUF files are for CUDA/Vulkan and cannot be loaded by OpenVINO.
 Obtain the checkpoint through your own Hugging Face account under its model license, with a pinned full snapshot
 commit. Preparation is offline once those files and the Python packages have been downloaded.
 
@@ -87,11 +106,11 @@ $env:DIGUP_OPENVINO_WORKER = "$PWD\worker\openvino\digup_openvino.py"
 Automated tests verify that direct/scheduled CPU arithmetic leaves output buffers untouched, invalid/mixed devices
 are rejected, and tiny real EmbeddingGemma 2 text/vision/audio exports reproduce Transformers. The tiny conversion
 test evaluates IR on CPU solely to check the exporter mathematics; the application's `NPURuntime` never permits it.
-Windows CI builds the actual installer, checks the packaged Vulkan backend and launches installed Settings with only
+Windows CI builds the actual installer, checks the packaged CUDA/non-NVIDIA Vulkan backends and launches installed Settings with only
 app-local Swift/VC runtime DLLs. It does not run user-model inference on a CPU-only hosted runner.
 
 These checks do **not** establish full-checkpoint execution, performance, memory use or accuracy on RX 5000/6000/7000/
-9000, NVIDIA hardware or the Ultra 7 258V NPU. A physical-device acceptance run is required before calling those
+9000, RTX 20/30/40/50 hardware or the Ultra 7 258V NPU. A physical-device acceptance run is required before calling those
 combinations validated. NPU compilation and FP16 internal precision are particularly driver-dependent.
 
 On each target machine, run `digup accelerator`, then `digup speed --model --measure-only --json`, index a folder
@@ -103,3 +122,19 @@ With the GGUF model installed, `swift test --filter ReferenceVectorTests` compar
 version 1 golden corpus and verifies normalization. The minimum cosine agreement remains 0.999.
 
 The updater reads this fork's feed and rejects upstream package URLs inherited by a sync, preserving this execution policy.
+
+## Building the Windows CUDA runtime
+
+Use the pinned MSVC 2022 toolset 14.44 and CMake 4.4.4. `python scripts/fetch-cuda.py --platform windows-x86_64`
+assembles the checksummed NVIDIA 12.9.1 redistributables. Add its `bin` to PATH and point `CUDAToolkit_ROOT` there.
+`scripts/build-llama.sh` builds CUDA and Vulkan against one patched core, with explicit SM 75/86/89/120a targets.
+CPU-only production builds and unsupported Toolkit versions are rejected. Linux CUDA builds require the same
+Toolkit with `DIGUP_BUILD_CUDA=1`; default Linux Vulkan builds do not support NVIDIA. Metal remains the macOS path.
+
+The package script follows the compiled DLL dependency closure, checks redistributable provenance, and refuses
+unresolved dependencies. The driver-owned nvcuda.dll is never bundled. The installer replaces its private helper
+folder on upgrades and reports a runtime-in-use error rather than mixing old and new DLLs.
+
+Physical CUDA execution, full-model parity, throughput, memory requirements and purpose relevance require the
+hardware acceptance procedure in [CUDA validation](cuda-validation.md). Compilation and mocked-device tests are
+not hardware validation. RTX 20-series is the required minimum-generation acceptance target.
