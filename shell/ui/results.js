@@ -17,10 +17,10 @@ const SearchTiming = {
     if(!passive&&reply?.status!=="superseded")requestAnimationFrame(()=>requestAnimationFrame(()=>{
       if(generation!==this.generation)return;
       const end=performance.now(),ms=(reply?.ms&&typeof reply.ms==="object"?reply.ms:
-        phase==="app_purpose"&&reply?.semantic?.ms&&typeof reply.semantic.ms==="object"?reply.semantic.ms:{});
+        (phase==="app_purpose"||phase==="settings_purpose")&&reply?.semantic?.ms&&typeof reply.semantic.ms==="object"?reply.semantic.ms:{});
       const sample={...ms,phase,generation,requestId,total:end-input,roundtrip:received-start,debounce:start-input,
         render:end-received,native:typeof reply?.ms==="number"?reply.ms:undefined,
-        nativeRequestId:reply?.id??(phase==="app_purpose"?reply?.semantic?.id:undefined),
+        nativeRequestId:reply?.id??((phase==="app_purpose"||phase==="settings_purpose")?reply?.semantic?.id:undefined),
         cacheHit:ms.cache_hit===true,semantic:reply?.meaning===true||reply?.semantic?.meaning===true};
       invoke("record_search_timing",{sample}).catch(()=>{});
       window.dispatchEvent(new CustomEvent("digup-search-timing",{detail:sample}));
@@ -66,6 +66,7 @@ function placeOf(hit) {
 /// Opens a result: code in the editor at its line, a PDF at its page and a recording or video at its moment in their
 /// default apps (where those apps can be told), anything else plainly.
 function openResult(hit) {
+  if (isSetting(hit)) return WindowsSettings.open(hit);
   if (isApp(hit)) return Apps.launch(hit);
   if (hit.kind === "code") return invoke("open_code", { path: hit.path, line: codeLine(hit) });
   return invoke("open_path", { path: hit.path, ...placeToOpen(hit) });
@@ -74,7 +75,7 @@ function openResult(hit) {
 /// Ctrl+C on a result: the file, to paste elsewhere; but text selected in the page, or in the field before the arrows or
 /// a click chose a result (`navigated`), is copied as text. True when it took the keys.
 function copyResult(event, hit, navigated) {
-  if (isApp(hit)) return false;
+  if (isLauncher(hit)) return false;
   const field = document.activeElement;
   const fieldText = field?.selectionStart != null && field.selectionStart !== field.selectionEnd;
   // (WebKit may count the field's selected text in the page's.)
@@ -119,7 +120,7 @@ function matchedMeaning(hit) {
 
 /// Why it's here, in a few words: "Matches the picture", "Matches the frame at 0:06".
 function reasonOf(hit) {
-  if (isApp(hit)) return hit.reason === "semantic" ? "Matches what this application does" : "Matches its name or alias";
+  if (isLauncher(hit)) return hit.reason === "semantic" ? "Matches what this application does" : "Matches its name or alias";
   const words = hit.keyword_rank != null;
   if (!matchedMeaning(hit)) return words ? "Has your words" : "Matches its name";
   const at = hit.loc != null ? clock(hit.loc) : "";
@@ -166,7 +167,7 @@ function extensionOf(path) {
 
 /// Where the file is: "~/Downloads/Screenshots"; code says where it is in its repo: "billing/payments".
 function folderOf(hit) {
-  if (isApp(hit)) return hit.publisher || "Application";
+  if (isLauncher(hit)) return hit.publisher || "Application";
   const folder = hit.path.slice(0, Math.max(0, hit.path.search(/[\\/][^\\/]*$/)));
   const repo = hit.info?.repo;
   if (hit.kind === "code" && repo && hit.path.startsWith(repo + "/")) {
