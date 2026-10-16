@@ -14,6 +14,7 @@ pub fn error()->String {std::io::Error::last_os_error().to_string()}
     size_high:u32,size_low:u32,links:u32,index_high:u32,index_low:u32,
 }
 impl FileInfo {
+    pub fn links(&self)->u32{self.links}
     pub fn id(&self)->FileId {let mut bytes=[0;16];bytes[..8].copy_from_slice(&(((self.index_high as u64)<<32)|self.index_low as u64).to_le_bytes());FileId(bytes)}
     pub fn stamp(&self)->String{format!("{}:{}:{}:{}:{}",self.serial,self.size_high,self.size_low,self.written[0],self.written[1])}
 }
@@ -206,4 +207,14 @@ pub fn launch_key(executable:&str,arguments:&str,working_directory:&str)->Option
     let executable=canonical_path(executable)?;let directory=canonical_path(working_directory)?;
     use sha2::{Digest,Sha256};
     Some(format!("{:x}",Sha256::digest(format!("{executable}\0{arguments}\0{directory}").as_bytes())))
+}
+
+pub fn shell_path(path:&str)->Option<String>{
+    // Shell activation uses a mounted DOS path; volume GUIDs remain the persistent discovery identity.
+    let canonical=canonical_path(path)?;
+    let end=canonical.find("}\\")?+2;let volume=&canonical[..end];if !valid_volume(volume){return None}
+    let mut mounts=vec![0u16;32768];let mut needed=0;
+    if unsafe{GetVolumePathNamesForVolumeNameW(wide(volume).as_ptr(),mounts.as_mut_ptr(),mounts.len()as u32,&mut needed)}==0{return None}
+    let mount=mounts.split(|c|*c==0).take_while(|s|!s.is_empty()).map(String::from_utf16_lossy).min_by_key(String::len)?;
+    Some(format!("{}{}",mount,canonical[end..].trim_start_matches('\\')))
 }

@@ -15,7 +15,8 @@ pub struct Manager {
 }
 impl Manager {
     pub fn new(root:PathBuf,options:Options,apps:Arc<Catalog>,notify:impl Fn(Value)+Send+Sync+'static)->Arc<Self>{
-        let manager=Arc::new(Self{root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":"disabled","total":null})),
+        let phase=if !options.enabled{"disabled"}else if options.paused{"paused"}else{"waiting"};
+        let manager=Arc::new(Self{root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
             source_errors:RwLock::new(std::collections::BTreeMap::new()),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
             running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
             renewing:AtomicBool::new(false),dirty_options:AtomicBool::new(true),failed:AtomicBool::new(false),
@@ -24,7 +25,9 @@ impl Manager {
             #[cfg(windows)]watched:Mutex::new(String::new()),
             #[cfg(windows)]last_fallback:Mutex::new(std::collections::HashMap::new()),
             notify:Arc::new(notify)});
-        manager.apply_sources();manager
+        manager.apply_sources();
+        {let options=manager.options.read().unwrap();manager.apps.discovery_running(options.enabled&&!options.paused&&!options.volumes.is_empty()&&manager.apps.enabled());}
+        manager
     }
     fn source(volume:&str)->String{format!("drive:{}",applications::digest(volume))}
     fn apply_sources(&self){
@@ -87,6 +90,7 @@ impl Manager {
                 let options=manager.options.read().unwrap().clone();
                 if !options.enabled||options.paused||!manager.apps.enabled(){
                     let phase=if !options.enabled{"disabled"}else if options.paused{"paused"}else{"waiting"};
+                    manager.apps.discovery_running(false);
                     let mut state=manager.progress.read().unwrap().clone();
                     if state["phase"]!=phase{state["phase"]=json!(phase);manager.update(state);}
                     continue;

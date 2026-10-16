@@ -125,6 +125,8 @@ fn public_ip(ip:IpAddr)->bool{
     }
 }
 pub fn fetch(text:&str)->Result<(String,String),String>{
+    // rustls-no-provider leaves process policy to us; do not let reqwest panic in its runtime thread.
+    let _=rustls::crypto::ring::default_provider().install_default();
     let mut url=public_url(text)?;let original=url.host_str().unwrap().to_string();
     for _ in 0..=2 {
         let host=url.host_str().unwrap().to_string();

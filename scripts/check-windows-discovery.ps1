@@ -35,7 +35,7 @@ function Probe([string]$Name,[switch]$Full) {
  $output=Run-Component $arguments
  $report=@($output | ForEach-Object {try {$_ | ConvertFrom-Json} catch {}} | Where-Object {$_.kind -eq 'probe'})[0]
  if (!$report.ok -or !$report.foundExpected) { throw 'Expected executable not discovered' }
- Write-Output ($report | ConvertTo-Json -Compress)
+ Write-Host ($report | ConvertTo-Json -Compress)
  return $report
 }
 try {

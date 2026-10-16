@@ -94,6 +94,21 @@ fn secure_directory(path:&Path,public:bool)->Result<(),String>{
     })();
     unsafe{LocalFree(descriptor)};result
 }
+fn verify_inventory_file(path:&Path)->Result<(),String>{
+    use std::os::windows::fs::MetadataExt;
+    let metadata=match std::fs::symlink_metadata(path){Ok(metadata)=>metadata,Err(e)if e.kind()==std::io::ErrorKind::NotFound=>return Ok(()),Err(e)=>return Err(e.to_string())};
+    if !metadata.is_file()||metadata.file_attributes()&0x400!=0{return Err("Protected discovery cache contains a redirected file.".into())}
+    if volume::file_info(&path.to_string_lossy())?.links()!=1{return Err("Protected discovery cache contains a linked file.".into())}
+    let mut owner=std::ptr::null_mut();let mut security=std::ptr::null_mut();
+    let code=unsafe{GetNamedSecurityInfoW(wide(&path.to_string_lossy()).as_ptr(),1,1,&mut owner,std::ptr::null_mut(),std::ptr::null_mut(),std::ptr::null_mut(),&mut security)};
+    if code!=0{return Err("Cannot verify protected discovery cache ownership.".into())}
+    let mut text=std::ptr::null_mut();let ok=unsafe{ConvertSidToStringSidW(owner,&mut text)}!=0;
+    let trusted=if ok&&!text.is_null(){let mut length=0;while length<256&&unsafe{*text.add(length)}!=0{length+=1}
+        let sid=String::from_utf16_lossy(unsafe{std::slice::from_raw_parts(text,length)});sid=="S-1-5-32-544"||sid=="S-1-5-18"}else{false};
+    if !text.is_null(){unsafe{LocalFree(text.cast());}}if !security.is_null(){unsafe{LocalFree(security);}}
+    if !trusted{return Err("Protected discovery cache file is not administrator-owned.".into())}
+    Ok(())
+}
 fn service_manager()->Result<ServiceHandle,String>{
     let handle=unsafe{OpenSCManagerW(std::ptr::null(),std::ptr::null(),3)};
     if handle.is_null(){Err("Installing or removing fast NTFS discovery requires Windows administrator permission.".into())}else{Ok(ServiceHandle(handle))}
@@ -227,6 +242,7 @@ fn connection(pipe:&Pipe,shared:&Shared,root:&Path)->Result<(),String>{
 fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Result<(),String>{
     let volume=volume::Volume::open(id)?;let journal=volume.journal()?;
     let name=format!("{:x}.sqlite",Sha256::digest(id.as_bytes()));let file=root.join(name);
+    for suffix in ["","-wal","-shm"]{verify_inventory_file(&PathBuf::from(format!("{}{suffix}",file.display())))?;}
     let store=VolumeStore::recovering(&file)?;
     let old_journal=store.get("journal")?.and_then(|s|s.parse::<u64>().ok());
     let old_cursor=store.get("cursor")?.and_then(|s|s.parse::<i64>().ok());

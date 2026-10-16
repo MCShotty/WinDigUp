@@ -26,6 +26,7 @@ impl VolumeStore {
         db.run("CREATE INDEX IF NOT EXISTS parent_nodes ON nodes(parent)",&[])?;
         db.run("CREATE TABLE IF NOT EXISTS launch_links(file_id TEXT NOT NULL,parent TEXT NOT NULL,name TEXT NOT NULL,identity TEXT NOT NULL,PRIMARY KEY(file_id,parent,name))",&[])?;
         db.run("CREATE TABLE IF NOT EXISTS pending_renames(file_id TEXT PRIMARY KEY,parent TEXT NOT NULL,name TEXT NOT NULL)",&[])?;
+        db.run("CREATE INDEX IF NOT EXISTS launch_identity_names ON launch_links(identity)",&[])?;
         db.run("PRAGMA user_version=1",&[])?;
         Ok(Self{db})
     }
@@ -82,7 +83,14 @@ impl VolumeStore {
         if let Some(row)=self.db.rows("SELECT identity FROM launch_links WHERE file_id=? AND parent=? AND name=?",
             &[Value::Text(file),Value::Text(parent),Value::Text(name)])?.first(){return Ok(row[0].clone())}
         use sha2::{Digest,Sha256};
-        let identity=format!("exe:{:x}",Sha256::digest(format!("{volume}|{file}|{parent}|{name}").as_bytes()));
+        let base=format!("{volume}|{file}|{parent}|{name}");
+        let mut generation=0u64;
+        let identity=loop{
+            let text=if generation==0{base.clone()}else{format!("{base}|link-generation:{generation}")};
+            let candidate=format!("exe:{:x}",Sha256::digest(text.as_bytes()));
+            if self.db.rows("SELECT 1 FROM launch_links WHERE identity=? LIMIT 1",&[Value::Text(&candidate)])?.is_empty(){break candidate}
+            generation=generation.checked_add(1).ok_or("Executable identity generation overflowed.")?;
+        };
         self.db.run("INSERT INTO launch_links VALUES(?,?,?,?)",&[Value::Text(file),Value::Text(parent),Value::Text(name),Value::Text(&identity)])?;
         Ok(identity)
     }
@@ -184,6 +192,9 @@ impl CandidateStore {
             let new=Record{id:id(3),parent:id(4),name:"Renamed.exe".into(),usn:11,reason:0x2000,attributes:0};
             store.apply(&[old],true).unwrap();store.apply(&[new],true).unwrap();
             assert_eq!(store.launch_identity("v",&id(3).text(),&id(4).text(),"Renamed.exe").unwrap(),first);
+            let reused=store.launch_identity("v",&id(3).text(),&id(2).text(),"Editor.exe").unwrap();
+            assert_ne!(reused,first,"A new hard link reused an identity retained by the renamed link.");
+            assert_eq!(store.launch_identity("v",&id(3).text(),&id(2).text(),"Editor.exe").unwrap(),reused);
         }
         let _=std::fs::remove_file(file);
     }

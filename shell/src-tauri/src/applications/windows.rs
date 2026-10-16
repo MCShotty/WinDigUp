@@ -384,9 +384,11 @@ pub fn launch(target: &Target) -> Result<(), String> {
                 if !metadata.is_file()||!path.to_ascii_lowercase().ends_with(".exe"){
                     return Err("This discovered target is not an executable application.".into())
                 }
-                info.lpFile=PCWSTR(spelling.as_ptr());
+                let executable=crate::discovery::volume::shell_path(path).ok_or("The application's volume is unavailable.")?;
+                let executable=wide(&executable);info.lpFile=PCWSTR(executable.as_ptr());
                 // The original path is never combined with query text or invented arguments.
-                let directory=wide(working_directory);
+                let directory=crate::discovery::volume::shell_path(working_directory).ok_or("The application's working directory is unavailable.")?;
+                let directory=wide(&directory);
                 info.lpDirectory=PCWSTR(directory.as_ptr());
                 return ShellExecuteExW(&mut info).map_err(|e|format!("Windows could not launch this application: {e}"));
             }
