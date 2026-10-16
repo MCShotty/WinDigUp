@@ -1,4 +1,4 @@
-name: Discovery dependency lock preparation
+name: Discovery dependency locks
 on:
   pull_request:
     paths:
@@ -14,17 +14,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Resolve additional metadata dependencies while preserving existing versions
         run: |
-          cargo fetch --manifest-path shell/src-tauri/Cargo.toml
+          cargo fetch --locked --manifest-path shell/src-tauri/Cargo.toml
           cargo fetch --manifest-path tests/applications/native/Cargo.toml
-      - name: Record non-secret lockfiles for the implementation commit
-        run: |
-          python3 - <<'PY'
-          import base64
-          from pathlib import Path
-          for name in ['shell/src-tauri/Cargo.lock','tests/applications/native/Cargo.lock']:
-              data=base64.b64encode(Path(name).read_bytes()).decode()
-              print('DIGUP_LOCK_BEGIN '+name)
-              for start in range(0,len(data),6000):
-                  print('DIGUP_LOCK_DATA '+data[start:start+6000])
-              print('DIGUP_LOCK_END '+name)
-          PY
+      - name: Require the committed lockfiles to match dependency resolution
+        run: git diff --exit-code -- shell/src-tauri/Cargo.lock tests/applications/native/Cargo.lock
