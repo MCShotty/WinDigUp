@@ -58,6 +58,7 @@ final class IndexService: @unchecked Sendable {
     /// a folder that keeps changing asks for the next one meanwhile: yielding at once, every pass went back to crawling
     /// before a single file was read. Indexing gets at least as long as the sync before it (2 s at the least).
     private var yieldAt = Date.distantPast
+    private var foregroundUntil = 0.0
     private let wake = DispatchSemaphore(value: 0)
 
     init(main: Part, code: Part?, folder: URL, model: SharedEmbedder, modelReady: @escaping () -> Bool,
@@ -70,6 +71,16 @@ final class IndexService: @unchecked Sendable {
         self.backfillAllowed = backfill
         self.newFilesLimit = newFilesLimit
         self.linger = linger
+        self.model.beforeInference = { [weak self] in self?.yieldToSearch() }
+    }
+
+    private func yieldToSearch() {
+        var reported = false
+        while lock.withLock({ !stopRequested && ProcessInfo.processInfo.systemUptime < foregroundUntil }) {
+            if !reported { emit(["event":"foreground_hold","state":"waiting"]); reported = true }
+            Thread.sleep(forTimeInterval:0.025)
+        }
+        if reported { emit(["event":"foreground_hold","state":"resumed"]) }
     }
 
     private var parts: [Part] { [main] + (code.map { [$0] } ?? []) }
@@ -322,6 +333,7 @@ final class IndexService: @unchecked Sendable {
                 case "stop": stopRequested = true
                 case "backfill on": backfillAllowed = true
                 case "backfill off": backfillAllowed = false
+                case "foreground": foregroundUntil = ProcessInfo.processInfo.systemUptime + 2
                 default: break
                 }
             }
@@ -359,6 +371,7 @@ final class IndexService: @unchecked Sendable {
 /// One model for both indexes, started when the first file needs it and closed when the helper is done. The indexers
 /// get it as an `Embedder` whose `close` leaves it be, since the other may be using it.
 final class SharedEmbedder: @unchecked Sendable {
+    var beforeInference: (() -> Void)?
     private let make: () throws -> any Embedder
     private var model: (any Embedder)?
 
@@ -369,8 +382,8 @@ final class SharedEmbedder: @unchecked Sendable {
     var isRunning: Bool { model != nil }
 
     func embedder() throws -> any Embedder {
-        if model == nil { model = try make() }
-        return Kept(model!)
+        if model == nil { beforeInference?(); model = try make() }
+        return Kept(model!, beforeInference)
     }
 
     func close() {
@@ -380,13 +393,14 @@ final class SharedEmbedder: @unchecked Sendable {
 
     private final class Kept: Embedder {
         let model: any Embedder
-        init(_ model: any Embedder) { self.model = model }
+        let before: (() -> Void)?
+        init(_ model: any Embedder, _ before: (() -> Void)?) { self.model = model; self.before = before }
         var info: WorkerInfo { model.info }
-        func embedTexts(_ texts: [String]) throws -> [[Float]] { try model.embedTexts(texts) }
+        func embedTexts(_ texts: [String]) throws -> [[Float]] { before?(); return try model.embedTexts(texts) }
         func embedImages(_ paths: [String], budget: Int) throws -> [Embedding] {
-            try model.embedImages(paths, budget: budget)
+            before?(); return try model.embedImages(paths, budget: budget)
         }
-        func embedAudio(_ paths: [String]) throws -> [Embedding] { try model.embedAudio(paths) }
+        func embedAudio(_ paths: [String]) throws -> [Embedding] { before?(); return try model.embedAudio(paths) }
         func close() {}
     }
 }

@@ -94,11 +94,11 @@ struct Arguments {
         }
     }
 
-    var indexFolder: URL {
-        let base = (values["--index"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+    var baseIndexFolder: URL {
+        (values["--index"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
             ?? AppPaths.defaultIndex).standardizedFileURL
-        return ((try? Acceleration.selected()) ?? .vulkan).indexDirectory(base: base)
     }
+    var indexFolder: URL { ((try? Acceleration.selected()) ?? .vulkan).indexDirectory(base: baseIndexFolder) }
 
     /// `--code`: the code index, not the main one.
     var code: Bool { flags.contains("--code") }

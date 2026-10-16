@@ -23,6 +23,9 @@ for line in sys.stdin:
     with Path(os.environ["DIGUP_APP_TEST_LOG"]).open("a", encoding="utf-8") as log:
         log.write(json.dumps(request) + "\n")
     time.sleep(float(os.environ.get("DIGUP_APP_TEST_DELAY", "0")))
+    crash_on=os.environ.get("DIGUP_APP_TEST_CRASH_ON")
+    if crash_on and any(crash_on in text for text in request.get("inputs",[])):
+        sys.exit(43)
     if os.environ.get("DIGUP_APP_TEST_FAILURE") == "1":
         reply({"id": request["id"], "ok": False, "error": "synthetic inference failure"})
         continue

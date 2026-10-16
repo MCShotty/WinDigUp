@@ -37,10 +37,14 @@ public final class Searcher {
     /// False for the vectors the later pass adds (`Indexer.finishLongFiles`): scored, but they don't set the scale.
     private var rowSetsScale: [Bool] = []
     private var fileKind: [Int64: FileKind] = [:]
+    private var exactNames: [String: [String]] = [:]
+    private var namesVersion: Int64?
     public private(set) var vectorSource: String?
     /// False after `releaseVectors()` (or `loadVectors: false`): keyword search still works, and the next search with
     /// a query vector loads them again.
     public private(set) var vectorsLoaded = false
+    public private(set) var facetCounts: [String: Int] = [:]
+    public private(set) var timings: [String: Double] = [:]
 
     public var vectorCount: Int { rowFile.count }
 
@@ -49,9 +53,34 @@ public final class Searcher {
 
     /// With `loadVectors: false` only keyword search is ready; vectors load on the first meaning search. The app
     /// uses that to stay small while idle: 20k vectors are ~30 MB.
-    public init(store: IndexStore, loadVectors: Bool = true) throws {
+    public init(store: IndexStore, loadVectors: Bool = true, loadNames: Bool = false) throws {
         self.store = store
         if loadVectors { try reload() } else { try reloadFiles() }
+        if loadNames {
+            try store.db.execute("BEGIN")
+            defer { try? store.db.execute("ROLLBACK") }
+            var version: Int64 = 0
+            try store.db.query("PRAGMA data_version") { version=$0.int(0) }
+            try store.db.query("SELECT path FROM files") { row in
+                guard let path=row.text(0) else { return }
+                let name=(path as NSString).lastPathComponent
+                exactNames[Self.nameKey(name),default:[]].append(path)
+                let stem=(name as NSString).deletingPathExtension
+                if stem != name { exactNames[Self.nameKey(stem),default:[]].append(path) }
+            }
+            namesVersion=version
+        }
+    }
+    private static func nameKey(_ value:String) -> String {
+        SearchText.normalized(value).folding(options:[.caseInsensitive,.diacriticInsensitive,.widthInsensitive],locale:Locale(identifier:"en_US_POSIX"))
+    }
+    /// nil means the name snapshot is unknown/stale. Callers then suppress app promotion conservatively.
+    public func exactNamePaths(_ query:String) throws -> [String]? {
+        guard let namesVersion else { return nil }
+        var current:Int64=0
+        try store.db.query("PRAGMA data_version") { current=$0.int(0) }
+        guard current==namesVersion else { return nil }
+        return exactNames[Self.nameKey(query)] ?? []
     }
 
     /// Reads the files and all vectors again (after indexing added some).
@@ -60,10 +89,11 @@ public final class Searcher {
         try reloadFiles()
         var rows = 0
         try store.db.query("SELECT COUNT(*) FROM segments WHERE vec IS NOT NULL") { rows = Int($0.int(0)) }
-        guard let matrix = VectorStorage(rows: rows) else {
+        if rows == 0 {
             vectorsLoaded = true   // nothing to load
             return
         }
+        guard let matrix = VectorStorage(rows: rows) else { throw Database.Failure(message:"Not enough host memory for search vectors") }
         let rowBytes = Vectors.dimension * MemoryLayout<Float16>.stride
         let steps = IndexOptions()
         try store.db.query("""
@@ -113,11 +143,14 @@ public final class Searcher {
     public static let codeWordWeight = 1.0
 
     public func search(_ text: String, queryVector: [Float]?, kinds: Set<FileKind>? = nil, limit: Int = 20,
-                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false) throws -> [SearchHit] {
+                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false,
+                       includeFacets: Bool = false) throws -> [SearchHit] {
+        let started = ProcessInfo.processInfo.systemUptime
+        facetCounts = [:]; timings = [:]
         let wordWeight = wordWeight ?? (isCode ? Self.codeWordWeight : Self.wordWeight)
         if queryVector != nil, !vectorsLoaded { try reload() }
         let fileKind = self.fileKind
-        let allowed = { (file: Int64) -> Bool in kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
+        let allowed = { (file: Int64) -> Bool in includeFacets || kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
 
         // Meaning: score every vector on this query's scale (`meaning`), keep each file's best segment.
         var best: [Int64: (z: Double, cosine: Double, row: Int)] = [:]
@@ -132,6 +165,7 @@ public final class Searcher {
 
         // Words: FTS5 with Porter stemming over file names, folder names, OCR, page and document text. A name from code
         // ("quantize_row_q8_0_ref") is matched as one phrase, as it's written.
+        let encodedScores = ProcessInfo.processInfo.systemUptime
         let terms = Self.terms(text)
         let identifier = isCode ? CodeLookup.identifier(text) : nil
         var words: [(file: Int64, segment: Int64, snippet: String?)] = []
@@ -149,13 +183,17 @@ public final class Searcher {
         }
         if !patterns.isEmpty {
             var seen = Set<Int64>()
+            var kindWords: [FileKind: Int] = [:]
             try store.db.query("""
                 SELECT s.file, s.id, snippet(fts, 1, '«', '»', '…', 12), fts.original FROM fts
                 JOIN segments s ON s.id = fts.rowid
                 WHERE fts MATCH ? ORDER BY bm25(fts, 3.0, 1.0) LIMIT 1000
                 """, [.text(patterns.joined(separator: " OR "))]) { row in
                 let file = row.int(0)
-                guard words.count < 100, allowed(file), seen.insert(file).inserted else { return }
+                let kind = fileKind[file] ?? .doc
+                guard words.count < (includeFacets ? 700 : 100), kindWords[kind, default: 0] < 100,
+                      allowed(file), seen.insert(file).inserted else { return }
+                kindWords[kind, default: 0] += 1
                 // Text that normalizing changed is quoted as it's written (with its hamza, harakat, joiners).
                 let snippet = row.text(3).flatMap { SearchText.snippet($0, terms: terms) } ?? row.text(2)
                 words.append((file, row.int(1), snippet))
@@ -187,10 +225,17 @@ public final class Searcher {
             scored[file] = score
         }
 
+        if includeFacets, let top = scored.values.max() {
+            for (file, value) in scored where value >= top * 0.5 {
+                if let kind = fileKind[file] { facetCounts[kind.rawValue, default: 0] += 1 }
+            }
+        }
+        let hydrated = ProcessInfo.processInfo.systemUptime
         let wordRank = Dictionary(words.enumerated().map { ($0.element.file, ($0.offset + 1, $0.element)) },
                                   uniquingKeysWith: { first, _ in first })
         var hits: [SearchHit] = []
-        for (file, score) in scored.sorted(by: { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) })
+        for (file, score) in scored.filter({ kinds == nil || fileKind[$0.key].map { kinds!.contains($0) } ?? false })
+            .sorted(by: { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) })
             .prefix(limit) {
             let rank = hits.count
             let semantic = best[file]
@@ -243,6 +288,8 @@ public final class Searcher {
                                   excerpt: snippet ?? storedExcerpt, modified: modified, size: size, info: info,
                                   focus: focus))
         }
+        timings = ["scoring": (encodedScores - started) * 1000, "keywords": (hydrated - encodedScores) * 1000,
+                   "metadata": (ProcessInfo.processInfo.systemUptime - hydrated) * 1000]
         return hits
     }
 
@@ -426,7 +473,7 @@ public final class Searcher {
 
     /// Kinds the query asks for ("…in a video", "screenshot of…", "ভিডিওতে"): a soft boost, not a filter. Bengali
     /// attaches case endings, so a Bengali kind word also counts at the start of a longer word.
-    static func kindHints(_ text: String) -> Set<FileKind> {
+    public static func kindHints(_ text: String) -> Set<FileKind> {
         Set(SearchText.normalized(text).lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
             .compactMap { word in
                 kindWords[word] ?? kindWords.first { key, _ in

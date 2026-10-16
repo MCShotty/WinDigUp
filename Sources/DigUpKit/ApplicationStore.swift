@@ -34,12 +34,16 @@ public final class ApplicationStore {
         }
     }
 
-    public init(directory: URL) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        db = try Database(path: directory.appendingPathComponent(Self.fileName).path)
+    public init(directory: URL, readOnly: Bool = false) throws {
+        if !readOnly { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+        db = try Database(path: directory.appendingPathComponent(Self.fileName).path, readOnly: readOnly)
         var version: Int64 = 0
         try db.query("PRAGMA user_version") { version = $0.int(0) }
         guard version <= 1 else { throw Database.Failure(message: "Application cache was made by a newer DigUp") }
+        if readOnly {
+            guard version == 1 else { throw Database.Failure(message: "Application cache is not prepared") }
+            return
+        }
         if version == 0 {
             try db.transaction {
                 try db.execute("""
