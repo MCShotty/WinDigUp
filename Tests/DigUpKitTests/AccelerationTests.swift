@@ -45,6 +45,12 @@ struct AccelerationTests {
         #expect(!Acceleration.nvidiaCUDA.accepts(old))
         old = cuda; old.driverVersion = 12080
         #expect(!Acceleration.nvidiaCUDA.accepts(old))
+        old = cuda; old.computeCapability = 121
+        #expect(!Acceleration.nvidiaCUDA.accepts(old))
+        for capability in [75, 86, 89, 120] {
+            old = cuda; old.computeCapability = capability
+            #expect(Acceleration.nvidiaCUDA.accepts(old))
+        }
         var bypass = cuda; bypass.backend = "vulkan"
         #expect(!Acceleration.vulkan.accepts(bypass))
         #expect(!Acceleration.amdVulkan.accepts(bypass))

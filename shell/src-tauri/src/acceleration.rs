@@ -56,7 +56,7 @@ impl Acceleration {
     }
 
     pub fn ready(&self) -> bool {
-        !self.discovery_pending && !self.selection_required && self.discovery_error.is_none()
+        self.version <= SCHEMA && !self.discovery_pending && !self.selection_required && self.discovery_error.is_none()
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -93,7 +93,9 @@ impl Acceleration {
             ("DIGUP_OPENVINO_PYTHON".into(), self.python.clone()), ("DIGUP_OPENVINO_MODELS".into(), self.models.clone()),
             ("DIGUP_GPU_SELECTION_REQUIRED".into(), if self.selection_required { "1" } else { "0" }.into()),
             ("DIGUP_ACCELERATOR_DISCOVERY_PENDING".into(), if self.discovery_pending { "1" } else { "0" }.into()),
-            ("DIGUP_ACCELERATOR_ERROR".into(), self.discovery_error.clone().unwrap_or_default())]
+            ("DIGUP_ACCELERATOR_ERROR".into(), if self.version > SCHEMA {
+                "These accelerator settings require a newer DigUp.".into()
+            } else { self.discovery_error.clone().unwrap_or_default() })]
     }
 
     /// A one-time default resolution; never used to recover from an explicit backend's inference failure.
@@ -102,7 +104,7 @@ impl Acceleration {
         if probe["schemaVersion"] != 1 { return Err("Unsupported accelerator discovery response.".into()); }
         let devices = probe["devices"].as_array().ok_or("Accelerator discovery returned no device list.")?;
         let eligible: Vec<_> = devices.iter().filter(|d| d["available"] == true && d["hardware"] == true).collect();
-        let cuda=eligible.iter().find(|d| d["backend"] == "cuda" && d["vendorID"] == 0x10de && d["computeCapability"].as_u64().unwrap_or(0) >= 75);
+        let cuda=eligible.iter().find(|d| d["backend"] == "cuda" && d["vendorID"] == 0x10de && [75,86,89,120].contains(&d["computeCapability"].as_u64().unwrap_or(0)));
         let vulkan=eligible.iter().find(|d| d["backend"] == "vulkan" && d["vendorID"] == 0x1002)
             .or_else(|| eligible.iter().find(|d| d["backend"] == "vulkan" && d["vendorID"].as_u64().is_some_and(|v| v != 0 && v != 0x10de)));
         let found=if self.legacy_vulkan_automatic { vulkan.or(cuda) } else { cuda.or(vulkan) };
@@ -175,5 +177,12 @@ mod tests {
     fn index_names_are_base_directories_even_when_named_like_a_backend() {
         let config=Acceleration { backend:"nvidia-cuda".into(),..Default::default() };
         assert_eq!(config.index_directory(Path::new("nvidia-cuda")), Path::new("nvidia-cuda").join("nvidia-cuda"));
+    }
+
+    #[test]
+    fn future_settings_cannot_start_inference() {
+        let config=Acceleration { version: SCHEMA+1, discovery_pending:false, ..Default::default() };
+        assert!(!config.ready()); assert!(config.validate().is_err());
+        assert!(config.environment().iter().any(|(key,value)|key == "DIGUP_ACCELERATOR_ERROR" && value.contains("newer DigUp")));
     }
 }

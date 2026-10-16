@@ -57,6 +57,7 @@ jobs:
         run: |
           node --check shell/ui/settings.js
           bash -n scripts/build-llama.sh scripts/check-windows-accelerators.sh scripts/package-windows.sh
+          python3 -m unittest discover -s tests/cuda -v
       - name: Settings in a real browser
         run: |
           npm install --prefix /tmp/digup-ui --no-audit --no-fund playwright@1.61.1

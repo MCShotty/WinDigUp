@@ -820,16 +820,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     tauri::async_runtime::spawn(async move {
         if let Ok(reply) = warm.search.ask(json!({"op": "status"})).await {
             // What's indexed already, before any index helper says (none runs while indexing is held or paused).
-            {
-                let mut status = warm.status.lock().unwrap();
-                if status.files == 0 && reply["files"].is_u64() {
-                    status.apply(&json!({"event": "counts", "files": reply["files"], "searchable": reply["searchable"],
-                                         "pending": reply["pending"], "unfinished": reply["unfinished"]}));
-                    if status.activity == status::Activity::Starting && (status.paused || status.held_until.is_some()) {
-                        status.activity = status::Activity::Idle;
-                    }
-                }
-            }
+            apply_cached_counts(&warm, &reply);
             changed(&counted);
         }
     });
@@ -1585,6 +1576,16 @@ async fn accelerator_devices(shell: State<'_, Arc<Shell>>) -> Result<Value, Stri
         .await.map_err(|e|e.to_string())?
 }
 
+fn apply_cached_counts(shell: &Shell, reply: &Value) {
+    // Hold settings until counts are applied, so a discovery-driven scope change cannot interleave.
+    let settings = shell.settings.lock().unwrap();
+    if settings.acceleration.discovery_pending { return; }
+    if let Some(base) = shell.options.index_folder() {
+        let expected = settings.acceleration.index_directory(&base).join("index.sqlite");
+        shell.status.lock().unwrap().cached_counts(reply, &expected);
+    }
+}
+
 fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
     if !shell.settings.lock().unwrap().acceleration.discovery_pending { return; }
     let app=app.clone(); let shell=shell.clone();
@@ -1594,6 +1595,8 @@ fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
         let error={
             let mut settings=shell.settings.lock().unwrap();
             if !settings.acceleration.discovery_pending { return; }
+            let base=shell.options.index_folder();
+            let old_index=base.as_ref().map(|base| settings.acceleration.index_directory(base));
             let resolution=result.as_ref().map_err(String::clone).and_then(|probe|settings.acceleration.resolve_discovery(probe));
             if let Err(error)=resolution {
                 settings.acceleration.discovery_pending=false;
@@ -1602,10 +1605,20 @@ fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
             if let Err(error)=settings.save(&shell.settings_path) {
                 settings.acceleration.discovery_error=Some(format!("Can't save the initial accelerator choice: {error}"));
             }
+            if old_index != base.as_ref().map(|base| settings.acceleration.index_directory(base)) {
+                shell.status.lock().unwrap().reset_for_index();
+            }
             settings.acceleration.discovery_error.clone()
         };
         shell.search.stop();
         shell.search.set_environment(shell.helper_environment());
+        let counted=shell.clone(); let count_app=app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(reply)=counted.search.ask(json!({"op":"status"})).await {
+                apply_cached_counts(&counted,&reply);
+                changed(&count_app);
+            }
+        });
         *shell.app_sync.blocking_lock()=None;
         shell.diagnostics.record("accelerator",json!({"event":"discovery","error":error,"probe":result.ok()}));
         if let Some(message)=error { model_event(&app,json!({"event":"error","message":message})); }

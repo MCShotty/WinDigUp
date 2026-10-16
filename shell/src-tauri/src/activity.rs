@@ -38,7 +38,7 @@ pub fn snapshot(input: Input) -> Value {
     let work = if phase == "finishing" { &state["finishing"] } else { &state["indexing"] };
     let total = work["total"].as_u64().filter(|n| *n > 0);
     let done = total.map(|n| work["done"].as_u64().unwrap_or(0).min(n));
-    let semantic_verified = semantic["encoder"] == "ready" && semantic["execution_policy"] == "accelerator-only"
+    let semantic_verified = semantic["encoder"] == "ready" && semantic["inference_verified"] == true && semantic["execution_policy"] == "accelerator-only"
         && semantic["device"].as_str().is_some_and(|s| !s.is_empty());
     let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"] ,
         "backend":semantic["backend"],"device_id":semantic["device_id"],"driver_version":semantic["driver_version"],
@@ -76,7 +76,7 @@ mod tests {
     use super::*;
     fn fixture(state: Value) -> Value {
         snapshot(Input { state, catalog:json!({"supported":true,"enabled":true,"count":663}),
-            semantic:json!({"state":"ready","total":663,"embedded":663,"encoder":"ready","device":"AMD Radeon RX 7900 XTX","execution_policy":"accelerator-only"}),
+            semantic:json!({"state":"ready","total":663,"embedded":663,"encoder":"ready","device":"AMD Radeon RX 7900 XTX","execution_policy":"accelerator-only","inference_verified":true}),
             configured:json!({"backend":"vulkan"}),helpers:json!({"index":{"pid":42},"search":{"running":false}}),
             runtime:json!({}),events:json!([]),has_folders:true,blocked_by:None })
     }

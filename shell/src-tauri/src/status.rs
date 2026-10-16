@@ -48,6 +48,23 @@ pub struct Status {
 }
 
 impl Status {
+    /// A newly selected backend owns a different store. Scheduling choices survive, counts do not.
+    pub fn reset_for_index(&mut self) {
+        *self = Self { paused: self.paused, held_until: self.held_until.clone(), ..Self::default() };
+    }
+
+    /// A helper started before device discovery may reply after the effective store has changed.
+    pub fn cached_counts(&mut self, reply: &Value, expected_file: &std::path::Path) -> bool {
+        if reply["index"].as_str().map(std::path::Path::new) != Some(expected_file)
+            || self.files != 0 || !reply["files"].is_u64() { return false; }
+        self.apply(&json!({"event":"counts", "files":reply["files"], "searchable":reply["searchable"],
+            "pending":reply["pending"], "unfinished":reply["unfinished"]}));
+        if self.activity == Activity::Starting && (self.paused || self.held_until.is_some()) {
+            self.activity = Activity::Idle;
+        }
+        true
+    }
+
     /// An index-service event (`Sources/digup/IndexService.swift`); events about the code index don't count here.
     pub fn apply(&mut self, event: &Value) {
         self.apply_at(event, crate::diagnostics::now());
@@ -432,6 +449,19 @@ mod tests {
         let model = json!({"state":"failed","message":"No compatible Vulkan device"});
         assert!(status.line(true, &model).contains("No compatible Vulkan device"));
         assert!(!status.caveat(&model).unwrap().contains("downloaded"));
+    }
+
+    #[test]
+    fn cached_counts_cannot_cross_accelerator_stores() {
+        let mut status = Status { files: 10, searchable: 8, paused: true, held_until: Some("01:00".into()), ..Status::default() };
+        status.reset_for_index();
+        assert_eq!(status.files, 0); assert!(status.paused); assert_eq!(status.held_until.as_deref(), Some("01:00"));
+        let expected = std::path::Path::new("base/nvidia-cuda/index.sqlite");
+        assert!(!status.cached_counts(&json!({"index":"base/index.sqlite","files":10,"searchable":8}), expected));
+        assert_eq!(status.searchable, 0);
+        assert!(status.cached_counts(&json!({"index":"base/nvidia-cuda/index.sqlite","files":2,"searchable":1}), expected));
+        assert_eq!(status.searchable, 1);
+        assert!(!status.cached_counts(&json!({"index":"base/nvidia-cuda/index.sqlite","files":3}), expected));
     }
 
     #[test]

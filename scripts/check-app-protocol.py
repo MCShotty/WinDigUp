@@ -61,6 +61,7 @@ def main():
             assert state["embedded"] == 0 and not worker_log.exists(), "Background step woke the encoder"
             state = service.request("apps_search", q="retouch portrait", revision="one")
             assert state["embedded"] == 0 and not state["hits"], state
+            assert state["inference_verified"] is True, "Successful query inference was not distinguished from encoder loading"
             assert service.request("apps_index_step")["embedded"] == 1
             assert service.request("apps_index_step")["embedded"] == 2
             first = service.request("apps_search", q="retouch portrait", revision="one")
@@ -78,10 +79,23 @@ def main():
         env["DIGUP_APP_TEST_RUNTIME"] = "synthetic-unit-v2"
         service = Service(args.helper.resolve(), root, env)
         try:
+            service.request("prewarm")
+            assert service.request("apps_status")["inference_verified"] is False, "Encoder loading was reported as inference"
             state = service.request("apps_search", q="retouch portrait", revision="two")
             assert state["embedded"] == 0 and not state["hits"], "Changed runtime reused incompatible vectors"
         finally:
             service.close()
+        env["DIGUP_APP_TEST_FAILURE"] = "1"
+        service = Service(args.helper.resolve(), root, env)
+        try:
+            state = service.request("apps_search", q="retouch portrait", revision="two")
+            assert state["state"] == "unavailable" and not state["hits"], state
+            before = worker_log.read_text()
+            state = service.request("apps_search", q="another portrait", revision="two")
+            assert state["state"] == "unavailable" and worker_log.read_text() == before, "Failed inference restarted automatically"
+        finally:
+            service.close()
+        del env["DIGUP_APP_TEST_FAILURE"]
         env["DIGUP_APP_TEST_DEVICE"] = "CPU"
         service = Service(args.helper.resolve(), root, env)
         try:

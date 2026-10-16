@@ -21,6 +21,9 @@ for line in sys.stdin:
         break
     with Path(os.environ["DIGUP_APP_TEST_LOG"]).open("a", encoding="utf-8") as log:
         log.write(json.dumps(request) + "\n")
+    if os.environ.get("DIGUP_APP_TEST_FAILURE") == "1":
+        reply({"id": request["id"], "ok": False, "error": "synthetic inference failure"})
+        continue
     vectors = []
     for text in request["inputs"]:
         axis = 0 if "photo" in text.lower() or "portrait" in text.lower() else 1

@@ -40,3 +40,23 @@ claim a speedup from architecture targets, successful compilation or a CPU-only 
 The installer check validates app-local CUDA dependencies, hashes, clean-PATH startup, removed NVIDIA Vulkan and
 replacement of obsolete runtime files. Native contract tests use simulated discovery; those do not establish GPU
 execution. Physical CUDA acceptance remains pending until the matrix above has evidence.
+
+## Running the packaged checks
+
+Download the installer and the `DigUp-cuda-validation-tools` artifact from the same Packages run. Install DigUp,
+extract the tools together, close DigUp, and run the following with PowerShell 7 and Python 3.11 or newer:
+
+```powershell
+./check-cuda-hardware.ps1 -Models 'C:\Models\EmbeddingGemma2' -Output 'C:\CUDA-evidence\RTX2060' -Installer 'C:\Downloads\DigUp-setup.exe'
+```
+
+For multiple NVIDIA adapters pass `-GPU` with a CUDA UUID from `digup accelerator --list --json`. The script removes
+developer directories from PATH, checks actual GPU F32/Q8 arithmetic with activations exceeding FP16 range, compares
+the original model corpus, exercises both token profiles, records purpose rankings and warm latency, indexes files
+and code into a disposable CUDA directory, and launches a real Unicode shortcut through the installed application.
+It writes a failure report if any gate fails. The model hashes are checked before model loading; load measurements
+describe a new worker process with potentially warm filesystem caches, not cold disk access.
+
+These checks do not by themselves certify low-memory behavior, concurrent indexing/search, idle unloading,
+application embedding scheduling, driver recovery or other accelerator regressions. Record those scenarios and
+device memory measurements separately. Keep the generation matrix marked Not run until physical evidence is reviewed.

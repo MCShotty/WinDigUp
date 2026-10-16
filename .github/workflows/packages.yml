@@ -248,6 +248,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /I Vendor/llama/include tests/native/accelerator-only.cpp /Fe:Vendor/llama/lib/accelerator-guard.exe /link /LIBPATH:Vendor/llama/lib ggml.lib ggml-base.lib
           Vendor/llama/lib/accelerator-guard.exe "$(cygpath -m "$PWD/Vendor/llama/lib")"
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /I Vendor/llama/include tests/native/cuda-policy.cpp "/Fe:$RUNNER_TEMP/cuda-policy-check.exe" /link /LIBPATH:Vendor/llama/lib ggml.lib ggml-base.lib
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: DigUp-windows-x64
@@ -266,6 +267,18 @@ jobs:
       - name: Installed application discovery and launch
         shell: pwsh
         run: scripts/check-windows-applications.ps1
+      - name: Collect physical CUDA acceptance tools (not hardware results)
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'cuda-validation'
+          New-Item -ItemType Directory -Force $destination | Out-Null
+          Copy-Item scripts/check-cuda-hardware.ps1,scripts/check-cuda-reference.py,scripts/check-windows-applications.ps1,docs/cuda-validation.md $destination
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'cuda-policy-check.exe'),(Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe') $destination
+          Copy-Item -Recurse Tests/LlamaRuntimeTests/Reference (Join-Path $destination 'Reference')
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DigUp-cuda-validation-tools
+          path: ${{ runner.temp }}/cuda-validation
       - name: Application service protocol (synthetic unit vectors)
         if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         shell: pwsh

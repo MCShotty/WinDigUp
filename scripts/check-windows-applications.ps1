@@ -1,5 +1,6 @@
 # Installed WebView2 -> catalog -> native Shell launch, with no model or accelerator required.
-param([string]$ProviderHarness)
+param([string]$ProviderHarness, [string]$Backend = 'openvino-npu',
+      [string]$InstalledApp = (Join-Path $env:LOCALAPPDATA 'DigUp\DigUp.exe'), [string]$Models = '')
 $ErrorActionPreference = 'Stop'
 $fixture = Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe'
 $work = Join-Path $env:RUNNER_TEMP ('DigUp Apps ' + [Guid]::NewGuid().ToString('N'))
@@ -19,11 +20,14 @@ try {
     $creation = Start-Process -FilePath $fixture -ArgumentList $creationArgs -PassThru -Wait
     if ($creation.ExitCode -ne 0) { throw 'Could not create the Unicode fixture shortcut' }
     $settings = Join-Path $work 'settings.json'
-    [IO.File]::WriteAllText($settings, '{"setUp":true,"updateChecksOff":true,"applications":{"enabled":true,"semanticEnabled":false},"acceleration":{"backend":"openvino-npu"}}', [Text.UTF8Encoding]::new($false))
+    $configuration = @{setUp=$true;updateChecksOff=$true;applications=@{enabled=$true;semanticEnabled=$false};
+        acceleration=@{version=2;backend=$Backend;gpu=if($Backend -eq 'nvidia-cuda'){$env:DIGUP_GPU}else{''}}}
+    [IO.File]::WriteAllText($settings, ($configuration | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
     $stdout = Join-Path $work 'ui.json'
     $stderr = Join-Path $work 'ui-error.txt'
-    $installed = Join-Path $env:LOCALAPPDATA 'DigUp\DigUp.exe'
+    $installed = $InstalledApp
     $arguments = '--settings "' + $settings + '" --index "' + (Join-Path $work 'index') + '" --debug-window "apps: ' + $name + '" --debug-launch --debug-quit'
+    if ($Models) { $arguments += ' --models "' + $Models + '"' }
     if ($ProviderHarness) {
         $installed = $ProviderHarness
         $arguments = '"' + (Join-Path $work 'index') + '" "' + $name + '"'

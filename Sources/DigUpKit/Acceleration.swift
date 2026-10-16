@@ -5,6 +5,8 @@ public enum Acceleration: String, Sendable, CaseIterable {
     case vulkan, amdVulkan = "amd-vulkan", nvidiaCUDA = "nvidia-cuda", openvinoNPU = "openvino-npu", metal
 
     public static let cudaPrecision = "cuda-fp32-v1"
+    /// Matches the shipped real-code targets; unknown future SMs require a new validated build.
+    public static let cudaComputeCapabilities: Set<Int> = [75, 86, 89, 120]
 
     public var registry: String {
         switch self {
@@ -26,7 +28,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
     public func accepts(_ device: AcceleratorDevice) -> Bool {
         guard device.hardware, device.backend.lowercased() == registry else { return false }
         switch self {
-        case .nvidiaCUDA: return device.vendorID == 0x10de && (device.computeCapability ?? 0) >= 75 && (device.driverVersion ?? 0) >= 12090
+        case .nvidiaCUDA: return device.vendorID == 0x10de && Self.cudaComputeCapabilities.contains(device.computeCapability ?? 0) && (device.driverVersion ?? 0) >= 12090
         case .amdVulkan: return device.vendorID == 0x1002
         case .vulkan: return device.vendorID != 0x10de && device.vendorID != 0
         case .metal: return true

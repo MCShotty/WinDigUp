@@ -36,7 +36,7 @@ impl Diagnostics {
                 && event["device"].as_str().is_some_and(|device| !device.is_empty())
                 && event.get("error").is_none()
                 && ((source == "speed" && event["measured"] == true)
-                    || (source == "search" && event["event"] == "encoder" && event["state"] == "ready"));
+                    || (source == "search" && event["event"] == "encoder" && event["state"] == "ready" && event["inference_verified"] == true));
             if verified {
                 runtime["verified"] = json!({"device":event["device"],"executionPolicy":"accelerator-only","at":time,"source":source});
                 for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"] {
@@ -115,6 +115,10 @@ mod tests {
         let diagnostics=Diagnostics::new(&dir);
         diagnostics.record("speed",json!({"device":"CPU","measured":true}));
         assert!(diagnostics.runtime()["verified"].is_null());
+        diagnostics.record("search",json!({"event":"encoder","state":"ready","device":"RTX 2060","execution_policy":"accelerator-only","inference_verified":false}));
+        assert!(diagnostics.runtime()["verified"].is_null(), "loading an encoder is not inference");
+        diagnostics.record("search",json!({"event":"encoder","state":"ready","device":"RTX 2060","execution_policy":"accelerator-only","inference_verified":true}));
+        assert_eq!(diagnostics.runtime()["verified"]["device"], "RTX 2060");
         diagnostics.record("speed",json!({"device":"RX 7900 XTX","measured":true,"execution_policy":"accelerator-only"}));
         for n in 0..110 { diagnostics.record("index",json!({"event":"scan_progress","visited":n})); }
         assert_eq!(diagnostics.runtime()["verified"]["device"],"RX 7900 XTX");
