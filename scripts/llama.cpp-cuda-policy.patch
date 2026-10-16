@@ -66,16 +66,29 @@ diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vu
          device->physical_device = physical_devices[dev_num];
          const std::vector<vk::ExtensionProperties> ext_props = device->physical_device.enumerateDeviceExtensionProperties();
  
-@@ -5299,6 +5302,9 @@
+@@ -5289,15 +5292,18 @@
+     if (devices_env != nullptr) {
+         size_t num_available_devices = devices.size();
+ 
+-        std::string devices(devices_env);
+-        std::replace(devices.begin(), devices.end(), ',', ' ');
+-
+-        std::stringstream ss(devices);
++        std::string visible_device_text(devices_env);
++        std::replace(visible_device_text.begin(), visible_device_text.end(), ',', ' ');
++
++        std::stringstream ss(visible_device_text);
+         size_t tmp;
+         while (ss >> tmp) {
+             if(tmp >= num_available_devices) {
                  std::cerr << "ggml_vulkan: Invalid device index " << tmp << " in GGML_VK_VISIBLE_DEVICES." << std::endl;
                  throw std::runtime_error("Invalid Vulkan device index");
-             }
++            }
 +            if (!ggml_backend_vulkan_vendor_allowed(devices[tmp].getProperties().vendorID)) {
 +                throw std::runtime_error("NVIDIA Vulkan has been removed; select nvidia-cuda");
-+            }
+             }
              vk_instance.device_indices.push_back(tmp);
          }
-     } else {
 @@ -5317,7 +5323,7 @@
              new_driver.pNext = &new_id;
              devices[i].getProperties2(&new_props);
