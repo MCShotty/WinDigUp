@@ -6,6 +6,8 @@ pub struct VolumeStore {pub db:Database}
 impl VolumeStore {
     pub fn open(path:&Path)->Result<Self,String> {
         let db=Database::open(path,false)?;
+        let version=db.rows("PRAGMA user_version",&[])?.first().and_then(|r|r[0].parse::<u32>().ok()).unwrap_or(0);
+        if version>1{return Err("NTFS inventory belongs to a newer DigUp version.".into())}
         db.run("PRAGMA journal_mode=WAL",&[])?;
         db.run("PRAGMA cache_size=-8192",&[])?;
         db.run("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)",&[])?;
@@ -84,7 +86,10 @@ impl VolumeStore {
 pub struct CandidateStore {db:Database}
 impl CandidateStore {
     pub fn open(path:&Path)->Result<Self,String> {
-        let db=Database::open(path,false)?;db.run("PRAGMA journal_mode=WAL",&[])?;
+        let db=Database::open(path,false)?;
+        let version=db.rows("PRAGMA user_version",&[])?.first().and_then(|r|r[0].parse::<u32>().ok()).unwrap_or(0);
+        if version>1{return Err("Executable catalog belongs to a newer DigUp version.".into())}
+        db.run("PRAGMA journal_mode=WAL",&[])?;
         db.run("CREATE TABLE IF NOT EXISTS candidates(id TEXT PRIMARY KEY,volume TEXT NOT NULL,revision TEXT NOT NULL,record TEXT NOT NULL,classification TEXT NOT NULL,name TEXT NOT NULL)",&[])?;
         db.run("CREATE INDEX IF NOT EXISTS candidates_volume ON candidates(volume)",&[])?;
         db.run("CREATE TABLE IF NOT EXISTS discovery_meta(volume TEXT PRIMARY KEY,revision TEXT NOT NULL)",&[])?;

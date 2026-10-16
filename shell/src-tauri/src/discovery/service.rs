@@ -114,22 +114,39 @@ fn stop(service:HandleValue)->Result<(),String>{
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-pub fn install()->Result<(),String>{
+pub struct Replacement {target:PathBuf,backup:Option<PathBuf>,pending:PathBuf,committed:bool}
+impl Drop for Replacement{
+    fn drop(&mut self){
+        if !self.committed{
+            let _=std::fs::remove_file(&self.target);
+            if let Some(backup)=&self.backup{let _=std::fs::rename(backup,&self.target);}
+        }else if let Some(backup)=&self.backup{let _=std::fs::remove_file(backup);}
+        let _=std::fs::remove_file(&self.pending);
+    }
+}
+fn install()->Result<(),String>{
     let manager=service_manager()?;
     let root=known_folder(true)?;secure_directory(&root,true)?;
+    use std::os::windows::fs::OpenOptionsExt;
+    let _installation_lock=std::fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0)
+        .open(root.join("installation.lock")).map_err(|e|format!("Another discovery installation may be in progress: {e}"))?;
     let target=root.join("digup-discovery.exe");
     let existing=unsafe{OpenServiceW(manager.0,wide(ipc::SERVICE_NAME).as_ptr(),0x000f01ff)};
     let existing=(!existing.is_null()).then_some(ServiceHandle(existing));
     if let Some(service)=&existing{stop(service.0)?;}
     let source=std::env::current_exe().map_err(|e|e.to_string())?;
+    let mut replacement=None;
     if source!=target {
         let pending=root.join(format!("component-{}.new",std::process::id()));
         let mut from=std::fs::File::open(source).map_err(|e|e.to_string())?;
         let mut to=std::fs::OpenOptions::new().write(true).create_new(true).open(&pending).map_err(|e|e.to_string())?;
         std::io::copy(&mut from,&mut to).map_err(|e|e.to_string())?;to.sync_all().map_err(|e|e.to_string())?;drop(to);
-        if target.exists(){std::fs::remove_file(&target).map_err(|e|e.to_string())?;}
+        let backup=if target.exists(){let backup=root.join(format!("component-{}.backup",std::process::id()));
+            std::fs::rename(&target,&backup).map_err(|e|e.to_string())?;Some(backup)}else{None};
+        replacement=Some(Replacement{target:target.clone(),backup,pending:pending.clone(),committed:false});
         std::fs::rename(&pending,&target).map_err(|e|e.to_string())?;
     }
+    let created=existing.is_none();
     let binary=format!("\"{}\" --service",target.display());
     let service=if let Some(service)=existing{
         if unsafe{ChangeServiceConfigW(service.0,16,3,1,wide(&binary).as_ptr(),std::ptr::null(),std::ptr::null_mut(),std::ptr::null(),std::ptr::null(),std::ptr::null(),std::ptr::null())}==0{return Err(volume::error())}
@@ -142,14 +159,15 @@ pub fn install()->Result<(),String>{
     let acl="D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWRPLO;;;AU)";
     if unsafe{ConvertStringSecurityDescriptorToSecurityDescriptorW(wide(acl).as_ptr(),1,&mut security,std::ptr::null_mut())}==0{return Err(volume::error())}
     let ok=unsafe{SetServiceObjectSecurity(service.0,4,security)}!=0;unsafe{LocalFree(security)};
-    if !ok{return Err(volume::error())}
+    if !ok{if created{unsafe{DeleteService(service.0);}}return Err(volume::error())}
+    if let Some(replacement)=replacement.as_mut(){replacement.committed=true;}
     Ok(())
 }
 pub fn uninstall()->Result<(),String>{
     let manager=service_manager()?;
     let handle=unsafe{OpenServiceW(manager.0,wide(ipc::SERVICE_NAME).as_ptr(),0x000f01ff)};
     if handle.is_null(){return Ok(())}
-    let service=ServiceHandle(handle);stop(service.0);
+    let service=ServiceHandle(handle);stop(service.0)?;
     if unsafe{DeleteService(service.0)}==0{return Err(volume::error())}
     Ok(())
 }
@@ -235,7 +253,15 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
         if cursor>=current.next{break}
         let(next,batch)=volume.changes(cursor,journal.id)?;
         if next<=cursor{return Err("NTFS journal did not advance.".into())}
-        store.apply(&batch,true)?;records+=batch.len()as u64;cursor=next;rounds+=1;
+        store.apply(&batch,true)?;
+        // Unlinking one hard link must not remove the remaining application's file identity.
+        for record in batch.iter().filter(|r|r.reason&(0x200|0x10000)!=0){
+            if let Some(live)=volume.live_record(record){
+                let file=live.id.text();let linked=!live.directory();store.apply(&[live],false)?;
+                if linked{store.db.run("UPDATE nodes SET executable=1 WHERE id=?",&[crate::discovery::db::Value::Text(&file)])?;}
+            }
+        }
+        records+=batch.len()as u64;cursor=next;rounds+=1;
         if rounds>100_000{return Err("NTFS journal is changing too quickly; retry when the volume is quieter.".into())}
         pipe.send(&json!({"version":1,"kind":"progress","phase":"reconciling","records":records,"total":null}))?;
     }
@@ -283,23 +309,28 @@ fn probe()->Result<(),String>{
     let volume=args.windows(2).find(|a|a[0]=="--volume").map(|a|a[1].clone()).ok_or("Specify --volume with a Windows volume GUID.")?;
     if !crate::discovery::valid_volume(&volume){return Err("Invalid probe volume.".into())}
     let expected=args.windows(2).find(|a|a[0]=="--expect-name").map(|a|a[1].clone());
+    let absent=args.windows(2).find(|a|a[0]=="--expect-absent-name").map(|a|a[1].clone());
     let cancel=Arc::new(AtomicBool::new(false));let pipe=Pipe::connect(cancel)?;
     pipe.send(&json!({"version":1,"op":"scan","volume":volume,"full":args.iter().any(|a|a=="--full")}))?;
-    let started=Instant::now();let mut candidates=0u64;let mut found=false;let mut progress=0u64;
+    let started=Instant::now();let mut candidates=0u64;let mut found=false;let mut forbidden=false;let mut expected_id=String::new();let mut progress=0u64;
     loop{
         if started.elapsed()>Duration::from_secs(180){return Err("Discovery probe exceeded its deadline.".into())}
         let response=pipe.receive()?;
         match response["kind"].as_str(){
             Some("candidate")=>{
                 candidates+=1;
-                if let Some(expected)=&expected{found|=response["candidate"]["path"].as_str()
-                    .and_then(|p|Path::new(p).file_name()).is_some_and(|p|p.to_string_lossy().as_ref()==expected);}
+                let name=response["candidate"]["path"].as_str().and_then(|p|Path::new(p).file_name()).map(|p|p.to_string_lossy().into_owned());
+                if expected.as_ref().is_some_and(|e|name.as_ref()==Some(e)){
+                    found=true;expected_id=response["candidate"]["id"].as_str().unwrap_or("").into();
+                }
+                forbidden|=absent.as_ref().is_some_and(|e|name.as_ref()==Some(e));
             },
             Some("progress")=>progress+=1,
             Some("complete")=>{
                 println!("{}",json!({"ok":true,"kind":"probe","candidates":candidates,"foundExpected":found,
-                    "progressEvents":progress,"records":response["records"],"revision":response["revision"],
+                    "progressEvents":progress,"expectedId":expected_id,"forbiddenFound":forbidden,"records":response["records"],"revision":response["revision"],
                     "elapsedMs":started.elapsed().as_secs_f64()*1000.0}));
+                if forbidden{return Err("Discovery returned an executable denied to this user.".into())}
                 if expected.is_some()&&!found{return Err("The expected executable was not discovered for this user.".into())}return Ok(())
             },
             Some("error")=>return Err(response["message"].as_str().unwrap_or("Discovery probe failed.").into()),

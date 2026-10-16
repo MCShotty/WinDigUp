@@ -71,7 +71,12 @@ impl Manager {
             wake:AtomicBool::new(true),clear:AtomicBool::new(false),refresh:AtomicBool::new(false),notify:Arc::new(notify)})
     }
     pub fn info(&self)->Value{json!({"version":1,"options":self.options.read().unwrap().clone(),"progress":self.state.read().unwrap().clone()})}
-    fn update(&self,state:Value){let mut current=self.state.write().unwrap();if *current==state{return}*current=state;drop(current);(self.notify)(self.info());}
+    fn update(&self,mut state:Value){
+        let mut current=self.state.write().unwrap();
+        let mut previous=current.clone();if let Some(object)=previous.as_object_mut(){object.remove("lastProgressAt");}
+        if previous==state{return}
+        state["lastProgressAt"]=json!(enrichment::now());*current=state;drop(current);(self.notify)(self.info());
+    }
     pub fn configure(&self,options:Options){*self.options.write().unwrap()=options;self.wake.store(true,Ordering::SeqCst);}
     pub fn retry(&self){self.refresh.store(true,Ordering::SeqCst);self.wake.store(true,Ordering::SeqCst);}
     pub fn clear(&self){self.apps.enrich(BTreeMap::new());self.clear.store(true,Ordering::SeqCst);self.wake.store(true,Ordering::SeqCst);}

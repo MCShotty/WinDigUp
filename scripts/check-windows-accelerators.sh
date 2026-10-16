@@ -51,6 +51,7 @@ if DIGUP_ACCELERATOR=nvidia-cuda GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 "$helper" acc
 fi
 grep -q 'managed-memory spill is disabled' "$work/spill.txt"
 test -f "$installed/helper/openvino/digup_openvino.py"
+test -f "$installed/helper/digup-discovery.exe"
 # No developer tools/runtime on PATH: DLLs and VC/Swift runtimes must be app-local.
 if PATH="/c/Windows/System32:/c/Windows" DIGUP_DEVICE=cpu "$helper" accelerator > "$work/cpu.txt" 2>&1; then
   echo "CPU selection was accepted" >&2; exit 1

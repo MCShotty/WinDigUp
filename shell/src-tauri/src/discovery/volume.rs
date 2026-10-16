@@ -22,6 +22,7 @@ impl FileInfo {
     pub fn CreateFileW(path:*const u16,access:u32,share:u32,security:*const c_void,creation:u32,flags:u32,template:HandleValue)->HandleValue;
     pub fn DeviceIoControl(handle:HandleValue,code:u32,input:*const c_void,input_size:u32,output:*mut c_void,output_size:u32,returned:*mut u32,overlapped:*mut c_void)->i32;
     pub fn GetFileInformationByHandle(handle:HandleValue,info:*mut FileInfo)->i32;
+    fn SetThreadErrorMode(mode:u32,old:*mut u32)->i32;
     fn FindFirstVolumeW(name:*mut u16,length:u32)->HandleValue;
     fn FindNextVolumeW(handle:HandleValue,name:*mut u16,length:u32)->i32;
     fn FindVolumeClose(handle:HandleValue)->i32;
@@ -32,11 +33,14 @@ impl FileInfo {
     fn FindFirstFileNameW(file:*const u16,flags:u32,length:*mut u32,name:*mut u16)->HandleValue;
     fn FindNextFileNameW(handle:HandleValue,length:*mut u32,name:*mut u16)->i32;
     fn FindClose(handle:HandleValue)->i32;
+    fn OpenFileById(volume:HandleValue,id:*const FileIdDescriptor,access:u32,share:u32,security:*const c_void,flags:u32)->HandleValue;
 }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct VolumeInfo {pub id:String,pub name:String,pub paths:Vec<String>,pub filesystem:String,pub fixed:bool,pub available:bool}
 pub fn volumes()->Vec<VolumeInfo>{
+    struct ErrorMode(u32,bool);impl Drop for ErrorMode{fn drop(&mut self){if self.1{unsafe{SetThreadErrorMode(self.0,std::ptr::null_mut());}}}}
+    let mut old_mode=0;let changed=unsafe{SetThreadErrorMode(0x8001,&mut old_mode)}!=0;let _mode=ErrorMode(old_mode,changed);
     let mut results=vec![];let mut name=vec![0u16;1024];
     let handle=unsafe{FindFirstVolumeW(name.as_mut_ptr(),name.len()as u32)};
     if handle==INVALID{return results}
@@ -56,6 +60,7 @@ pub fn volumes()->Vec<VolumeInfo>{
     }
     unsafe{FindVolumeClose(handle)};results.sort_by(|a,b|a.paths.cmp(&b.paths));results
 }
+#[repr(C)]struct FileIdDescriptor {size:u32,kind:u32,id:[u64;2]}
 #[repr(C)]struct EnumData {start:u64,low:i64,high:i64}
 #[repr(C)]struct ReadJournal {start:i64,reasons:u32,close_only:u32,timeout:u64,wait_for:u64,journal:u64}
 #[derive(Clone,Copy,Debug)]pub struct Journal {pub id:u64,pub first:i64,pub next:i64,pub lowest:i64}
@@ -97,6 +102,23 @@ impl Volume {
         let bytes=self.ioctl(0x000900bb,(&request as *const ReadJournal).cast(),std::mem::size_of::<ReadJournal>()as u32)
             .map_err(|code|format!("NTFS journal changed or became unavailable (Windows {code}); reconciliation required."))?;
         ntfs::parse(&bytes).map(|(next,records)|(next as i64,records))
+    }
+    /// Repair a link-change record from the live file identity. The path stays inside the protected graph.
+    pub fn live_record(&self,record:&Record)->Option<Record>{
+        let descriptor=FileIdDescriptor{size:std::mem::size_of::<FileIdDescriptor>()as u32,
+            kind:if record.id.0[8..].iter().any(|b|*b!=0){2}else{0},
+            id:[u64::from_le_bytes(record.id.0[..8].try_into().ok()?),u64::from_le_bytes(record.id.0[8..].try_into().ok()?)]};
+        let handle=unsafe{OpenFileById(self.handle.0,&descriptor,0,7,std::ptr::null(),0x02000000|0x00200000)};
+        if handle==INVALID{return None}let handle=Handle(handle);let mut info=FileInfo::default();
+        if unsafe{GetFileInformationByHandle(handle.0,&mut info)}==0{return None}
+        let mut path=vec![0u16;32768];let length=unsafe{GetFinalPathNameByHandleW(handle.0,path.as_mut_ptr(),path.len()as u32,1)}as usize;
+        if length==0||length>=path.len(){return None}
+        let path=String::from_utf16_lossy(&path[..length]);if !path.starts_with(&self.id){return None}
+        let parent=Path::new(&path).parent()?;let name=Path::new(&path).file_name()?.to_string_lossy().into_owned();
+        let parent_handle=unsafe{CreateFileW(wide(&parent.to_string_lossy()).as_ptr(),0,7,std::ptr::null(),3,0x02000000,std::ptr::null_mut())};
+        if parent_handle==INVALID{return None}let parent_handle=Handle(parent_handle);let mut parent_info=FileInfo::default();
+        if unsafe{GetFileInformationByHandle(parent_handle.0,&mut parent_info)}==0{return None}
+        Some(Record{id:record.id,parent:parent_info.id(),name,attributes:info.attrs,usn:record.usn,reason:0})
     }
     pub fn disk_numbers(&self)->Vec<u32>{
         let Ok(bytes)=self.ioctl(0x00560000,std::ptr::null(),0)else{return vec![]};

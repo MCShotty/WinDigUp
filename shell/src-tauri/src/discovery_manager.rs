@@ -4,6 +4,7 @@ use serde_json::{json,Value};
 use std::{collections::HashSet,path::PathBuf,sync::{Arc,Mutex,RwLock,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 pub struct Manager {
     root:PathBuf,apps:Arc<Catalog>,options:RwLock<Options>,progress:RwLock<Value>,volumes:RwLock<Vec<Value>>,
+    source_errors:RwLock<std::collections::BTreeMap<String,String>>,
     cancel:Mutex<Option<Arc<AtomicBool>>>,wake:AtomicBool,full:AtomicBool,running:AtomicBool,
     last_foreground:Mutex<Instant>,renewing:AtomicBool,
     #[cfg(windows)]metadata_pool:Mutex<Option<std::sync::mpsc::SyncSender<MetadataJob>>>,
@@ -15,7 +16,7 @@ pub struct Manager {
 impl Manager {
     pub fn new(root:PathBuf,options:Options,apps:Arc<Catalog>,notify:impl Fn(Value)+Send+Sync+'static)->Arc<Self>{
         let manager=Arc::new(Self{root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":"disabled","total":null})),
-            volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
+            source_errors:RwLock::new(std::collections::BTreeMap::new()),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
             running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
             renewing:AtomicBool::new(false),dirty_options:AtomicBool::new(true),failed:AtomicBool::new(false),
             #[cfg(windows)]metadata_pool:Mutex::new(None),
@@ -35,11 +36,16 @@ impl Manager {
     pub fn info(&self)->Value{
         json!({"version":1,"supported":cfg!(windows),"options":self.options.read().unwrap().clone(),
             "progress":self.progress.read().unwrap().clone(),"volumes":self.volumes.read().unwrap().clone(),
-            "running":self.running.load(Ordering::SeqCst)})
+            "sourceErrors":self.source_errors.read().unwrap().clone(),"running":self.running.load(Ordering::SeqCst)})
     }
-    fn update(&self,value:Value){*self.progress.write().unwrap()=value;(self.notify)(self.info());}
+    fn update(&self,mut value:Value){
+        let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+        value["capturedAt"]=json!(now);value["lastProgressAt"]=json!(now);
+        *self.progress.write().unwrap()=value;(self.notify)(self.info());
+    }
     pub fn configure(&self,options:Options){
-        self.stop();self.dirty_options.store(true,Ordering::SeqCst);*self.options.write().unwrap()=options;self.apply_sources();self.schedule(false);
+        self.stop();self.source_errors.write().unwrap().retain(|id,_|options.volumes.contains(id));
+        self.dirty_options.store(true,Ordering::SeqCst);*self.options.write().unwrap()=options;self.apply_sources();self.schedule(false);
     }
     pub fn stop(&self){if let Some(cancel)=self.cancel.lock().unwrap().as_ref(){cancel.store(true,Ordering::SeqCst);}}
     pub fn schedule(&self,full:bool){self.failed.store(false,Ordering::SeqCst);if full{self.full.store(true,Ordering::SeqCst);}self.wake.store(true,Ordering::SeqCst);}
@@ -99,7 +105,7 @@ impl Manager {
                     if let Err(message)=result{
                         if !cancelled&&manager.options.read().unwrap().enabled&&!manager.options.read().unwrap().paused {
                             manager.failed.store(true,Ordering::SeqCst);
-                            manager.update(json!({"version":1,"phase":"failed","total":null,"message":message}));
+                            let mut state=manager.progress.read().unwrap().clone();state["phase"]=json!("failed");state["message"]=json!(message);manager.update(state);
                         }
                     }
                 }
@@ -116,13 +122,23 @@ impl Manager {
         let db=CandidateStore::open(&self.root.join("discovery.sqlite"))?;
         if self.dirty_options.swap(false,Ordering::SeqCst){for volume in &options.volumes{db.set_revision(volume,"")?;}}
         self.publish_cached(&db,options)?;
+        let mut failures=vec![];
         for selected in &options.volumes {
             self.quiet(&cancel)?;
             let volume=self.volumes.read().unwrap().iter().find(|v|v["id"]==selected.as_str()).cloned()
                 ;
-            let Some(volume)=volume else{self.update(json!({"version":1,"phase":"unavailable","volume":selected,"message":"This volume is disconnected or unavailable.","total":null}));continue};
+            let Some(volume)=volume else{
+                let message="This volume is disconnected or unavailable.".to_string();
+                self.source_errors.write().unwrap().insert(selected.clone(),message.clone());failures.push(message);
+                self.update(json!({"version":1,"phase":"unavailable","volume":selected,"message":"This volume is disconnected or unavailable.","total":null}));continue
+            };
             if volume["filesystem"]!="NTFS" {
-                if requested||full||self.fallback_due(selected){self.fallback(&db,selected,&volume,options,&cancel)?;}
+                if requested||full||self.fallback_due(selected){
+                    match self.fallback(&db,selected,&volume,options,&cancel){
+                        Ok(())=>{self.source_errors.write().unwrap().remove(selected);},
+                        Err(error)=>{self.source_errors.write().unwrap().insert(selected.clone(),error.clone());failures.push(error);}
+                    }
+                }
                 continue;
             }
             let result=(||{
@@ -185,13 +201,19 @@ impl Manager {
                     }
                 }
             })();
+            if result.is_ok(){self.source_errors.write().unwrap().remove(selected);}
             if let Err(error)=result {
                 if cancel.load(Ordering::SeqCst){return Err(error)}
                 self.update(json!({"version":1,"phase":"waiting","volume":selected,"message":format!("{error} Using directory discovery."),"total":null}));
-                if requested||full||self.fallback_due(selected){self.fallback(&db,selected,&volume,options,&cancel)?;}
+                if requested||full||self.fallback_due(selected){
+                    match self.fallback(&db,selected,&volume,options,&cancel){
+                        Ok(())=>{self.source_errors.write().unwrap().remove(selected);},
+                        Err(error)=>{self.source_errors.write().unwrap().insert(selected.clone(),error.clone());failures.push(error);}
+                    }
+                }
             }
         }
-        Ok(())
+        if failures.is_empty(){Ok(())}else{Err(failures.join("; "))}
     }
     #[cfg(windows)]
     fn fallback_due(&self,id:&str)->bool{self.last_fallback.lock().unwrap().get(id).is_none_or(|last|last.elapsed()>Duration::from_secs(300))}

@@ -99,7 +99,7 @@ pub async fn prepare_windows_settings(shell:State<'_,Arc<Shell>>)->Result<Value,
 pub fn start(app:&AppHandle,shell:&Arc<Shell>) {
     let weak=Arc::downgrade(shell);let app=app.clone();
     std::thread::spawn(move||{
-        let mut previous=Value::Null;
+        let mut previous=Value::Null;let mut logged=Value::Null;
         loop {
             std::thread::sleep(Duration::from_millis(500));
             let Some(shell)=weak.upgrade() else{break};
@@ -121,7 +121,9 @@ pub fn start(app:&AppHandle,shell:&Arc<Shell>) {
             let state=match result {Ok(s) if !s.is_null()=>s,Ok(_)=>continue,
                 Err(e)=>json!({"state":"unavailable","encoder":"unavailable","revision":shell.windows_settings.revision(),"message":e})};
             *shell.settings_semantic.lock().unwrap()=state.clone();
-            if state!=previous {previous=state.clone();shell.diagnostics.record("windows-settings",state.clone());
+            if state!=previous {previous=state.clone();
+                let significant=json!({"state":state["state"],"encoder":state["encoder"],"message":state["message"]});
+                if significant!=logged{logged=significant.clone();shell.diagnostics.record("windows-settings",significant);}
                 let _=app.emit("windows-settings-progress",state);}
         }
     });

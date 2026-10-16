@@ -766,10 +766,22 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         move |info| { let _ = app.emit("applications", info); }
     });
     let discovery=discovery_manager::Manager::new(application_root.clone(),settings.discovery.clone(),applications.clone(),{
-        let app=handle.clone();move|state|{let _=app.emit("discovery",state);}
+        let app=handle.clone();let previous=Mutex::new(Value::Null);
+        move|state:Value|{
+            let key=json!({"phase":state["progress"]["phase"],"message":state["progress"]["message"],"mode":state["progress"]["mode"]});
+            let mut last=previous.lock().unwrap();
+            if *last!=key{*last=key.clone();if let Some(shell)=app.try_state::<Arc<Shell>>(){shell.diagnostics.record("drive-discovery",key);}}
+            drop(last);let _=app.emit("discovery",state);
+        }
     });
     let enrichment=enrichment_manager::Manager::new(application_root,applications.clone(),settings.enrichment.clone(),{
-        let app=handle.clone();move|state|{let _=app.emit("app-enrichment",state);}
+        let app=handle.clone();let previous=Mutex::new(Value::Null);
+        move|state:Value|{
+            let key=json!({"state":state["progress"]["state"],"message":state["progress"]["message"]});
+            let mut last=previous.lock().unwrap();
+            if *last!=key{*last=key.clone();if let Some(shell)=app.try_state::<Arc<Shell>>(){shell.diagnostics.record("app-descriptions",key);}}
+            drop(last);let _=app.emit("app-enrichment",state);
+        }
     });
     let shell = Arc::new(Shell {
         applications,
