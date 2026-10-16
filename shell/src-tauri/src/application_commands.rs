@@ -15,7 +15,7 @@ impl<'a> Foreground<'a> {
         *shell.app_last_query.lock().unwrap() = Instant::now();
         Self(shell)
     }
-    fn passive(shell: &'a Shell) -> Self {
+    pub(crate) fn passive(shell: &'a Shell) -> Self {
         shell.app_foreground.fetch_add(1, Ordering::SeqCst);
         Self(shell)
     }
