@@ -79,6 +79,23 @@ pub fn set_windows_settings_options(app:AppHandle,shell:State<'_,Arc<Shell>>,opt
 pub fn windows_settings_status(shell:State<'_,Arc<Shell>>)->Value {
     json!({"catalog":shell.windows_settings.info(),"semantic":shell.settings_semantic.lock().unwrap().clone()})
 }
+#[tauri::command]
+pub async fn prepare_windows_settings(shell:State<'_,Arc<Shell>>)->Result<Value,String>{
+    if !shell.windows_settings.semantic_enabled(){return Err("Enable Windows settings purpose matching first.".into())}
+    if !shell.model_ready(){return Err("The selected accelerator is not ready. Check General and Storage.".into())}
+    let _foreground=Foreground::new(&shell);
+    if shell.settings_semantic.lock().unwrap()["encoder"]=="unavailable"{
+        let search=shell.search.clone();
+        tauri::async_runtime::spawn_blocking(move||search.stop()).await.map_err(|e|e.to_string())?;
+        *shell.settings_sync.lock().await=None;*shell.app_sync.lock().await=None;
+    }
+    synchronize(&shell).await?;
+    shell.search.ask(json!({"op":"prewarm"})).await?;
+    let state=shell.search.ask(json!({"op":"settings_status"})).await?;
+    *shell.settings_semantic.lock().unwrap()=state.clone();
+    if state["encoder"]=="unavailable"{return Err(state["message"].as_str().unwrap_or("The selected accelerator is unavailable.").into())}
+    Ok(state)
+}
 pub fn start(app:&AppHandle,shell:&Arc<Shell>) {
     let weak=Arc::downgrade(shell);let app=app.clone();
     std::thread::spawn(move||{

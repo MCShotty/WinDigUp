@@ -12,6 +12,7 @@ pub struct Settings {
     pub applications: crate::applications::Options,
     pub windows_settings: crate::system_settings::Options,
     pub discovery: crate::discovery::Options,
+    pub enrichment: crate::applications::enrichment::Options,
     pub acceleration: crate::acceleration::Acceleration,
     /// The folders searched and kept indexed.
     pub folders: Vec<String>,

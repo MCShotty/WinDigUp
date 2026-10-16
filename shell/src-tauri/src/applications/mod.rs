@@ -145,6 +145,7 @@ pub struct Hit {
     pub name: String,
     pub publisher: String,
     pub description: String,
+    #[serde(skip_serializing_if="Option::is_none")] pub description_source: Option<Value>,
     pub keywords: String,
     pub icon_revision: String,
     pub source: String,
@@ -203,7 +204,9 @@ pub struct Catalog {
     icons: Mutex<()>,
     save_lock: Mutex<()>,
     discovery_sources: RwLock<HashSet<String>>,
+    discovery_refreshing: AtomicBool,
     discovery_hidden: RwLock<HashSet<String>>,
+    enrichment: RwLock<BTreeMap<String,enrichment::Description>>,
     notify: Arc<dyn Fn(Value) + Send + Sync>,
 }
 impl Catalog {
@@ -231,7 +234,9 @@ impl Catalog {
             icons: Mutex::new(()),
             save_lock: Mutex::new(()),
             discovery_sources: RwLock::new(HashSet::new()),
+            discovery_refreshing: AtomicBool::new(false),
             discovery_hidden: RwLock::new(HashSet::new()),
+            enrichment: RwLock::new(BTreeMap::new()),
             notify: Arc::new(notify),
         });
         service.rebuild();
@@ -260,7 +265,7 @@ impl Catalog {
             "count":s.hits.iter().filter(|h| !h.hidden).count(), "totalCount":s.hits.len(),
             "hiddenCount":s.hits.iter().filter(|h| h.hidden).count(), "revision":s.revision,
             "semanticLimit":20000,"semanticOverflow":s.hits.iter().filter(|h|!h.hidden).count().saturating_sub(20000),
-            "refreshing":self.refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})
+            "refreshing":self.refreshing.load(Ordering::Relaxed)||self.discovery_refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})
     }
     pub fn configure(self: &Arc<Self>, options: Options) {
         let was_enabled = self.enabled();
@@ -326,12 +331,14 @@ impl Catalog {
                 records.insert(record.id.clone(), record.clone());
             }
         }
+        let enrichment=self.enrichment.read().unwrap();
         let mut hits: Vec<Hit> = records
             .values()
             .map(|r| {
                 let custom = options.overrides.get(&r.id).cloned().unwrap_or_default();
+                let fetched=enrichment.get(&r.id).filter(|_|custom.purpose.trim().is_empty());
                 let description = if custom.purpose.trim().is_empty() {
-                    r.description.clone()
+                    fetched.map(|d|d.description.clone()).unwrap_or_else(||r.description.clone())
                 } else {
                     custom.purpose.clone()
                 };
@@ -342,7 +349,8 @@ impl Catalog {
                     name: r.name.clone(),
                     publisher: r.publisher.clone(),
                     description,
-                    keywords: r.keywords.clone(),
+                    description_source:fetched.map(|d|json!({"provider":d.source,"url":d.url,"packageId":d.package_id,"version":d.package_version,"extractorVersion":d.extractor_version})),
+                    keywords:if let Some(d)=fetched{format!("{} {}",r.keywords,d.tags.join(" ")).trim().to_string()}else{r.keywords.clone()},
                     icon_revision: r.icon_revision.clone(),
                     source: r.source.clone(),
                     shortcut: r.shortcut.clone(),
@@ -456,7 +464,13 @@ impl Catalog {
         };
         self.publish_source(source,Ok(records));
     }
+    pub fn discovery_running(&self,running:bool){self.discovery_refreshing.store(running,Ordering::SeqCst);(self.notify)(self.info());}
     pub fn records(&self)->Vec<Record>{self.snapshot.read().unwrap().records.values().cloned().collect()}
+    pub fn enrich(&self,descriptions:BTreeMap<String,enrichment::Description>){
+        *self.enrichment.write().unwrap()=descriptions;self.rebuild();(self.notify)(self.info());
+    }
+    pub fn enriched_count(&self)->usize{let descriptions=self.enrichment.read().unwrap();self.snapshot.read().unwrap().hits.iter().filter(|h|!h.hidden&&descriptions.contains_key(&h.id)).count()}
+    pub fn description_source(&self,id:&str)->Option<String>{self.enrichment.read().unwrap().get(id).map(|d|d.url.clone())}
     pub fn start(self: &Arc<Self>) {
         #[cfg(all(windows, not(test)))]
         windows::watch(Arc::downgrade(self));
@@ -658,6 +672,30 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn description_changes_are_scoped_and_user_purpose_wins(){
+        let root=std::env::temp_dir().join(format!("digup-enriched-catalog-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        let c=Catalog::new(root.clone(),Options{enabled:true,..Options::default()},|_|{});
+        let mut r=record("Editor","editor");let id=r.id.clone();r.publisher="Example".into();
+        c.publish_source("userPrograms",Ok(vec![r.clone()]));
+        let original=c.documents()["documents"][0]["hash"].clone();
+        let d=enrichment::Description{description:"Retouch photographs and correct portrait colors".into(),tags:vec!["portrait".into()],
+            package_id:"Example.Editor".into(),package_version:"1.2.3".into(),name:"Editor".into(),publisher:"Example".into(),
+            source:"WinGet".into(),url:"https://example.com/product".into(),extractor_version:1,..Default::default()};
+        c.enrich([(id.clone(),d.clone())].into_iter().collect());
+        let enriched=c.documents()["documents"][0]["hash"].clone();assert_ne!(original,enriched);
+        r.icon_revision="new-icon".into();c.publish_source("userPrograms",Ok(vec![r]));
+        assert_eq!(c.documents()["documents"][0]["hash"],enriched);
+        let mut next=d;next.fetched=12345;c.enrich([(id.clone(),next)].into_iter().collect());
+        assert_eq!(c.documents()["documents"][0]["hash"],enriched);
+        let mut options=Options{enabled:true,..Options::default()};
+        options.overrides.insert(id.clone(),Override{purpose:"My custom purpose".into(),..Default::default()});
+        c.configure(options);
+        let hit=c.search("Editor",false).remove(0);assert_eq!(hit.description,"My custom purpose");
+        assert!(hit.description_source.is_none());assert!(!hit.keywords.contains("portrait"));
+        let _=std::fs::remove_dir_all(root);
+    }
     #[test]
     fn discovered_equivalent_launches_keep_identity_and_prefer_original_shortcut(){
         let root=std::env::temp_dir().join(format!("digup-discovery-catalog-{}",std::process::id()));

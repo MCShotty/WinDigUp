@@ -1,3 +1,5 @@
+#[path = "../../../shell/src-tauri/src/enrichment_manager.rs"]
+pub mod enrichment_manager;
 #[path = "../../../shell/src-tauri/src/discovery/mod.rs"]
 pub mod discovery;
 #[path = "../../../shell/src-tauri/src/system_settings/mod.rs"]

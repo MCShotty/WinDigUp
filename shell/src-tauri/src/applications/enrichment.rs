@@ -22,7 +22,7 @@ pub struct Description {
     pub fetched:u64,pub extractor_version:u32,
 }
 pub fn product_key(name:&str)->String{
-    name.chars().filter(|c|c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+    super::rank::normalized(name).chars().filter(|c|c.is_alphanumeric()).collect()
 }
 pub fn publisher_key(publisher:&str)->String{
     let normalized=super::rank::normalized(publisher);
@@ -30,11 +30,12 @@ pub fn publisher_key(publisher:&str)->String{
     while words.last().is_some_and(|w|["inc","incorporated","corp","corporation","llc","ltd","limited","gmbh"].contains(w)){words.pop();}
     product_key(&words.join(" "))
 }
-fn comparable_name(name:&str,publisher:&str)->String{
+pub fn comparable_name(name:&str,publisher:&str)->String{
     let name=product_key(name);
     let publisher=publisher_key(publisher);
     if publisher.len()>=4&&name.starts_with(&publisher)&&name.len()>publisher.len()+2{name[publisher.len()..].to_string()}else{name}
 }
+pub fn key(name:&str,publisher:&str)->String{format!("{}|{}",publisher_key(publisher),comparable_name(name,publisher))}
 pub fn matches(record:&Record,description:&Description)->bool{
     let publisher=publisher_key(&record.publisher);
     if publisher.len()<3||publisher!=publisher_key(&description.publisher){return false}
@@ -96,8 +97,9 @@ pub fn manifest(doc:&yaml_rust2::Yaml,package:&Package,url:&str)->Result<Descrip
     if name.is_empty()||publisher.is_empty(){return Err("App metadata is missing its product identity.".into())}
     let text=doc["Description"].as_str().filter(|s|s.trim().len()>=12)
         .or_else(||doc["ShortDescription"].as_str()).unwrap_or("");
-    let tags=doc["Tags"].as_vec().into_iter().flatten().filter_map(|v|v.as_str())
+    let mut tags:Vec<String>=doc["Tags"].as_vec().into_iter().flatten().filter_map(|v|v.as_str())
         .take(32).map(|s|clean(s,80)).filter(|s|!s.is_empty()).collect();
+    tags.sort();tags.dedup();
     Ok(Description{package_id:package.id.clone(),package_version:package.version.clone(),name,publisher,
         description:clean(text,1024),tags,source:"WinGet".into(),url:url.into(),
         product_url:doc["PackageUrl"].as_str().map(|s|s.chars().take(2048).collect()).unwrap_or_default(),
@@ -147,6 +149,10 @@ pub fn fetch(text:&str)->Result<(String,String),String>{
     Err("Description source redirected too many times.".into())
 }
 pub fn fetch_package(package:&Package,publisher_pages:bool)->Result<Description,String>{
+    fetch_package_with_policy(package,publisher_pages,&||true)
+}
+pub fn fetch_package_with_policy(package:&Package,publisher_pages:bool,permitted:&dyn Fn()->bool)->Result<Description,String>{
+    if !permitted(){return Err("Online descriptions are disabled.".into())}
     if !valid_package(&package.id,&package.version){return Err("Invalid product identity.".into())}
     let mut base=Url::parse("https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/").unwrap();
     {let mut segments=base.path_segments_mut().map_err(|_|"Invalid manifest base.")?;
@@ -157,10 +163,11 @@ pub fn fetch_package(package:&Package,publisher_pages:bool)->Result<Description,
     if let Some(locale)=doc["DefaultLocale"].as_str(){
         if locale.len()>32||!locale.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'){return Err("Invalid manifest locale.".into())}
         let locale_url=format!("{}/{}.locale.{}.yaml",base.as_str().trim_end_matches('/'),package.id,locale);
+        if !permitted(){return Err("Online descriptions are disabled.".into())}
         let(text,url)=fetch(&locale_url)?;doc=yaml(&text)?;source=url;
     }
     let mut result=manifest(&doc,package,&source)?;
-    if result.description.chars().count()<40&&publisher_pages&&!result.product_url.is_empty(){
+    if permitted()&&result.description.chars().count()<40&&publisher_pages&&!result.product_url.is_empty(){
         if let Ok((html,url))=fetch(&result.product_url){
             if let Some(text)=publisher_description(&html){
                 result.description=text;result.source="Publisher".into();result.url=url;

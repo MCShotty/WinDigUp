@@ -288,7 +288,7 @@ pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
             }
             if renewed.elapsed() >= Duration::from_millis(500)
                 && (shell.app_foreground.load(Ordering::SeqCst) != 0 || shell.app_last_query.lock().unwrap().elapsed() < Duration::from_secs(1)) {
-                shell.index.foreground(); shell.discovery.foreground(); renewed = Instant::now();
+                shell.index.foreground(); shell.discovery.foreground(); shell.enrichment.foreground(); renewed = Instant::now();
             }
             if !crate::applications::Catalog::supported() { continue; }
             if !shell.applications.semantic_enabled()

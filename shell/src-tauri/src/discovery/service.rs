@@ -16,6 +16,7 @@ use std::{collections::HashSet,ffi::c_void,path::{Path,PathBuf},sync::{Arc,Mutex
     fn CreateServiceW(manager:HandleValue,name:*const u16,display:*const u16,access:u32,kind:u32,start:u32,error:u32,binary:*const u16,group:*const u16,tag:*mut u32,dependencies:*const u16,account:*const u16,password:*const u16)->HandleValue;
     fn ChangeServiceConfigW(service:HandleValue,kind:u32,start:u32,error:u32,binary:*const u16,group:*const u16,tag:*mut u32,dependencies:*const u16,account:*const u16,password:*const u16,display:*const u16)->i32;
     fn ControlService(service:HandleValue,code:u32,status:*mut Status)->i32;
+    fn QueryServiceStatus(service:HandleValue,status:*mut Status)->i32;
     fn DeleteService(service:HandleValue)->i32;
     fn CloseServiceHandle(handle:HandleValue)->i32;
     fn ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl:*const u16,revision:u32,descriptor:*mut *mut c_void,size:*mut u32)->i32;
@@ -97,11 +98,21 @@ fn service_manager()->Result<ServiceHandle,String>{
     let handle=unsafe{OpenSCManagerW(std::ptr::null(),std::ptr::null(),3)};
     if handle.is_null(){Err("Installing or removing fast NTFS discovery requires Windows administrator permission.".into())}else{Ok(ServiceHandle(handle))}
 }
-fn stop(service:HandleValue){
+fn stop(service:HandleValue)->Result<(),String>{
     let mut status=Status{kind:0,state:0,controls:0,exit:0,specific:0,checkpoint:0,hint:0};
-    unsafe{ControlService(service,1,&mut status);}
-    // The service only owns read-only handles. Give its cancellable jobs time to leave before replacement.
-    std::thread::sleep(Duration::from_millis(1000));
+    if unsafe{QueryServiceStatus(service,&mut status)}==0{return Err(volume::error())}
+    if status.state==1{return Ok(())}
+    if unsafe{ControlService(service,1,&mut status)}==0{
+        let code=std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        if code!=1062{return Err(format!("Cannot stop the discovery component (Windows {code})."))}
+    }
+    let deadline=Instant::now()+Duration::from_secs(30);
+    loop{
+        if unsafe{QueryServiceStatus(service,&mut status)}==0{return Err(volume::error())}
+        if status.state==1{return Ok(())}
+        if Instant::now()>=deadline{return Err("The discovery component is still stopping. Retry the update after it stops.".into())}
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 pub fn install()->Result<(),String>{
     let manager=service_manager()?;
@@ -109,7 +120,7 @@ pub fn install()->Result<(),String>{
     let target=root.join("digup-discovery.exe");
     let existing=unsafe{OpenServiceW(manager.0,wide(ipc::SERVICE_NAME).as_ptr(),0x000f01ff)};
     let existing=(!existing.is_null()).then_some(ServiceHandle(existing));
-    if let Some(service)=&existing{stop(service.0);}
+    if let Some(service)=&existing{stop(service.0)?;}
     let source=std::env::current_exe().map_err(|e|e.to_string())?;
     if source!=target {
         let pending=root.join(format!("component-{}.new",std::process::id()));
@@ -155,10 +166,11 @@ impl Shared {
 fn serve(stop:Arc<AtomicBool>)->Result<(),String>{
     let root=known_folder(false)?;secure_directory(&root,false)?;
     let shared=Arc::new(Shared{stop:stop.clone(),held:Mutex::new(Instant::now()),volumes:Mutex::new(HashSet::new()),clients:AtomicUsize::new(0)});
-    report(4);let mut first=true;
+    report(4);let mut first=true;let mut last_client=Instant::now();
     while !stop.load(Ordering::SeqCst){
-        let pipe=match ipc::listener(first,stop.clone()){Ok(pipe)=>pipe,Err(_)if stop.load(Ordering::SeqCst)=>break,Err(e)=>return Err(e)};
-        first=false;
+        let pipe=match ipc::listener(first,stop.clone()){Ok(pipe)=>pipe,Err(_)if stop.load(Ordering::SeqCst)=>break,
+            Err(e)if e=="idle"||e=="retry"=>{if shared.clients.load(Ordering::SeqCst)==0&&last_client.elapsed()>Duration::from_secs(120){break}first=shared.clients.load(Ordering::SeqCst)==0;continue},Err(e)=>return Err(e)};
+        first=false;last_client=Instant::now();
         if shared.clients.load(Ordering::SeqCst)>=8{continue}
         shared.clients.fetch_add(1,Ordering::SeqCst);
         let shared=shared.clone();let root=root.clone();
@@ -266,8 +278,38 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
     }
     pipe.send(&json!({"version":1,"kind":"complete","revision":revision,"unchanged":false,"records":records,"candidates":candidates}))
 }
+fn probe()->Result<(),String>{
+    let args=std::env::args().collect::<Vec<_>>();
+    let volume=args.windows(2).find(|a|a[0]=="--volume").map(|a|a[1].clone()).ok_or("Specify --volume with a Windows volume GUID.")?;
+    if !crate::discovery::valid_volume(&volume){return Err("Invalid probe volume.".into())}
+    let expected=args.windows(2).find(|a|a[0]=="--expect-name").map(|a|a[1].clone());
+    let cancel=Arc::new(AtomicBool::new(false));let pipe=Pipe::connect(cancel)?;
+    pipe.send(&json!({"version":1,"op":"scan","volume":volume,"full":args.iter().any(|a|a=="--full")}))?;
+    let started=Instant::now();let mut candidates=0u64;let mut found=false;let mut progress=0u64;
+    loop{
+        if started.elapsed()>Duration::from_secs(180){return Err("Discovery probe exceeded its deadline.".into())}
+        let response=pipe.receive()?;
+        match response["kind"].as_str(){
+            Some("candidate")=>{
+                candidates+=1;
+                if let Some(expected)=&expected{found|=response["candidate"]["path"].as_str()
+                    .and_then(|p|Path::new(p).file_name()).is_some_and(|p|p.to_string_lossy().as_ref()==expected);}
+            },
+            Some("progress")=>progress+=1,
+            Some("complete")=>{
+                println!("{}",json!({"ok":true,"kind":"probe","candidates":candidates,"foundExpected":found,
+                    "progressEvents":progress,"records":response["records"],"revision":response["revision"],
+                    "elapsedMs":started.elapsed().as_secs_f64()*1000.0}));
+                if expected.is_some()&&!found{return Err("The expected executable was not discovered for this user.".into())}return Ok(())
+            },
+            Some("error")=>return Err(response["message"].as_str().unwrap_or("Discovery probe failed.").into()),
+            _=>return Err("Unexpected discovery probe reply.".into()),
+        }
+    }
+}
 pub fn main()->Result<(),String>{
     match std::env::args().nth(1).as_deref(){
+        Some("--probe")=>probe(),
         Some("--install")=>install(),Some("--uninstall")=>uninstall(),
         Some("--service")=>{
             let mut name=wide(ipc::SERVICE_NAME);

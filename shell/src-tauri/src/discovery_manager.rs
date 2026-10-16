@@ -16,7 +16,7 @@ impl Manager {
     pub fn new(root:PathBuf,options:Options,apps:Arc<Catalog>,notify:impl Fn(Value)+Send+Sync+'static)->Arc<Self>{
         let manager=Arc::new(Self{root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":"disabled","total":null})),
             volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
-            running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now()-Duration::from_secs(10)),
+            running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
             renewing:AtomicBool::new(false),dirty_options:AtomicBool::new(true),failed:AtomicBool::new(false),
             #[cfg(windows)]metadata_pool:Mutex::new(None),
             #[cfg(windows)]watcher:Mutex::new(None),
@@ -70,7 +70,11 @@ impl Manager {
     pub fn start(self:&Arc<Self>){
         let weak=Arc::downgrade(self);
         std::thread::spawn(move||{
-            let mut last=Instant::now()-Duration::from_secs(60);
+            #[cfg(windows)]if let Some(manager)=weak.upgrade(){
+                *manager.volumes.write().unwrap()=discovery::volume::volumes().into_iter().map(|v|serde_json::to_value(v).unwrap()).collect();
+                (manager.notify)(manager.info());
+            }
+            let mut last=Instant::now();
             loop{
                 std::thread::sleep(Duration::from_millis(250));
                 let Some(manager)=weak.upgrade()else{break};
@@ -87,11 +91,11 @@ impl Manager {
                 #[cfg(windows)]{
                     *manager.volumes.write().unwrap()=discovery::volume::volumes().into_iter().map(|v|serde_json::to_value(v).unwrap()).collect();
                     let cancel=Arc::new(AtomicBool::new(false));*manager.cancel.lock().unwrap()=Some(cancel.clone());
-                    manager.running.store(true,Ordering::SeqCst);
+                    manager.running.store(true,Ordering::SeqCst);manager.apps.discovery_running(true);
                     manager.install_watcher(&options);
                     let result=manager.run_pass(&options,full,requested,cancel.clone());
                     let cancelled=cancel.load(Ordering::SeqCst);
-                    manager.running.store(false,Ordering::SeqCst);*manager.cancel.lock().unwrap()=None;
+                    manager.running.store(false,Ordering::SeqCst);manager.apps.discovery_running(false);*manager.cancel.lock().unwrap()=None;
                     if let Err(message)=result{
                         if !cancelled&&manager.options.read().unwrap().enabled&&!manager.options.read().unwrap().paused {
                             manager.failed.store(true,Ordering::SeqCst);

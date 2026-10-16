@@ -10,6 +10,7 @@ pub const PIPE_NAME:&str=r"\\.\pipe\DigUp.Discovery.v1";
     fn CreateNamedPipeW(name:*const u16,open:u32,mode:u32,instances:u32,out_buffer:u32,in_buffer:u32,timeout:u32,security:*const SecurityAttributes)->HandleValue;
     fn ConnectNamedPipe(handle:HandleValue,overlapped:*mut c_void)->i32;
     fn SetNamedPipeHandleState(handle:HandleValue,mode:*const u32,max:*const u32,timeout:*const u32)->i32;
+    fn GetNamedPipeClientProcessId(handle:HandleValue,pid:*mut u32)->i32;
     fn GetNamedPipeServerProcessId(handle:HandleValue,pid:*mut u32)->i32;
     fn LocalFree(memory:*mut c_void)->*mut c_void;
 }
@@ -107,12 +108,16 @@ pub fn listener(first:bool,cancel:Arc<AtomicBool>)->Result<Pipe,String>{
     unsafe{LocalFree(descriptor)};
     if handle==(-1isize as HandleValue){return Err(error())}
     let pipe=Pipe::new(Handle(handle),cancel.clone());
+    let started=Instant::now();
     loop {
         if cancel.load(Ordering::SeqCst){return Err("Discovery service stopped.".into())}
-        if unsafe{ConnectNamedPipe(pipe.handle.0,std::ptr::null_mut())}!=0{return Ok(pipe)}
-        let code=std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        if code==535{return Ok(pipe)}
-        if code!=536&&code!=232{return Err(error())}
+        let ready=unsafe{ConnectNamedPipe(pipe.handle.0,std::ptr::null_mut())}!=0;
+        let code=if ready{536}else{std::io::Error::last_os_error().raw_os_error().unwrap_or(0)};
+        let mut client=0;
+        if unsafe{GetNamedPipeClientProcessId(pipe.handle.0,&mut client)}!=0&&client!=0{return Ok(pipe)}
+        if code==232||code==109{return Err("retry".into())}
+        if code!=536&&code!=535{return Err(format!("Cannot accept discovery client (Windows {code})."))}
+        if started.elapsed()>Duration::from_secs(1){return Err("idle".into())}
         std::thread::sleep(Duration::from_millis(25));
     }
 }
@@ -122,4 +127,4 @@ impl Impersonation {
         if unsafe{ImpersonateNamedPipeClient(pipe.handle.0)}==0 {Err("Cannot verify discovery client permissions.".into())}else{Ok(Self)}
     }
 }
-impl Drop for Impersonation {fn drop(&mut self){unsafe{RevertToSelf();}}}
+impl Drop for Impersonation {fn drop(&mut self){if unsafe{RevertToSelf()}==0{std::process::abort();}}}
