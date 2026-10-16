@@ -17,11 +17,22 @@ function Diskpart([string[]]$Lines) {
  $output=& diskpart.exe /s $script 2>&1
  if ($LASTEXITCODE -ne 0) { throw ('Diskpart failed: '+($output -join ' ')) }
 }
+function Run-Component([string[]]$ComponentArguments) {
+ $start=[Diagnostics.ProcessStartInfo]::new();$start.FileName=$component;$start.UseShellExecute=$false;$start.CreateNoWindow=$true
+ $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+ foreach($argument in $ComponentArguments){$start.ArgumentList.Add($argument)}
+ $process=[Diagnostics.Process]::new();$process.StartInfo=$start
+ if(!$process.Start()){throw 'Discovery command did not start'}
+ $output=$process.StandardOutput.ReadToEndAsync();$errorOutput=$process.StandardError.ReadToEndAsync()
+ if(!$process.WaitForExit(180000)){$process.Kill($true);throw 'Discovery command exceeded its deadline'}
+ $text=$output.GetAwaiter().GetResult();$errorText=$errorOutput.GetAwaiter().GetResult();$code=$process.ExitCode;$process.Dispose()
+ if($code -ne 0){throw ("Discovery command failed: "+$text+" "+$errorText)}
+ return $text -split "`n"
+}
 function Probe([string]$Name,[switch]$Full) {
  $arguments=@('--probe','--volume',$volume,'--expect-name',$Name)
  if ($Full) { $arguments+='--full' }
- $output=& $component @arguments
- if ($LASTEXITCODE -ne 0) { throw ('NTFS probe failed: '+($output -join ' ')) }
+ $output=Run-Component $arguments
  $report=@($output | ForEach-Object {try {$_ | ConvertFrom-Json} catch {}} | Where-Object {$_.kind -eq 'probe'})[0]
  if (!$report.ok -or !$report.foundExpected) { throw 'Expected executable not discovered' }
  Write-Output ($report | ConvertTo-Json -Compress)
@@ -43,8 +54,7 @@ try {
  $private=Join-Path $root 'private';New-Item -ItemType Directory $private | Out-Null
  Copy-Item $portable (Join-Path $private 'denied.exe')
  & icacls.exe $private /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' | Out-Null
- & $component --install
- if ($LASTEXITCODE -ne 0) { throw 'Optional service installation failed' }
+ Run-Component @('--install') | Out-Null
  $created=$true
  $initial=@(Probe 'DigUp Portable Fixture.exe' -Full)[-1]
  if (!$initial.expectedId) { throw 'Service did not return a stable launch identity' }
@@ -69,8 +79,13 @@ try {
  $clientScript=Join-Path $public 'probe.ps1'
  $protectedComponent=Join-Path $env:ProgramFiles 'DigUpDiscovery\digup-discovery.exe'
  @"
-& '$protectedComponent' --probe --volume '$volume' --expect-name 'DigUp Portable Fixture.exe' --expect-absent-name 'denied.exe'
-exit `$LASTEXITCODE
+`$start=New-Object Diagnostics.ProcessStartInfo
+`$start.FileName='$protectedComponent';`$start.UseShellExecute=`$false;`$start.CreateNoWindow=`$true
+`$start.RedirectStandardOutput=`$true;`$start.RedirectStandardError=`$true
+`$start.Arguments='--probe --volume $volume --expect-name "DigUp Portable Fixture.exe" --expect-absent-name "denied.exe"'
+`$p=[Diagnostics.Process]::Start(`$start)
+`$out=`$p.StandardOutput.ReadToEnd();`$err=`$p.StandardError.ReadToEnd();`$p.WaitForExit()
+Write-Output `$out;[Console]::Error.WriteLine(`$err);exit `$p.ExitCode
 "@ | Set-Content -Encoding UTF8 $clientScript
  $clientOutput=Join-Path $public 'standard-user.json';$clientError=Join-Path $public 'standard-user-error.txt'
  $client=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Credential $credential -LoadUserProfile -WorkingDirectory $public -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$clientScript+'"') -RedirectStandardOutput $clientOutput -RedirectStandardError $clientError -PassThru
@@ -79,8 +94,7 @@ exit `$LASTEXITCODE
  $access=@(Get-Content $clientOutput | ForEach-Object {try {$_ | ConvertFrom-Json} catch {}} | Where-Object {$_.kind -eq 'probe'})[0]
  if (!$access.foundExpected -or $access.forbiddenFound) { throw 'Service leaked inaccessible executable metadata' }
  # Updating a running shared component must stop cleanly and preserve its protected inventory.
- & $component --install
- if ($LASTEXITCODE -ne 0) { throw 'Service update failed' }
+ Run-Component @('--install') | Out-Null
  $afterUpdate=@(Probe 'DigUp Portable Fixture.exe')[-1]
  if ($afterUpdate.expectedId -ne $linked.expectedId) { throw 'Component update discarded stable identities' }
  if (!$ComponentOnly) {
@@ -105,7 +119,7 @@ exit `$LASTEXITCODE
  if ($app -and !$app.HasExited) { Stop-Process -Id $app.Id -ErrorAction SilentlyContinue }
  if ($launched) { Stop-Process -Id $launched -ErrorAction SilentlyContinue }
  if ($user) { Remove-LocalUser $user -ErrorAction SilentlyContinue }
- if ($created) { & $component --uninstall;Remove-Item (Join-Path $env:ProgramFiles 'DigUpDiscovery') -Recurse -Force -ErrorAction SilentlyContinue;Remove-Item (Join-Path $env:ProgramData 'DigUpDiscovery') -Recurse -Force -ErrorAction SilentlyContinue }
+ if ($created) { Run-Component @('--uninstall') | Out-Null;Remove-Item (Join-Path $env:ProgramFiles 'DigUpDiscovery') -Recurse -Force -ErrorAction SilentlyContinue;Remove-Item (Join-Path $env:ProgramData 'DigUpDiscovery') -Recurse -Force -ErrorAction SilentlyContinue }
  if ($mounted) { Diskpart @("select vdisk file=`"$vhd`"","detach vdisk","exit") }
  Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }

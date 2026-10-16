@@ -10,7 +10,7 @@ const MAX_RESPONSE:u64=262_144;
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(default,rename_all="camelCase")]
 pub struct Options {pub enabled:bool,pub publisher_pages:bool}
-impl Default for Options {fn default()->Self{Self{enabled:false,publisher_pages:true}}}
+impl Default for Options {fn default()->Self{Self{enabled:false,publisher_pages:false}}}
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct Package {pub id:String,pub version:String}
@@ -216,5 +216,20 @@ pub fn now()->u64{std::time::SystemTime::now().duration_since(std::time::UNIX_EP
     #[test]fn publisher_html_is_data_and_decodes_entities(){
         let html=r#"<html><head><meta name="description" content="Edit photos &amp; retouch portraits."></head><script>throw new Error('must not execute')</script></html>"#;
         assert_eq!(publisher_description(html).as_deref(),Some("Edit photos & retouch portraits."));
+    }
+}
+
+#[cfg(test)]mod live_source_test{
+    use super::*;
+    #[test]
+    #[ignore="Explicit public-source integration check; no installed inventory or private data is used"]
+    fn live_community_manifest_round_trip(){
+        let package=Package{id:"Git.Git".into(),version:"2.47.1".into()};
+        let description=fetch_package(&package,false).expect("official version/locale manifests");
+        assert_eq!(description.package_id,package.id);assert_eq!(description.package_version,package.version);
+        assert!(!description.name.is_empty()&&!description.publisher.is_empty());
+        assert!(description.description.chars().count()>=12);
+        assert_eq!(description.source,"WinGet");assert!(description.url.starts_with("https://raw.githubusercontent.com/microsoft/winget-pkgs/"));
+        println!("PASS: fixed public WinGet version and locale manifests, HTTPS retrieval, identity and bounded description; no user inventory");
     }
 }

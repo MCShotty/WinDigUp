@@ -3,10 +3,11 @@
 #[cfg(windows)]
 #[path="../discovery/service.rs"]mod service;
 fn main(){
+    use std::io::Write;
     #[cfg(windows)]let result=service::main();
     #[cfg(not(windows))]let result=Err::<(),String>("The optional NTFS component is Windows-only.".into());
     match result {
-        Ok(())=>println!("{}",serde_json::json!({"ok":true})),
-        Err(message)=>{eprintln!("{message}");println!("{}",serde_json::json!({"ok":false,"message":message}));std::process::exit(1);}
+        Ok(())=>{if std::env::args().nth(1).as_deref()!=Some("--service"){let _=writeln!(std::io::stdout().lock(),"{}",serde_json::json!({"ok":true}));}},
+        Err(message)=>{let _=writeln!(std::io::stderr().lock(),"{message}");let _=writeln!(std::io::stdout().lock(),"{}",serde_json::json!({"ok":false,"message":message}));std::process::exit(1);}
     }
 }

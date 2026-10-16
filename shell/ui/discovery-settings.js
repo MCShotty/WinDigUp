@@ -61,14 +61,16 @@ const DiscoverySettings = {
     this.el("win-settings-enabled").disabled=this.busy;
     this.text("win-settings-status",`${this.n(w.count)} destinations · ${!w.semanticEnabled?"Purpose matching off":s.message||(`${this.n(s.embedded)} of ${this.n(s.total)} prepared`)}`);
     this.el("win-settings-prepare").disabled=this.busy||!w.enabled||!w.semanticEnabled||info.state?.model?.state!=="ready"||(typeof s.total==="number"&&s.embedded===s.total);
-    this.el("descriptions-enabled").checked=Boolean(e.options?.enabled);this.el("descriptions-publishers").checked=e.options?.publisherPages!==false;
-    this.el("descriptions-enabled").disabled=this.busy;this.el("descriptions-publishers").disabled=this.busy||!e.options?.enabled;
+    this.el("descriptions-enabled").checked=Boolean(e.options?.enabled);this.el("descriptions-publishers").checked=Boolean(e.options?.publisherPages);
+    this.el("descriptions-enabled").disabled=this.busy;this.el("descriptions-publishers").disabled=this.busy;
     this.el("descriptions-refresh").disabled=this.busy||!e.options?.enabled||["inventory","fetching"].includes(ep.state);
     this.el("descriptions-clear").disabled=this.busy;
     this.text("descriptions-status",[
       {disabled:"Online descriptions off · Saved descriptions remain available",inventory:"Reading installed WinGet products",fetching:"Fetching version-matched descriptions",ready:"Descriptions up to date",unavailable:"Description fetching needs attention"}[ep.state]||ep.state||"Not started",
       typeof ep.enriched==="number"?`${this.n(ep.enriched)} apps enhanced`:"",
       ep.failedProducts?`${this.n(ep.failedProducts)} sources failed`:"",ep.message||""].filter(Boolean).join(" · "));
+    const phases=JSON.stringify([p.phase,ep.state]);
+    if(phases!==this.phases){this.phases=phases;this.text("sources-announcement",`Drive discovery ${p.phase||"waiting"}. Online descriptions ${ep.state||"off"}.`);}
     if(!this.loaded&&!this.el("apps").hidden){this.loaded=true;this.candidates();}
   },
   edit(){
@@ -104,7 +106,7 @@ const DiscoverySettings = {
       this.hits=append?[...this.hits,...reply.hits]:reply.hits;this.offset=this.hits.length;
       this.text("drive-count",`${this.n(this.offset)} of ${this.n(reply.total)} matching executables`);
       this.el("drive-more").hidden=this.offset>=reply.total;const box=this.el("drive-candidates");box.replaceChildren();
-      const reasons={not_portable_executable:"Not a launchable Windows executable",internal_or_installation_tool:"May be an installer or internal helper",command_line_program:"Command line program",application_identity_uncertain:"Application identity needs review",identified_gui_application:"Identified desktop application",user_included:"Included by you",user_hidden:"Hidden by you"};
+      const reasons={not_portable_executable:"Not a launchable Windows executable",internal_or_installation_tool:"May be an installer or internal helper",command_line_program:"Command line program",application_identity_uncertain:"Application identity needs review",identified_gui_application:"Identified desktop application",user_included:"Included by you",user_selected:"Included by you",user_hidden:"Hidden by you"};
       for(const hit of this.hits){
         const row=element("div","source-candidate");row.dataset.candidateId=hit.id;
         row.append(element("strong","",hit.name||hit.path.split(/[\\/]/).pop()),element("span","app-description",hit.publisher||hit.product||"Publisher not provided"),

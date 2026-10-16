@@ -138,7 +138,14 @@ impl Manager {
                 if let Some(db)=&cache{
                     let records=manager.apps.records();
                     let native=records.iter().map(|r|format!("{}|{}|{}|{}",r.id,r.name,r.product,r.publisher)).collect::<Vec<_>>().join("\n");
-                    let descriptions=db.descriptions().unwrap_or_default();
+                    let descriptions=match db.descriptions(){
+                        Ok(descriptions)=>{errors.remove("cache-records");descriptions},
+                        Err(error)=>{
+                            errors.insert("cache-records".into(),error.clone());
+                            manager.update(json!({"version":1,"state":"unavailable","message":format!("Saved description data could not be read: {error}. Use Turn off and clear to rebuild this cache."),
+                                "enriched":manager.apps.enriched_count(),"productsTotal":inventory.len()}));continue
+                        }
+                    };
                     let inventory_keys=inventory.iter().map(Cache::key).collect::<HashSet<_>>();
                     let mut by_name:HashMap<String,Vec<&crate::applications::Record>>=HashMap::new();
                     for record in &records{
@@ -169,7 +176,7 @@ impl Manager {
                 let requested=manager.wake.swap(false,Ordering::SeqCst);
                 if !options.enabled{
                     manager.update(json!({"version":1,"state":"disabled","cachedDescriptionsAvailable":true,"enriched":manager.apps.enriched_count(),
-                        "productsTotal":inventory.len(),"productsChecked":checked,"failedProducts":errors.len()}));
+                        "productsTotal":inventory.len(),"productsChecked":checked,"failedProducts":errors.len(),"message":inventory_error.clone().or_else(||errors.values().next().cloned())}));
                     continue;
                 }
                 if !manager.quiet()||!manager.apps.enabled(){continue}

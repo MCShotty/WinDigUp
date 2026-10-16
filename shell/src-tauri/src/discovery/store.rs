@@ -208,3 +208,17 @@ fn discard_cache(path:&Path)->Result<(),String>{
         if file.is_file(){std::fs::remove_file(file).map_err(|e|e.to_string())?;}}
     Ok(())
 }
+
+#[cfg(test)]mod recovery_tests{
+    use super::*;
+    #[test]fn disposable_stores_rebuild_corruption_and_refuse_future_versions(){
+        let root=std::env::temp_dir().join(format!("digup-cache-recovery-{}-{:?}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file=root.join("inventory.sqlite");let candidate=root.join("candidates.sqlite");let preferences=root.join("settings.json");
+        std::fs::write(&file,b"broken").unwrap();std::fs::write(&candidate,b"broken").unwrap();std::fs::write(&preferences,b"annotation sentinel").unwrap();
+        {let db=VolumeStore::recovering(&file).unwrap();assert!(db.executable_ids("",10).unwrap().is_empty());db.db.run("PRAGMA user_version=2",&[]).unwrap();}
+        assert!(VolumeStore::recovering(&file).is_err());
+        {let db=CandidateStore::recovering(&candidate).unwrap();assert_eq!(db.list("","all",0,10).unwrap().1,0);}
+        assert_eq!(std::fs::read(&preferences).unwrap(),b"annotation sentinel");let _=std::fs::remove_dir_all(root);
+    }
+}

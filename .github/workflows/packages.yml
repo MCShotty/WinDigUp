@@ -285,6 +285,9 @@ jobs:
       - name: Installed application discovery and launch
         shell: pwsh
         run: scripts/check-windows-applications.ps1
+      - name: Installed Windows settings activation
+        shell: pwsh
+        run: scripts/check-windows-settings.ps1
       - name: Installed NTFS discovery and portable application launch
         shell: pwsh
         run: scripts/check-windows-discovery.ps1

@@ -190,7 +190,7 @@
           <div id="drive-volumes" class="source-volumes" aria-label="Drives to scan"></div>
           <p id="drive-draft" class="note" role="status"></p>
           <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan drives</button></div>
-          <p id="drive-status" class="note" role="status"></p>
+          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p>
           <button id="drive-install">Install or update fast NTFS discovery…</button>
           <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
           <label for="drive-filter">Review discovered executables</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
@@ -202,10 +202,10 @@
           <label class="option"><input id="descriptions-enabled" type="checkbox"><span>Fetch online app descriptions</span></label>
           <label class="option"><input id="descriptions-publishers" type="checkbox"><span>Use publisher pages when the catalog description is too short</span></label>
           <p class="note">Only exact product and publisher matches are used. Saved descriptions work offline. Your own purpose descriptions always take priority.</p>
-          <p id="descriptions-status" class="note" role="status"></p>
+          <p id="descriptions-status" class="note" aria-label="Description preparation"></p>
           <div class="apps-settings-actions"><button id="descriptions-refresh">Refresh descriptions</button><button id="descriptions-clear">Turn off and clear saved descriptions</button></div>
         </details>
-        <p id="source-message" class="note" role="status"></p>
+        <p id="source-message" class="note" role="status"></p><span id="sources-announcement" class="visually-hidden" role="status"></span>
       </div>
       <div class="apps-catalog-tools"><label for="apps-filter">Find an application to customize</label>
         <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">

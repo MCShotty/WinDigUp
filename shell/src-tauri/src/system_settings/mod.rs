@@ -92,7 +92,7 @@ impl Catalog {
         let o=self.options.read().unwrap().clone();
         json!({"version":1,"supported":self.platform.supported,"enabled":o.enabled,
             "semanticEnabled":o.semantic_enabled,"ordinarySearches":o.ordinary_searches,
-            "total":self.search("").len(),"revision":self.revision(),"refreshing":false,
+            "count":self.search("").len(),"total":self.search("").len(),"revision":self.revision(),"refreshing":false,
             "locale":self.platform.locale,"windowsBuild":self.platform.build})
     }
     pub fn documents(&self)->Value {

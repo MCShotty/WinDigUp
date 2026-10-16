@@ -348,7 +348,8 @@ window.ActivityUI = (() => {
       this.get("prepare").disabled = Boolean(this.busy) || !catalog.enabled || !catalog.semanticEnabled || inference.model?.state !== "ready" || complete;
       this.get("prepare").hidden = catalog.supported === false;
       this.renderEvents(snapshot.events || []);
-      if (this.lastPhase !== f.phase) { this.lastPhase=f.phase; put("announcement", title); }
+      const phases=JSON.stringify([f.phase,drive.supported?dp.phase:null,drive.supported?ep.state:null]);
+      if(this.lastPhase!==phases){this.lastPhase=phases;put("announcement",title+(drive.supported?` · Drive discovery ${dp.phase||"off"} · Online descriptions ${ep.state||"off"}`:""));}
     }
     renderEvents(events) {
       const key = JSON.stringify(events); if (key === this.eventsKey) return; this.eventsKey = key;

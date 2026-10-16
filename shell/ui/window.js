@@ -105,7 +105,7 @@ const settingsSearch=new WindowsSettingsSearch((statusOnly=false)=>{
   if(shown.length)state.hasResults=true;
   if(!state.navigated)state.selection=!isSettingsMode()&&!state.lexicalReady&&state.filesPending?null:shown.length?resultKey(shown[0]):null;
   else if(!shown.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
-  if(isSettingsMode()){render();return;}
+  if(isSettingsMode()){render();if(debugPending&&(settingsSearch.hits.length||!settingsSearch.catalog.refreshing))report();return;}
   const scroll=$content.scrollTop,focus=document.activeElement.closest?.(".windows-settings-group .app-row")?.dataset.resultKey;
   $content.querySelectorAll(".windows-settings-group").forEach(node=>node.remove());
   if(settingsSearch.visible().length)$content.append(windowsSettingsGroup());

@@ -36,7 +36,7 @@ cp Vendor/llama/native-runtime.json "$helper/"
 cp "$crt"/*.dll "$helper/"   # over the Swift runtime's copies of the same: the newer C++ runtime
 cp Vendor/ffmpeg/bin/ffmpeg.exe Vendor/ffmpeg/bin/ffprobe.exe "$helper/"   # the small static build, no DLLs
 # Installed only on explicit request with UAC. It never inherits a writable user installation as its service path.
-cargo build --release --locked --manifest-path shell/src-tauri/Cargo.toml --bin digup-discovery
+(cd shell/src-tauri && cargo build --release --locked --bin digup-discovery)
 cp shell/src-tauri/target/release/digup-discovery.exe "$helper/"
 "$python" scripts/package-cuda-runtime.py --helper "$helper"
 mkdir -p "$helper/openvino"

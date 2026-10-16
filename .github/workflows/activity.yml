@@ -14,6 +14,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Native activity, catalog and transport contracts
         run: cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked
+      - name: Official description source smoke (fixed public fixture)
+        run: cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml live_community_manifest_round_trip -- --ignored --nocapture
       - name: Actual-page browser regressions
         env:
           DIGUP_ACTIVITY_SCREENSHOTS: ${{ runner.temp }}/activity-screenshots
