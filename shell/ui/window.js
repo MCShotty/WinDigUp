@@ -412,13 +412,18 @@ const thumbnails = new IntersectionObserver((entries) => {
     thumbnails.unobserve(image);
     const [kind, loc, pixels] = JSON.parse(image.dataset.render);
     const path = image.closest("[data-path]").dataset.path;
+    const generation=SearchTiming.generation;
     rendered(path, kind, loc, pixels)
       .then((file) => {
         if(!image.isConnected)return;
         image.src = fileURL(file);
         image.closest("[data-path]").dataset.thumb = file;   // the picture under the pointer when it's dragged out
       })
-      .catch(() => image.replaceWith(bigIcon(kind === "image" ? "image" : kind, true)));
+      .catch(error => {
+        if(!image.isConnected)return;
+        if(error.superseded&&generation!==SearchTiming.generation){thumbnails.observe(image);return;}
+        image.replaceWith(bigIcon(kind === "image" ? "image" : kind, true));
+      });
   }
 }, { root: $content, rootMargin: "300px" });
 

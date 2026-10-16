@@ -40,6 +40,9 @@ final class SearchService: @unchecked Sendable {
     private let previewsQueue = SearchWorkQueue(concurrency: 2, capacity: 32)
     private let previews: URL
     private var rendered: [String: String] = [:]
+    // Maintenance owns these readers/caches; data_version changes when indexing commits on another connection.
+    private var summaryReaders: [Bool: IndexStore] = [:]
+    private var summaryCache: [Bool: (version: Int64, roots: [String], values: [[String: Any]])] = [:]
     private let renderLock = NSLock()
     private static var now: Double { ProcessInfo.processInfo.systemUptime }
 
@@ -188,11 +191,36 @@ final class SearchService: @unchecked Sendable {
                 let started = Self.now
                 do {
                     let code = r["code"] as? Bool ?? false
-                    let db = try IndexStore(
-                        directory: directory, file: code ? IndexStore.codeFile : IndexStore.mainFile, readOnly: true)
+                    let db: IndexStore
+                    if let existing = summaryReaders[code] {
+                        db = existing
+                    } else {
+                        db = try IndexStore(
+                            directory: directory, file: code ? IndexStore.codeFile : IndexStore.mainFile, readOnly: true
+                        )
+                        summaryReaders[code] = db
+                    }
                     let selected = configLock.withLock { code ? codeRoots : roots }
+                    try db.db.execute("BEGIN")
+                    defer { try? db.db.execute("ROLLBACK") }
+                    var version: Int64 = 0
+                    try db.db.query("PRAGMA data_version") { version = $0.int(0) }
+                    let values: [[String: Any]]
+                    if let cached = summaryCache[code], cached.version == version, cached.roots == selected {
+                        values = cached.values.map { value in
+                            var value = value
+                            let folder = URL(fileURLWithPath: value["path"] as? String ?? "")
+                            let missing = !Arguments.isFolder(folder)
+                            value["missing"] = missing
+                            value["unreadable"] = !missing && !Arguments.isReadable(folder)
+                            return value
+                        }
+                    } else {
+                        values = selected.map { summary(of: $0, in: db) }
+                        summaryCache[code] = (version, selected, values)
+                    }
                     finish(
-                        request, ["roots": selected.map { summary(of: $0, in: db) }], admitted: admitted,
+                        request, ["roots": values], admitted: admitted,
                         started: started)
                 } catch { finish(request, ["ok": false, "error": "\(error)"], admitted: admitted, started: started) }
             }
@@ -601,7 +629,10 @@ final class SearchService: @unchecked Sendable {
         let image = try PreviewImages.make(
             PreviewImages.Kind(rawValue: kind) ?? .image, of: path, at: loc,
             pixels: pixels, in: previews)
-        renderLock.withLock { rendered[key] = image }
+        renderLock.withLock {
+            rendered[key] = image
+            if rendered.count > 256, let oldest = rendered.keys.first { rendered.removeValue(forKey: oldest) }
+        }
         return ["image": image]
     }
 

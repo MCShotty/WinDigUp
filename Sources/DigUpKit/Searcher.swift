@@ -233,11 +233,11 @@ public final class Searcher {
         let hydrated = ProcessInfo.processInfo.systemUptime
         let wordRank = Dictionary(words.enumerated().map { ($0.element.file, ($0.offset + 1, $0.element)) },
                                   uniquingKeysWith: { first, _ in first })
-        var hits: [SearchHit] = []
+        var places: [(file: Int64, score: Double, segment: Int64, focus: Double?)] = []
         for (file, score) in scored.filter({ kinds == nil || fileKind[$0.key].map { kinds!.contains($0) } ?? false })
             .sorted(by: { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) })
             .prefix(limit) {
-            let rank = hits.count
+            let rank = places.count
             let semantic = best[file]
             let keyword = wordRank[file]
             // Point at the best meaning segment if it stands out; else at the segment the words matched.
@@ -252,41 +252,46 @@ public final class Searcher {
                                                    identifier: rank < 10 ? identifier : nil, query: text, terms: terms,
                                                    wordsHere: keyword?.1.segment == segmentID || identifier != nil)
             }
-            var path = "", kind = FileKind.doc, modified = 0.0, size: Int64 = 0, info: [String: String] = [:]
-            try store.db.query("SELECT path, kind, mtime, size, info FROM files WHERE id = ?", [.int(file)]) {
-                path = $0.text(0) ?? ""
-                kind = FileKind(rawValue: $0.text(1) ?? "") ?? .doc
-                modified = $0.double(2)
-                size = $0.int(3)
-                if let json = $0.text(4)?.data(using: .utf8) {
-                    info = (try? JSONSerialization.jsonObject(with: json) as? [String: String]) ?? [:]
-                }
+            places.append((file, score, segmentID, focus))
+        }
+        // Hydrate the bounded candidate set in two reads, instead of issuing SQL for each displayed result.
+        // IDs come from SQLite, never query text. Code definition lookup above retains its own bounded behavior.
+        var files: [Int64: (path: String, kind: FileKind, modified: Double, size: Int64, info: [String: String])] = [:]
+        var segments: [Int64: (kind: SegmentKind, loc: Double?, end: Double?, text: String?)] = [:]
+        if !places.isEmpty {
+            let ids = places.map { String($0.file) }.joined(separator: ",")
+            try store.db.query("SELECT id, path, kind, mtime, size, info FROM files WHERE id IN (\(ids))") { row in
+                let info = row.text(5)?.data(using: .utf8).flatMap {
+                    (try? JSONSerialization.jsonObject(with: $0)) as? [String: String]
+                } ?? [:]
+                files[row.int(0)] = (row.text(1) ?? "", FileKind(rawValue: row.text(2) ?? "") ?? .doc,
+                                     row.double(3), row.int(4), info)
             }
-            var segment = SegmentKind.name, loc: Double?, locEnd: Double?, storedExcerpt: String?
-            try store.db.query("SELECT kind, loc, loc_end, excerpt FROM segments WHERE id = ?", [.int(segmentID)]) {
-                segment = SegmentKind(rawValue: $0.text(0) ?? "") ?? .name
-                loc = $0.isNull(1) ? nil : $0.double(1)
-                locEnd = $0.isNull(2) ? nil : $0.double(2)
-                storedExcerpt = $0.text(3)
+            let segmentIDs = Set(places.map(\.segment) + places.compactMap { wordRank[$0.file]?.1.segment })
+                .sorted().map(String.init).joined(separator: ",")
+            try store.db.query("SELECT id, kind, loc, loc_end, excerpt FROM segments WHERE id IN (\(segmentIDs))") { row in
+                segments[row.int(0)] = (SegmentKind(rawValue: row.text(1) ?? "") ?? .name,
+                                       row.isNull(2) ? nil : row.double(2), row.isNull(3) ? nil : row.double(3), row.text(4))
             }
+        }
+        var hits: [SearchHit] = []
+        for place in places {
+            guard let file = files[place.file], let segment = segments[place.segment] else { continue }
+            let semantic = best[place.file], keyword = wordRank[place.file]
             // Quote the matched words only when they come from the segment we point at, so a PDF hit on page 5
             // never shows page 2's words. A segment with no place and no text of its own (a screenshot's image
             // vector) can borrow them from its file's OCR text, which describes the same picture.
-            var snippet = keyword.flatMap { $0.1.segment == segmentID ? $0.1.snippet : nil }
+            var snippet = keyword.flatMap { $0.1.segment == place.segment ? $0.1.snippet : nil }
                 .flatMap { $0.contains("«") ? excerpt($0, limit: 400) : nil }
-            if snippet == nil, storedExcerpt == nil, loc == nil, let match = keyword?.1,
+            if snippet == nil, segment.text == nil, segment.loc == nil, let match = keyword?.1,
                let text = match.snippet, text.contains("«") {
-                var matchedKind: String?
-                try store.db.query("SELECT kind FROM segments WHERE id = ?", [.int(match.segment)]) {
-                    matchedKind = $0.text(0)
-                }
-                if matchedKind != SegmentKind.name.rawValue { snippet = excerpt(text, limit: 400) }
+                if segments[match.segment]?.kind != .name { snippet = excerpt(text, limit: 400) }
             }
-            hits.append(SearchHit(path: path, kind: kind, score: score, z: semantic?.z, cosine: semantic?.cosine,
-                                  keywordRank: keyword?.0, segment: segment, segmentID: segmentID, loc: loc,
-                                  locEnd: locEnd,
-                                  excerpt: snippet ?? storedExcerpt, modified: modified, size: size, info: info,
-                                  focus: focus))
+            hits.append(SearchHit(path: file.path, kind: file.kind, score: place.score, z: semantic?.z, cosine: semantic?.cosine,
+                                  keywordRank: keyword?.0, segment: segment.kind, segmentID: place.segment, loc: segment.loc,
+                                  locEnd: segment.end,
+                                  excerpt: snippet ?? segment.text, modified: file.modified, size: file.size, info: file.info,
+                                  focus: place.focus))
         }
         timings = ["scoring": (encodedScores - started) * 1000, "keywords": (hydrated - encodedScores) * 1000,
                    "metadata": (ProcessInfo.processInfo.systemUptime - hydrated) * 1000]

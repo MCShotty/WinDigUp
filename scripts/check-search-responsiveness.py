@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -87,6 +88,10 @@ def main():
                     assert lexical_ms < 250, "Keyword search waited for inference"
                     assert len(operations) <= 3, "Obsolete embedding requests accumulated"
                     assert report["superseded"] >= 10, "Superseded requests were not completed"
+                    send(24,op="cancel",session="preview",generation=2)
+                    wait(24)
+                    send(25,op="render",session="preview",generation=1,path=str(root/"does-not-exist.pdf"),kind="pdf",pixels=240)
+                    assert wait(25)[1].get("status")=="superseded","Obsolete preview reached the renderer"
                     send(30,op="apps_catalog",revision="shared",documents=[])
                     wait(30)
                     before=len(operations)
@@ -146,6 +151,26 @@ def main():
                             indexer.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             indexer.kill();indexer.wait()
+                    send(44,op="status")
+                    index_path=wait(44)[1]["index"]
+                    send(45,op="folders",roots=[str(files)])
+                    wait(45)
+                    send(46,op="summaries")
+                    assert wait(46)[1]["roots"][0]["files"]==0
+                    with sqlite3.connect(index_path) as db:
+                        db.execute("INSERT INTO files(path,kind,size,mtime,inode,device,state) VALUES(?,?,?,?,?,?,?)",
+                                   (str(files/"lease.txt"),"doc",100,1,1,1,"partial"))
+                    send(47,op="summaries")
+                    summary=wait(47)[1]["roots"][0]
+                    assert summary["files"]==1 and summary["unfinished"]==1,summary
+                    with sqlite3.connect(index_path) as db:
+                        db.execute("UPDATE files SET state='done'")
+                    send(48,op="summaries")
+                    summary=wait(48)[1]["roots"][0]
+                    assert summary["indexed"]==1 and summary["unfinished"]==0,summary
+                    send(49,op="summaries")
+                    assert wait(49)[1]["roots"][0]==summary
+                    print("PASS: cached folder summaries observe committed additions/state changes on their own reader")
                 if not args.baseline:
                     idle_env=dict(env,DIGUP_APP_TEST_DELAY="0")
                     idle=subprocess.Popen([str(args.helper.resolve()),"search-service","--index",str(root/"idle-index"),"--encoder-idle","0.1"],

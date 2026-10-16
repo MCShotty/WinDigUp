@@ -24,6 +24,11 @@ Keyword reads, inference, semantic retrieval, maintenance, snapshot construction
 owners. The input reader never waits for preview capacity. A session retains one pending query generation; panel and
 window sessions have native-issued instance IDs. File and app-purpose queries share a 256-entry LRU keyed by the full
 model revision, runtime, backend, precision/build identity and actual query prompt/profile. Code remains distinct.
+Queued previews carry the current generation, so old thumbnails complete as superseded before rendering. A newer
+request never reuses an obsolete pending preview; completed images remain cached. Folder summaries use maintenance-owned
+readers and cached counts between SQLite data revisions, while folder availability is checked again on each request.
+Ordinary result metadata is hydrated in two bounded SQL reads for the selected candidate set. Code definition lookup
+retains its existing bounded behavior. File availability and exclusion checks remain enforced before publication.
 
 The native encoder runs in its own persistent worker, preserving accelerator-only execution. Startup has a 180-second
 deadline and each 512-token query/app-document request a 60-second deadline. A timeout or worker failure is persistent

@@ -260,14 +260,16 @@ function kindIcon(kind) {
 const renders = new Map();
 function rendered(path, kind, loc, pixels) {
   const key = `${path}|${kind}|${loc}|${pixels}`;
-  if (!renders.has(key)) {
-    const pending=ask({ op: "render", path, kind, loc, pixels }).then(reply=>{
-      if(!reply.image)throw new Error("Preview was superseded");return reply.image;
-    }).catch(error=>{if(renders.get(key)===pending)renders.delete(key);throw error;});
-    renders.set(key,pending);
-    if(renders.size>256)renders.delete(renders.keys().next().value);
-  }
-  return renders.get(key);
+  const generation=SearchTiming.generation,previous=renders.get(key);
+  if(previous&&(previous.done||previous.generation===generation))return previous.promise;
+  const entry={generation,done:false};
+  entry.promise=ask({ op: "render", path, kind, loc, pixels, generation }).then(reply=>{
+    if(!reply.image){const error=new Error("Preview was superseded");error.superseded=reply.status==="superseded";throw error;}
+    entry.done=true;return reply.image;
+  }).catch(error=>{if(renders.get(key)===entry)renders.delete(key);throw error;});
+  renders.set(key,entry);
+  if(renders.size>256)renders.delete(renders.keys().next().value);
+  return entry.promise;
 }
 
 /// What the helper renders for a result's picture: [kind, place], or null when it has none (documents, audio, code).

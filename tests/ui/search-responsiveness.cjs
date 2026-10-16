@@ -90,6 +90,26 @@ let browser;
     await page.emulateMedia({colorScheme:'dark'});await page.setViewportSize({width:760,height:720});
     await page.screenshot({path:process.env.DIGUP_SEARCH_SCREENSHOTS+'/mixed-dark-small.png'});
   }
+  await page.evaluate(async()=>{
+    const old=window.__TAURI__.core.invoke,calls=[];let release;
+    window.__TAURI__.core.invoke=(command,args)=>{
+      if(command==='ask'&&args.request.op==='render'){
+        calls.push(args.request);
+        return calls.length===1?new Promise(resolve=>{release=resolve;}):Promise.resolve({image:'C:/cache/current.jpg'});
+      }
+      return old(command,args);
+    };
+    const first=rendered('C:/fixture.pdf','pdf',1,240).catch(error=>error.superseded);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    SearchTiming.begin(SearchTiming.generation+1);
+    const current=await rendered('C:/fixture.pdf','pdf',1,240);
+    release({status:'superseded'});
+    if(await first!==true||current!=='C:/cache/current.jpg'||calls.length!==2||calls[0].generation===calls[1].generation)
+      throw new Error('Obsolete preview promise leaked into the current generation');
+    if(await rendered('C:/fixture.pdf','pdf',1,240)!==current||calls.length!==2)
+      throw new Error('Obsolete preview completion evicted the current cached image');
+    window.__TAURI__.core.invoke=old;
+  });
   await page.goto(base+'/index.html');await page.fill('#query','Firefox');await page.waitForSelector('.row');
   await page.waitForFunction(()=>document.querySelector('.group-title')?.textContent==='Best match · App');
   await page.press('#query','ArrowDown');await page.press('#query','Enter');
