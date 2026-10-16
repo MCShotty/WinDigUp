@@ -1,5 +1,6 @@
 //! Windows supplies identities and launch targets. This service never loads a model.
 pub(crate) mod rank;
+pub mod enrichment;
 #[cfg(windows)]
 mod windows;
 
