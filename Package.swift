@@ -28,9 +28,11 @@ let runpath = ["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN",
 let llamaModule = "Sources/CLlamaShared"
 #endif
 let llamaLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/llama/lib"] + runpath)]
-let engineDependencies: [Target.Dependency] = ["CSQLite", "CStb", "CMiniz", "CPDFium"]
+let engineDependencies: [Target.Dependency] = ["CSQLite", "CStb", "CMiniz", "CPDFium", "CSearchMath"]
 let engineLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/pdfium/lib"] + runpath)]
 let portableTargets: [Target] = [
+    // Host-side similarity scoring. CPU feature checks apply only to stored vector conversion, never inference.
+    .target(name: "CSearchMath"),
     // SQLite with FTS5 (Windows has no system SQLite, Linux's may lack FTS5 or its headers).
     .target(name: "CSQLite", path: "Vendor/sqlite", cSettings: [
         .define("SQLITE_ENABLE_FTS5"), .define("SQLITE_THREADSAFE", to: "1"), .define("SQLITE_DQS", to: "0"),

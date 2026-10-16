@@ -510,10 +510,14 @@ final class SearchService: @unchecked Sendable {
                 let codeWords = try code.map { try Searcher(store: $0, loadVectors: false) }
                 let wordsPublished = DispatchSemaphore(value: 0)
                 lexical.submit(key: "publish-words", foreground: false, cancel: { wordsPublished.signal() }) { [self] in
+                    let retired = RetiredWords(main: searcher, code: codeSearcher)
                     store = main
                     searcher = words
                     codeStore = code
                     codeSearcher = codeWords
+                    // Releasing a large name dictionary can take longer than the pointer swap. Retire it away
+                    // from the keyword owner; the old readers have no remaining users after this serial handoff.
+                    DispatchQueue.global(qos: .utility).async { withExtendedLifetime(retired) {} }
                     write(["event": "search_index", "state": "words_ready"])
                     wordsPublished.signal()
                 }
@@ -585,6 +589,10 @@ final class SearchService: @unchecked Sendable {
             }
             if again { requestRefresh(vectors: stateLock.withLock { refreshVectors || snapshotBytes > 0 }) }
         }
+    }
+    private struct RetiredWords: @unchecked Sendable {
+        let main: Searcher
+        let code: Searcher?
     }
     private func write(_ fields: [String: Any]) {
         if fields["event"] as? String == "encoder" { stateLock.withLock { encoderReceipt = fields } }

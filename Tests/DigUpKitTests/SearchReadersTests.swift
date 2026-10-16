@@ -2,8 +2,47 @@ import Foundation
 import Testing
 
 @testable import DigUpKit
+#if canImport(CSearchMath)
+import CSearchMath
+#endif
 
 @Suite struct SearchReadersTests {
+    #if !canImport(Accelerate)
+    @Test func portableHalfConversionPreservesEveryFinitePatternAndBounds() {
+        let input = [Float16(42)] + (0...65_535).map { Float16(bitPattern: UInt16($0)) }
+            + [Float16(-2), Float16.infinity, Float16(0.5)]
+        let count = input.count - 1
+        var output = [Float](repeating: 123_456, count: count + 6)
+        input.withUnsafeBufferPointer { source in
+            output.withUnsafeMutableBufferPointer { destination in
+                Vectors.floats(fromHalf: source.baseAddress! + 1, count: count, to: destination.baseAddress! + 3)
+            }
+        }
+        var mismatch: Int?
+        for index in 0..<count {
+            let expected = Float(input[index + 1]), actual = output[index + 3]
+            if expected.isNaN ? !actual.isNaN : expected.bitPattern != actual.bitPattern { mismatch = index; break }
+        }
+        #expect(mismatch == nil)
+        #expect(output.prefix(3).allSatisfy { $0 == 123_456 })
+        #expect(output.suffix(3).allSatisfy { $0 == 123_456 })
+        input.withUnsafeBufferPointer { source in
+            output.withUnsafeMutableBufferPointer { destination in
+                (source.baseAddress! + 1).withMemoryRebound(to: UInt16.self, capacity: count) { halves in
+                    digup_search_half_to_float_portable(halves, destination.baseAddress! + 3, count)
+                }
+            }
+        }
+        mismatch = nil
+        for index in 0..<count {
+            let expected = Float(input[index + 1]), actual = output[index + 3]
+            if expected.isNaN ? !actual.isNaN : expected.bitPattern != actual.bitPattern { mismatch = index; break }
+        }
+        #expect(mismatch == nil)
+        #expect(output.prefix(3).allSatisfy { $0 == 123_456 })
+        #expect(output.suffix(3).allSatisfy { $0 == 123_456 })
+    }
+    #endif
     @Test func exactNamesCoverFilesOutsideTopHitsAndInvalidateAfterWrites() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

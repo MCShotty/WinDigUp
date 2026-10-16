@@ -43,3 +43,5 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
+      - name: Compile portable search-vector conversion for Windows x64
+        run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"

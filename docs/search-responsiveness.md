@@ -47,6 +47,9 @@ There is one builder plus a coalesced refresh request. Estimated overlap include
 the budget is one quarter of host RAM capped at 4 GiB. Under pressure, readers drain before replacement. An oversized
 snapshot reports an error and preserves keyword search. Read transactions are released on replacement/idle unload;
 while indexing, refresh notifications normally arrive at most every three seconds.
+Old filename caches retire on a utility thread after the serial ownership handoff. Portable similarity scoring uses
+a runtime-gated F16C conversion on compatible x64 CPUs, checking both CPU features and OS AVX state. Other hosts use
+a portable conversion. Both paths preserve every finite half-float bit pattern; the neural pipeline is unchanged.
 
 The exact-filename cache is built in the background across all indexed names, including names outside the returned
 top hits. A database revision change invalidates it conservatively until rebuilt, suppressing app promotion while
@@ -64,6 +67,34 @@ Swift tests cover read-only revision consistency, concurrent writes, combined fa
 Native tests cover settings/annotations, timing privacy/bounds, device contracts and helper retirement. Actual-page
 Chromium tests cover Apps placement, collisions, blocked providers, stale replies, stable selection/DOM/preview,
 pagination, keyboard behavior, dark mode and a smaller viewport. The Browser plugin is unavailable in development.
+
+## Supplemental host scale measurements
+
+The Linux release-helper fixture uses 100,000 synthetic metadata rows, only 200 existing tiny files, and constant
+768-dimensional unit vectors. It loads **no neural model** and measures helper roundtrips, excluding UI/debounce.
+This is a reproducible retrieval/refresh workload, not representative installed-Windows latency or relevance evidence.
+Reference host: AMD EPYC 9V74, 17.6 GiB reported RAM, Swift 6.2.3. The comparison starts after the queue refactor and
+measures the portable conversion/cache-retirement follow-up. Raw reports include binary hashes and source identity:
+[before](evidence/search-scale-before.json), [after](evidence/search-scale-after.json).
+
+| Vectors | Uncached samples | Earlier p95 | Updated p95 | Updated peak helper RSS |
+|---|---:|---:|---:|---:|
+| 70,000 | 100 | 205 ms | 49 ms | 244 MiB |
+| 250,000 | 20 | 682 ms | 117 ms | 640 MiB |
+| 1,000,000 | 10 | 2,754 ms | 443 ms | 2,059 MiB |
+
+The larger scales are exploratory; their smaller sample counts do not establish robust performance budgets. Keyword
+roundtrips during refresh had p95 2.0–2.2 ms, with outliers up to **124 ms**. Refreshes took 2.8–6.3 seconds. These
+outliers and real-world corpora still need installed-Windows measurements. No UI, GPU, NPU or model speedup is claimed.
+
+Reproduce on Linux after building the release helper:
+
+```bash
+python3 scripts/benchmark-search-scale.py --helper .build/release/digup --output scale.json
+```
+
+Use `--samples 100 100 100` for a longer host run. The fixture creates and removes its own temporary index; it does
+not open the configured user index. Existing file/code schemas, vectors and model fingerprints need no rebuild.
 
 ## Recording physical latency
 
