@@ -38,7 +38,9 @@ public struct WorkerInfo: Codable, Sendable {
     /// Vectors from different models, revisions, runtimes or precisions must never share an index.
     public var vectorSource: String {
         if backend == "nvidia-cuda" {
-            return "cuda-v1:" + [model, revision, runtime, dtype, String(dim), backend ?? "", precisionProfile ?? "", buildIdentity ?? ""]
+            return "cuda-v1:" + [model, revision, runtime, dtype, String(dim), backend ?? "", precisionProfile ?? "", buildIdentity ?? "",
+                "query-text512-v1;documents-multimodal2048-v1", Prompts.query(""), Prompts.codeQuery(""),
+                Prompts.document(title: "{title}", text: "{text}")]
                 .map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
         }
         return "\(model)@\(revision.prefix(7)) \(runtime) \(dtype)"

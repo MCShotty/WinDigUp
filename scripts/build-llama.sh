@@ -6,7 +6,7 @@
 # On Linux and Windows it builds shared libraries instead, with ggml's backends as modules loaded at run
 # time (GGML_BACKEND_DL): CPU variants for host storage, Vulkan for hardware inference. Its SDK is required.
 # LLAMA_SOURCE / LLAMA_BUILD point at an existing clone and
-# build folder. On Windows it runs in Git for Windows' bash inside the MSVC environment (vcvars64) and
+# build root (each configuration gets its own build directory). On Windows it runs in Git for Windows' bash inside the MSVC environment (vcvars64) and
 # leaves DLLs with their import libraries.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,6 +43,9 @@ if [[ ( -f "$OUT/lib/libllamacpp.a" || -f "$OUT/lib/libllama.so" || -f "$OUT/lib
       && "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then
   exit 0
 fi
+# CMake leaves disabled backend modules in its old bin directory. Separate every compiler/backend/patch identity so
+# switching CUDA off (or changing architectures/toolchains) cannot accidentally package a previous module.
+BUILD="$BUILD/$BUILD_ID"
 if [[ -z "${DEVELOPER_DIR:-}" && -d /Applications/Xcode.app ]]; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi

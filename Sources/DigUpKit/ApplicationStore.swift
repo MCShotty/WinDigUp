@@ -70,7 +70,7 @@ public final class ApplicationStore {
     public static func fingerprint(info: WorkerInfo, backend: String, runtimeBuild: String = "") -> String {
         // SQLite's text binder uses NUL termination. Encode components before joining, keeping the identity lossless.
         var components = [info.model, info.revision, info.runtime, runtimeBuild, info.dtype, String(info.dim), backend, promptVersion]
-        if backend == "nvidia-cuda" { components += [info.precisionProfile ?? "", info.buildIdentity ?? ""] }
+        if backend == "nvidia-cuda" { components += [info.precisionProfile ?? "", info.buildIdentity ?? "", info.vectorSource] }
         return components.map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
     }
 

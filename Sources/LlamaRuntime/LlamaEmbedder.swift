@@ -382,6 +382,18 @@ public final class LlamaEmbedder: Embedder {
                 return device
             }
         }
+        if acceleration == .nvidiaCUDA {
+            for index in 0..<ggml_backend_dev_count() {
+                guard let device = ggml_backend_dev_get(index), let value = describe(device),
+                      value.backend == "cuda", value.matches(requested) else { continue }
+                if !Acceleration.cudaComputeCapabilities.contains(value.computeCapability ?? 0) {
+                    throw WorkerError.failed("Unsupported CUDA GPU: \(value.name) (SM \(value.computeCapability ?? 0)). This build targets RTX 20/30/40/50-series (SM 75/86/89/120).")
+                }
+                if (value.driverVersion ?? 0) < 12090 {
+                    throw WorkerError.failed("Insufficient NVIDIA driver for \(value.name). Install driver 576.57 or newer (CUDA driver API 12.9 or newer).")
+                }
+            }
+        }
         let hint = acceleration == .nvidiaCUDA
             ? "CUDA requires RTX 20-series or newer and NVIDIA driver 576.57 or newer. Check the CUDA runtime and device selection in Settings."
             : "NVIDIA cannot use Vulkan. AMD requires a current Vulkan driver and RDNA1/RX 5000 or newer."
@@ -416,7 +428,13 @@ public final class LlamaEmbedder: Embedder {
             let available = acceleration.accepts(value)
             var fields = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]
             fields["available"] = available
-            if !available { fields["message"] = value.backend == "cuda" ? "Requires RTX 20-series or newer and driver 576.57 or newer" : "Unsupported hardware device" }
+            if !available {
+                if value.backend == "cuda", !Acceleration.cudaComputeCapabilities.contains(value.computeCapability ?? 0) {
+                    fields["errorCode"] = "unsupported_device"; fields["message"] = "This CUDA build supports RTX 20/30/40/50-series (SM 75/86/89/120)."
+                } else if value.backend == "cuda", (value.driverVersion ?? 0) < 12090 {
+                    fields["errorCode"] = "insufficient_driver"; fields["message"] = "Install NVIDIA driver 576.57 or newer (CUDA driver API 12.9 or newer)."
+                } else { fields["errorCode"] = "unsupported_device"; fields["message"] = "Unsupported hardware device" }
+            }
             devices.append(fields)
         }
         let registers = (0..<ggml_backend_reg_count()).map { String(cString: ggml_backend_reg_name(ggml_backend_reg_get($0))).lowercased() }
@@ -428,6 +446,9 @@ public final class LlamaEmbedder: Embedder {
             if !ready {
                 var code = registers.contains(name) ? "device_unavailable" : "backend_unavailable"
                 var message = name == "cuda" ? "CUDA is unavailable. Check NVIDIA driver 576.57 or newer and the app-local CUDA runtime." : "No supported non-NVIDIA Vulkan GPU is available."
+                if let unavailable = devices.first(where: { $0["backend"] as? String == name && $0["errorCode"] != nil }) {
+                    code = unavailable["errorCode"] as? String ?? code; message = unavailable["message"] as? String ?? message
+                }
                 #if os(Windows)
                 if name == "cuda" {
                     let system = ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:\\Windows"
