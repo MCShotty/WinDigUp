@@ -66,12 +66,17 @@ public final class IndexStore {
 
     public let file: URL
 
-    public init(directory: URL, file name: String = IndexStore.mainFile) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    public init(directory: URL, file name: String = IndexStore.mainFile, readOnly: Bool = false) throws {
+        if !readOnly { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
         self.directory = directory
         file = directory.appendingPathComponent(name)
-        db = try Database(path: file.path)
-        try migrate()
+        db = try Database(path: file.path, readOnly: readOnly)
+        if !readOnly { try migrate() }
+        else {
+            var version: Int64 = 0
+            try db.query("PRAGMA user_version") { version = $0.int(0) }
+            guard version == Self.schemaVersion else { throw Database.Failure(message: "The search index is being prepared by its writer") }
+        }
     }
 
     /// Bytes on disk: the database and its write-ahead log.

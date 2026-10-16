@@ -43,9 +43,11 @@ const state = {
   caveat: null,          // why results may be incomplete right now (the shell's status.rs)
 };
 let debugPending = false;
-const applicationSearch = new ApplicationSearch(() => {
+const applicationSearch = new ApplicationSearch((statusOnly=false) => {
   const ids = rowIDs();
-  if (!state.navigated || !ids.includes(state.selection)) state.selection = ids[0] ?? null;
+  if (!state.navigated) state.selection = !state.isApps&&!state.lexicalReady&&!state.error?null:ids[0]??null;
+  else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
+  if(statusOnly){renderFooter();return;}
   render();
   if (debugPending && state.isApps && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
 });
@@ -53,18 +55,26 @@ const applicationSearch = new ApplicationSearch(() => {
 // MARK: Searching
 
 function queryChanged() {
+  if(state.composing)return;
   closeBig();
   const generation = ++state.generation;
+  SearchTiming.begin(generation);state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;
+  state.exactFilenameKnown=false;state.exactFilename=false;
   clearTimeout(state.timer);
+  cancelAnimationFrame(state.frame);
+  state.refine=null;
   state.navigated = false;
+  state.chosen = null;
   state.error = null;
   const typed = $query.value.trim();
   const mode = Apps.parse(typed);
   const code = mode.code;
   const text = mode.text;
+  if((mode.mode==="apps"||!typed||(code&&!text))&&state.filesStarted){state.filesStarted=false;ask({op:"cancel",generation}).catch(()=>{});}
   state.isCode = code;
   state.isApps = mode.mode === "apps";
-  applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps));
+  applicationSearch.limit=state.isApps?6:3;
+  applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps),mode.mode);
   if (state.isApps) {
     show({ hits: [], strong: 0 }, text, "applications");
     return;
@@ -75,23 +85,29 @@ function queryChanged() {
   }
   show({ hits: [], strong: 0 }, text, "words");
   // Words now. The last word is probably half-typed, so it matches as a prefix.
-  ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40 })
+  state.filesStarted=true;
+  state.refreshWords=(passive=false)=>SearchTiming.measure("file_words",()=>ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40,generation,passive }),passive)
     .then((reply) => {
-      if (generation === state.generation && state.finalGeneration !== generation) show(reply, text, "words");
+      if(generation!==state.generation||reply.status==="superseded")return;
+      state.lexicalReady=true;state.fileWords=reply.hits||[];state.categoryQuery=reply.category_query===true;
+      state.exactFilenameKnown=reply.exact_filename_known!==false;state.exactFilename=reply.exact_filename===true;
+      if(state.finalGeneration!==generation)show(reply,text,"words");else applicationSearch.changed();
     })
     .catch(error => { if (generation === state.generation && state.finalGeneration !== generation) failed(error); });
-  // The meaning is embedded now, so its vector is ready when typing pauses: the pause is the whole wait.
-  ask({ op: "embed_ahead", q: text, code }).catch(() => {});
-  state.timer = setTimeout(() => {
-    ask({ op: "search", q: text, code, meaning: true, limit: 40 })
+  state.frame=requestAnimationFrame(()=>state.refreshWords());
+  // Submit meaning only after typing pauses; current-query words remain available meanwhile.
+  state.refine = (passive=false) => {
+    SearchTiming.measure("file_meaning",()=>ask({ op: "search", q: text, code, meaning: true, limit: 40,generation,passive }),passive)
       .then((reply) => {
-        if (generation !== state.generation) return;
+        if (generation !== state.generation||reply.status==="superseded") return;
         state.finalGeneration = generation;
+        if(reply.semantic_error)state.error=reply.semantic_error;
         show(reply, text, reply.meaning ? "meaning" : "wordsOnly");
         if (debugPending) report();
       })
       .catch(error => { if (generation === state.generation) failed(error); });
-  }, TYPING_PAUSE);
+  };
+  state.timer=setTimeout(state.refine,TYPING_PAUSE);
 }
 
 function show(reply, text, phase) {
@@ -113,33 +129,42 @@ function show(reply, text, phase) {
   if (!state.navigated) state.showWeaker = false;
   // Follow the top hit until you pick something with the arrow keys.
   const ids = rowIDs();
-  if (!state.navigated || !ids.includes(state.selection)) state.selection = ids[0] ?? null;
+  if (!state.navigated) state.selection = ids[0] ?? null;
+  else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
   render();
 }
 
 function failed(error) {
   state.error = String(error);
-  renderFooter();
+  if(!state.navigated)state.selection=rowIDs()[0]??null;
+  render();
 }
 
+function appPlacement(){return Apps.placement(applicationSearch.hits,state.fileWords||[],{appsOnly:state.isApps,text:state.text,
+  lexicalReady:state.lexicalReady,categoryQuery:state.categoryQuery,exactFilenameKnown:state.exactFilenameKnown,exactFilename:state.exactFilename});}
 function rowIDs() {
+  const app=appPlacement();
   return [
-    ...applicationSearch.hits.map(resultKey),
+    ...app.before.map(resultKey),
     ...state.groups.flatMap((group) => group.rows.map(resultKey)),
     ...(state.weaker.length ? [WEAKER] : []),
     ...(state.showWeaker ? state.weaker.map(resultKey) : []),
+    ...app.after.map(resultKey),
   ];
 }
 
 function selectedHit() {
-  return [...applicationSearch.hits, ...state.strong, ...state.weaker].find((hit) => resultKey(hit) === state.selection) ?? null;
+  const current=rawSelectedHit();
+  return current&&state.navigated&&state.chosen&&resultKey(state.chosen)===state.selection?state.chosen:current;
 }
+function rawSelectedHit(){return [...applicationSearch.hits,...state.strong,...state.weaker].find(hit=>resultKey(hit)===state.selection)??null;}
 
 function move(step) {
   const ids = rowIDs();
   if (!ids.length) return;
   const index = ids.indexOf(state.selection);
   state.selection = ids[Math.max(0, Math.min(ids.length - 1, (index < 0 ? -1 : index) + step))];
+  state.chosen=rawSelectedHit();
   state.navigated = true;
   render();
 }
@@ -152,7 +177,7 @@ function toggleWeaker() {
 
 function openSelected() {
   const hit = selectedHit();
-  if (hit) state.navigated = true;
+  if (hit){state.navigated = true;state.chosen=hit;}
   if (hit) openResult(hit).catch(failed);
 }
 
@@ -207,16 +232,17 @@ function renderList() {
   const nothing = !state.strong.length && !state.weaker.length && !applicationSearch.hits.length;
   $list.hidden = nothing;
   if (nothing) return;
-  if (applicationSearch.hits.length) {
-    $list.append(element("div", "group-title", "Apps"));
-    for (const hit of applicationSearch.hits) $list.append(Apps.row(hit, state.selection === resultKey(hit), (key) => {
-      state.selection = key; state.navigated = true; render();
-    }, (hit) => openResult(hit).catch(failed)));
-    if (applicationSearch.total > applicationSearch.hits.length) {
-      const more = element("button", "app-more", `Show all ${applicationSearch.total} matching apps…`);
-      more.onclick = () => openInWindow("apps"); $list.append(more);
-    }
-  }
+  const app=appPlacement();
+  const appSection=(hits,title)=>{
+    const section=element("section","panel-app-group");section.dataset.appGroup=title;
+    if(!hits.length)return section;
+    section.append(element("div","group-title",title));
+    for(const hit of hits)section.append(Apps.row(hit,state.selection===resultKey(hit),key=>{
+      state.selection=key;state.chosen=rawSelectedHit();state.navigated=true;render();
+    },hit=>openResult(hit).catch(failed)));
+    return section;
+  };
+  $list.append(appSection(app.before,state.isApps?"Apps":"Best match · App"));
   for (const group of state.groups) {
     $list.append(element("div", "group-title", group.title));
     for (const hit of group.rows) $list.append(row(hit));
@@ -236,6 +262,11 @@ function renderList() {
     fold.onclick = toggleWeaker;
     $list.append(fold);
     if (state.showWeaker) for (const hit of state.weaker) $list.append(row(hit));
+  }
+  $list.append(appSection(app.after,"Apps"));
+  if(applicationSearch.total>app.before.length+app.after.length){
+    const more=element("button","app-more",`Show all ${applicationSearch.total} matching apps…`);
+    more.onclick=()=>openInWindow("apps");$list.append(more);
   }
   $list.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
@@ -257,6 +288,7 @@ function row(hit) {
   item.append(text);
   item.onclick = () => {
     state.selection = resultKey(hit);
+    state.chosen=hit;
     state.navigated = true;
     render();
   };
@@ -278,7 +310,11 @@ function thumbnail(hit) {
   return image;
 }
 
+let previewSignature=null;
 function renderPreview() {
+  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps]);
+  if(signature===previewSignature)return;
+  previewSignature=signature;
   $preview.replaceChildren();
   if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length) {
     if (state.isApps) {
@@ -329,15 +365,15 @@ function picture(hit) {
     case "image":
     case "screenshot":
       if (SHOWN_AS_IS.has(extensionOf(hit.path))) image.src = fileURL(hit.path);
-      else rendered(hit.path, "image", null, 1024).then((path) => { image.src = fileURL(path); }).catch(() => {});
+      else rendered(hit.path, "image", null, 1024, true).then((path) => { image.src = fileURL(path); }).catch(() => {});
       return frame;
     case "pdf":
-      rendered(hit.path, "pdf", hit.loc ?? 1, 1024).then((path) => { image.src = fileURL(path); }).catch(() => {});
+      rendered(hit.path, "pdf", hit.loc ?? 1, 1024, true).then((path) => { image.src = fileURL(path); }).catch(() => {});
       return frame;
     case "video": {
       // The frame at the moment, its time on it; a click plays the video from there.
       const at = hit.loc ?? 0;
-      rendered(hit.path, "video", at, 1024).then((path) => { image.src = fileURL(path); }).catch(() => {});
+      rendered(hit.path, "video", at, 1024, true).then((path) => { image.src = fileURL(path); }).catch(() => {});
       const moment = element("div", "moment");
       const play = element("div", "play");
       play.innerHTML = ICONS.play;
@@ -523,11 +559,18 @@ tauri.event.listen("panel-shown", () => {
   // Like Spotlight: the last query, selected.
   $query.focus();
   $query.select();
+  if($query.value.trim()&&!applicationSearch.active)queryChanged();
   if (!state.isApps) ask({ op: "prewarm" }).catch(() => {});
+});
+tauri.event.listen("panel-hidden",()=>{
+  clearTimeout(state.timer);cancelAnimationFrame(state.frame);applicationSearch.suspend();
+  ask({op:"cancel",generation:++state.generation}).catch(()=>{});
 });
 
 tauri.event.listen("helper", ({ payload }) => {
   const { from, event } = payload;
+  if(from==="search"&&event.event==="search_index"&&event.state==="words_ready"&&!document.hidden&&!state.isApps&&state.text)state.refreshWords?.(true);
+  if(from==="search"&&event.event==="search_index"&&event.state==="ready"&&!document.hidden&&!state.isApps&&state.text)state.refine?.(true);
   if (from === "search" && event.event === "encoder") {
     state.encoder = event.state;
     if (state.phase !== "empty") renderFooter();
@@ -599,3 +642,9 @@ function report() {
     }).catch(() => {});
   }, 1500);
 }
+
+$query.addEventListener("compositionstart",()=>{state.composing=true;clearTimeout(state.timer);});
+$query.addEventListener("compositionend",()=>{state.composing=false;queryChanged();});
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){clearTimeout(state.timer);applicationSearch.suspend();ask({op:"cancel",generation:++state.generation}).catch(()=>{});}
+});

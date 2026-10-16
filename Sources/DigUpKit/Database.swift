@@ -5,7 +5,7 @@ import SQLite3   // the system's (3.51 on macOS 26, FTS5 built in)
 import CSQLite   // the amalgamation in Vendor/sqlite, with FTS5 (scripts/fetch-vendor.sh)
 #endif
 
-/// A thin wrapper over SQLite. One connection, used from one thread.
+/// A thin wrapper over SQLite. One connection, confined to one serial owner.
 public final class Database {
     public struct Failure: Error, CustomStringConvertible {
         public let message: String
@@ -14,15 +14,17 @@ public final class Database {
 
     let handle: OpaquePointer
 
-    public init(path: String) throws {
+    public init(path: String, readOnly: Bool = false) throws {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK, let db else {
+        let flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK, let db else {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open \(path)"
             sqlite3_close(db)
             throw Failure(message: message)
         }
         handle = db
         sqlite3_busy_timeout(db, 5000)
+        if readOnly { return } // A reader must never negotiate WAL or run migrations.
         // Two processes opening a new index at once (a shell starts its search and index helpers together): the switch
         // to WAL can fail at once with "database is locked" rather than wait (SQLite's rule against deadlocks), so it's
         // tried again for up to five seconds.

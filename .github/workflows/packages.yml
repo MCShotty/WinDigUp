@@ -300,6 +300,13 @@ jobs:
         if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         shell: pwsh
         run: python scripts/check-windows-indexing.py --app "$env:LOCALAPPDATA\DigUp\DigUp.exe"
+      - name: Installed search concurrency and encoder failure recovery (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/check-search-responsiveness.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe" --output "$env:RUNNER_TEMP\search-scheduling.json"
+          swiftc Sources/digup/SearchWorkQueue.swift tests/native/search-queue.swift -o "$env:RUNNER_TEMP\search-queue.exe"
+          & "$env:RUNNER_TEMP\search-queue.exe"
       - name: Swift and Rust policy checks
         if: ${{ !cancelled() && steps.package_build.outcome == 'success' }}
         shell: bash
@@ -307,7 +314,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter 'AccelerationTests|ApplicationStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests'
+          swift test --filter 'AccelerationTests|ApplicationStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|WorkerDeadlineTests'
           cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked

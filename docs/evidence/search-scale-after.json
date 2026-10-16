@@ -1,0 +1,112 @@
+{
+  "synthetic": true,
+  "physicalAcceleratorValidated": false,
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "scope": "Linux release helper roundtrips, no UI/debounce/model; 100k catalog rows, 200 real fixture files",
+  "build": "9125f4ce3557ccab9df6e1c13ae0ffa3aed5ee66",
+  "stages": [
+    {
+      "vectors": 70000,
+      "refreshMs": 2859.65592499997,
+      "keywordDuringRefresh": {
+        "samples": 241,
+        "medianMs": 1.2807869934476912,
+        "p95Ms": 2.184679004130885,
+        "maxMs": 96.98558300442528
+      },
+      "retrievalRoundtrip": {
+        "samples": 100,
+        "medianMs": 36.69448549771914,
+        "p95Ms": 49.05108700040728,
+        "maxMs": 65.4720900056418
+      },
+      "peakHelperRssBytes": 256249856,
+      "lastPhases": {
+        "cache_hit": false,
+        "encode": 0.7747659983579069,
+        "helper_total": 37.910212005954236,
+        "keywords": 1.9761849980568513,
+        "metadata": 0.0939110032049939,
+        "model_load": 0,
+        "queue": 0.055429001804441214,
+        "retrieval_queue": 0.06226300320122391,
+        "scoring": 34.811411998816766,
+        "search": 36.994207999669015
+      },
+      "databaseBytes": 35606528
+    },
+    {
+      "vectors": 250000,
+      "refreshMs": 2750.581631989917,
+      "keywordDuringRefresh": {
+        "samples": 227,
+        "medianMs": 1.2359500105958432,
+        "p95Ms": 2.062464991468005,
+        "maxMs": 79.61788399552461
+      },
+      "retrievalRoundtrip": {
+        "samples": 20,
+        "medianMs": 103.87899600027595,
+        "p95Ms": 116.52845400385559,
+        "maxMs": 121.11604599340353
+      },
+      "peakHelperRssBytes": 670916608,
+      "lastPhases": {
+        "cache_hit": false,
+        "encode": 0.8097689860733226,
+        "helper_total": 95.29774599650409,
+        "keywords": 0.7094879983924329,
+        "metadata": 0.05760700150858611,
+        "model_load": 0,
+        "queue": 0.0834399979794398,
+        "retrieval_queue": 0.057137003750540316,
+        "scoring": 93.51265500299633,
+        "search": 94.32113099319395
+      },
+      "databaseBytes": 176046080
+    },
+    {
+      "vectors": 1000000,
+      "refreshMs": 6316.788261989132,
+      "keywordDuringRefresh": {
+        "samples": 535,
+        "medianMs": 1.4203679893398657,
+        "p95Ms": 2.031367999734357,
+        "maxMs": 124.35956799890846
+      },
+      "retrievalRoundtrip": {
+        "samples": 10,
+        "medianMs": 382.0783249975648,
+        "p95Ms": 442.6940730045317,
+        "maxMs": 442.6940730045317
+      },
+      "peakHelperRssBytes": 2159173632,
+      "lastPhases": {
+        "cache_hit": false,
+        "encode": 1.1235609999857843,
+        "helper_total": 357.9735209932551,
+        "keywords": 1.9056279998039827,
+        "metadata": 0.23646600311622024,
+        "model_load": 0,
+        "queue": 0.11392599844839424,
+        "retrieval_queue": 0.06577899330295622,
+        "scoring": 352.4835220014211,
+        "search": 356.6547110094689
+      },
+      "databaseBytes": 546123776
+    }
+  ],
+  "binarySHA256": "2d34c5995c26a82028125e9d588a995d4ca53ba32ae624bf90970f173bd026f0",
+  "sourcePatchSHA256": "b95eb59ec6326814292f679c843c455dca5bac9b612dd41c311f9673b0e3aa63",
+  "sourceFilesSHA256": "d5f96a9b3a9a87459f6b9f194621a1aa0c4e6015521e0a376439a17e60168db4",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "physicalMemory": "MemTotal:       18440136 kB",
+  "swift": "Swift version 6.2.3 (swift-6.2.3-RELEASE)\nTarget: x86_64-unknown-linux-gnu",
+  "keyword100k": {
+    "samples": 100,
+    "medianMs": 0.6925075067556463,
+    "p95Ms": 1.0174420021940023,
+    "maxMs": 2.879603998735547
+  },
+  "comparisonStage": "Same fixture with runtime-gated F16C/portable conversion and asynchronous name-cache retirement"
+}

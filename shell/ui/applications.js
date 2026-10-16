@@ -7,9 +7,30 @@ function titleOf(hit) { return isApp(hit) ? hit.name : nameOf(hit.path); }
 const Apps = {
   supported: /Win/.test(navigator.platform),
   enabled: /Win/.test(navigator.platform),
+  mixedSearch: "smart",
+  configure(catalog) {
+    if(!catalog)return;
+    if(typeof catalog.enabled==="boolean")this.enabled=catalog.enabled;
+    this.mixedSearch=catalog.mixedSearch||this.mixedSearch;
+  },
+  normalized(text) { return text.normalize("NFKD").replace(/\p{M}/gu,"").toLowerCase().replace(/ß/g,"ss").trim(); },
+  placement(hits, files, {appsOnly=false, lexicalReady=false, text="", categoryQuery=false,exactFilenameKnown=true,exactFilename=false}={}) {
+    if(appsOnly)return {before:hits,after:[],best:false};
+    if(!this.enabled||this.mixedSearch==="apps-only")return {before:[],after:[],best:false};
+    const visible=hits.slice(0,3),exact=hits.filter(hit=>hit.reason==="exact"),q=this.normalized(text);
+    const category=categoryQuery||new Set(["photo","photos","images","image","pictures","videos","video","documents","document","pdf","audio","screenshots","files","code"]).has(q);
+    const collision=exactFilename||files.some(hit=>{
+      const name=this.normalized(String(hit.path||"").split(/[\\/]/).pop());
+      return name===q||name.replace(/\.[^.]+$/,"")===q;
+    });
+    if(this.mixedSearch==="smart"&&lexicalReady&&exactFilenameKnown&&!category&&!collision&&exact.length===1)
+      return {before:[exact[0]],after:visible.filter(hit=>hit.id!==exact[0].id),best:true};
+    return {before:[],after:visible,best:false};
+  },
   iconCache: new Map(),
   observedIcons: new Set(),
   launching: new Set(),
+  rowCache: new Map(),
   parse(query, filter = null) {
     const typed = query.trim();
     const appPrefix = this.supported && /^apps:/i.test(typed);
@@ -61,15 +82,24 @@ const Apps = {
     return holder;
   },
   row(hit, selected, select, launch, expanded = false) {
+    const cacheKey=`${hit.id}:${expanded}`,signature=JSON.stringify(hit),cached=this.rowCache.get(cacheKey);
+    if(cached?.signature===signature){
+      const node=cached.node;node.classList.toggle("selected",selected);node.setAttribute("aria-selected",String(selected));
+      const button=node.querySelector(".app-launch");if(button){button.tabIndex=selected?0:-1;button.disabled=this.launching.has(hit.id);}
+      return node;
+    }
     const row = element("div", "app-row" + (selected ? " selected" : ""));
     row.title = hit.shortcut || "Registered Windows application";
     row.dataset.resultKey = resultKey(hit); row.setAttribute("role", expanded ? "row" : "option");
     row.setAttribute("aria-selected", String(selected));
     row.setAttribute("aria-label", `Application, ${hit.name}`);
     const text = element("div", "app-row-text");
-    text.append(element("div", "app-name", hit.name));
+    const title=element("div","app-title-line");title.append(element("div", "app-name", hit.name));
+    if(hit.publisher)title.append(element("span","app-inline-publisher",hit.publisher));
+    text.append(title);
     if (expanded && hit.publisher) text.append(element("div", "app-publisher", hit.publisher));
     text.append(element("div", "app-description", hit.purpose || hit.description || hit.publisher || "Windows application"));
+    if(hit.reason==="semantic")text.append(element("span","app-purpose-tag","Purpose match"));
     const icon = this.icon(hit); row.append(icon, text);
     if (expanded) {
       row.classList.add("app-row-expanded"); icon.setAttribute("role","gridcell"); text.setAttribute("role","gridcell");
@@ -82,6 +112,7 @@ const Apps = {
     }
     row.onmousedown = (e) => { if (e.button === 0) e.preventDefault(); };
     row.onclick = () => select(resultKey(hit)); row.ondblclick = () => launch(hit);
+    this.rowCache.set(cacheKey,{signature,node:row});if(this.rowCache.size>300)this.rowCache.delete(this.rowCache.keys().next().value);
     return row;
   },
   details(hit, fail) {
@@ -111,21 +142,21 @@ class ApplicationSearch {
     for (const name of ["applications", "applications-progress"]) {
       tauri.event.listen(name, ({ payload }) => {
         if (name === "applications") {
-          this.catalog=payload; Apps.enabled=payload.enabled !== false;
+          this.catalog=payload; Apps.configure(payload);
           if(!Apps.enabled) {
             this.epoch++;this.active=false;this.hits=[];this.total=0;this.semantic={state:"disabled"};
             clearTimeout(this.timer);clearTimeout(this.refreshTimer);this.changed();return;
           }
-          this.active=Boolean(this.requestedActive);
+          this.active=Boolean(this.requestedActive)&&(this.mode!=="all"||Apps.mixedSearch!=="apps-only");
+          if(!this.active){this.hits=[];this.total=0;this.epoch++;clearTimeout(this.timer);this.changed();return;}
           if(this.active)this.refresh();else this.changed();
           return;
         }
         if (!this.active) return;
-        this.semantic = payload;
-        clearTimeout(this.refreshTimer);
-        this.refreshTimer = setTimeout(() => {
-          this.changed(); if (this.text && payload.encoder === "ready") this.request(true, true, false, Math.max(this.limit, this.hits.length));
-        }, 250);
+        const changed=this.semantic.embedded!==payload.embedded||this.semantic.revision!==payload.revision;
+        this.semantic = payload;this.changed(true);
+        if(changed&&!this.refreshTimer&&this.text&&payload.encoder==="ready"&&!document.hidden)
+          this.refreshTimer=setTimeout(()=>{this.refreshTimer=null;this.request(true,true,false,Math.max(this.limit,this.hits.length));},1000);
       }).then((stop) => this.unlisten.push(stop));
     }
     tauri.event.listen("model", ({ payload }) => {
@@ -133,9 +164,10 @@ class ApplicationSearch {
       if (payload.state === "ready" && this.active && this.text) this.refresh();
     }).then((stop) => this.unlisten.push(stop));
   }
-  begin(text, active) {
+  begin(text, active, mode="all") {
     this.epoch++; clearTimeout(this.timer); clearTimeout(this.refreshTimer);
-    this.text = text; this.requestedActive=active && Apps.supported;this.active=this.requestedActive && Apps.enabled; this.hits = []; this.total = 0; this.offset = 0;
+    this.text = text;this.mode=mode;this.requestedActive=active && Apps.supported;
+    this.active=this.requestedActive && Apps.enabled && (mode!=="all"||Apps.mixedSearch!=="apps-only");this.hits = []; this.total = 0; this.offset = 0;
     this.finalEpoch = -1; this.error = null;
     if (!this.active) return;
     this.request(false);
@@ -159,10 +191,12 @@ class ApplicationSearch {
     if (meaning) this.semanticBusy = true;
     const epoch = this.epoch;
     try {
-      const page = (offset, limit) => invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive,
-        anchorId: passive && !append ? this.selected?.() : null });
+      const page = (offset, limit) => SearchTiming.measure(meaning?"app_purpose":"app_names",async()=>invoke("search_apps", { q: this.text, meaning, generation: epoch, limit, offset, passive,
+        sessionId:await SearchTiming.session,anchorId: passive && !append ? this.selected?.() : null }),passive);
       const reply = await page(append ? this.hits.length : 0, this.limit);
-      if (epoch !== this.epoch || reply.generation !== epoch) return;
+      if (epoch !== this.epoch || reply.generation !== epoch || reply.status==="superseded") return;
+      Apps.configure(reply.catalog);
+      if(this.mode==="all"&&Apps.mixedSearch==="apps-only"){this.active=false;this.hits=[];this.total=0;clearTimeout(this.timer);this.changed();return;}
       if (append && this.catalog.revision && reply.catalog?.revision !== this.catalog.revision) { this.refresh(); return; }
       const hits = reply.hits || [];
       const anchored = !append && passive && Number.isInteger(reply.anchorOffset)
@@ -193,6 +227,10 @@ class ApplicationSearch {
     }
   }
   more() { return this.request(Boolean(this.text), true, true); }
+  suspend() {
+    this.epoch++;this.active=false;clearTimeout(this.timer);clearTimeout(this.refreshTimer);
+    SearchTiming.session.then(sessionId=>invoke("cancel_app_search",{generation:this.epoch,sessionId})).catch(()=>{});
+  }
   status() {
     if (this.error) return `Applications: ${this.error}`;
     if (this.catalog.enabled === false) return "Application search is off. Enable it in Settings → Apps.";

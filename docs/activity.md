@@ -1,5 +1,11 @@
 # Activity and diagnostics
 
+**Last search** reports local input-to-render time and the available typing-pause, helper queue, model-startup,
+encoding, retrieval, metadata and rendering durations. Each process measures its own monotonic durations; total
+latency is measured in the UI. Up to 200 numeric samples are included in diagnostic exports, without query text or
+result paths. Cached queries are identified separately. These measurements do not imply GPU utilization or a
+completion estimate.
+
 Open **Activity** from the search window's bottom status button or the **Activity**
 tab in Settings. On a wide window it replaces the result preview; on a narrow window
 it uses the available width. Close it to return to the same query and result selection.

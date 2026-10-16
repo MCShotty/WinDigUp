@@ -35,6 +35,7 @@ pub fn anchor_offset(hits: &[Hit], visibility: &str, id: Option<&str>) -> Option
 pub struct Options {
     pub enabled: bool,
     pub semantic_enabled: bool,
+    pub mixed_search: MixedSearch,
     pub overrides: BTreeMap<String, Override>,
 }
 impl Default for Options {
@@ -42,9 +43,18 @@ impl Default for Options {
         Self {
             enabled: cfg!(windows),
             semantic_enabled: true,
+            mixed_search: MixedSearch::Smart,
             overrides: BTreeMap::new(),
         }
     }
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MixedSearch {
+    #[default]
+    Smart,
+    FilesFirst,
+    AppsOnly,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -230,6 +240,7 @@ impl Catalog {
         let enabled = (Self::supported() || cfg!(test)) && options.enabled;
         let s = self.snapshot.read().unwrap();
         json!({"supported":Self::supported(), "enabled":enabled, "semanticEnabled":enabled && options.semantic_enabled,
+            "mixedSearch":options.mixed_search,
             "count":s.hits.iter().filter(|h| !h.hidden).count(), "totalCount":s.hits.len(),
             "hiddenCount":s.hits.iter().filter(|h| h.hidden).count(), "revision":s.revision,
             "refreshing":self.refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})

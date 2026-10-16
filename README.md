@@ -79,6 +79,10 @@ On Windows, this fork also finds and launches registered applications. Type a na
 work before the model is ready. With an accelerator, DigUp can also match what an application does.
 See [Windows application search](docs/application-search.md) for discovery, aliases and validation limits.
 
+Windows search shows keyword results immediately and adds meaning matches after a short typing pause. Apps normally
+follow file results; Settings → Apps offers Smart placement, Files first, or Apps view only. Activity's **Last search**
+breakdown shows where time was spent. See [search responsiveness and measurement limits](docs/search-responsiveness.md).
+
 | Mac | Windows and Linux | What it does |
 |---|---|---|
 | ⇧⌘Space | Ctrl+Shift+Space | Opens the search panel from any app (you can change it) |

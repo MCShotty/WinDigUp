@@ -49,10 +49,12 @@ async fn synchronize(shell: &Shell) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn search_apps(
+    window: tauri::WebviewWindow,
     shell: State<'_, Arc<Shell>>,
     q: String,
     meaning: bool,
     generation: Option<u64>,
+    session_id: Option<u64>,
     limit: Option<usize>,
     offset: Option<usize>,
     include_hidden: Option<bool>,
@@ -64,6 +66,8 @@ pub async fn search_apps(
         return Err("Application query is too long.".into());
     }
     let started = Instant::now();
+    let session = format!("{}:{}:apps",window.label(),session_id.unwrap_or(0));
+    shell.search.advance_session(&session,generation.unwrap_or(0));
     let visibility = visibility.as_deref().unwrap_or(if include_hidden.unwrap_or(false) { "all" } else { "visible" });
     if !matches!(visibility, "visible" | "hidden" | "all") { return Err("Unknown application visibility filter.".into()); }
     if !passive.unwrap_or(false) {
@@ -105,8 +109,10 @@ pub async fn search_apps(
                 let revision = synchronize(&shell).await?;
                 let reply = shell
                     .search
-                    .ask(json!({"op":"apps_search","q":q.trim(),"revision":revision}))
+                    .ask(json!({"op":"apps_search","q":q.trim(),"revision":revision,
+                        "session":session,"generation":generation.unwrap_or(0),"passive":passive.unwrap_or(false)}))
                     .await?;
+                if reply["status"] == "superseded" { return Ok(reply); }
                 if reply["revision"] == revision && shell.applications.revision() == revision {
                     return Ok::<Value, String>(reply);
                 }
@@ -117,6 +123,7 @@ pub async fn search_apps(
         .await;
         match result {
             Ok(mut reply) => {
+                if reply["status"] == "superseded" { return Ok(json!({"status":"superseded","generation":generation.unwrap_or(0)})); }
                 hits = shell
                     .applications
                     .search(q.trim(), include_hidden.unwrap_or(false));
@@ -148,6 +155,11 @@ pub async fn search_apps(
         json!({"hits":hits,"total":total,"offset":offset,"anchorOffset":anchor_offset,"generation":generation.unwrap_or(0),
         "catalog":shell.applications.info(),"semantic":semantic,"ms":started.elapsed().as_secs_f64()*1000.0}),
     )
+}
+
+#[tauri::command]
+pub async fn cancel_app_search(window: tauri::WebviewWindow, shell: State<'_, Arc<Shell>>, generation:u64, session_id:Option<u64>) -> Result<Value,String> {
+    shell.search.ask(json!({"op":"cancel","session":format!("{}:{}:apps",window.label(),session_id.unwrap_or(0)),"generation":generation})).await
 }
 
 #[tauri::command]
@@ -214,12 +226,14 @@ pub fn set_app_options(
     shell: State<'_, Arc<Shell>>,
     enabled: bool,
     semantic_enabled: bool,
+    mixed_search: Option<crate::applications::MixedSearch>,
 ) -> Result<Value, String> {
     let options = {
         let mut settings = shell.settings.lock().unwrap();
         let mut next = settings.clone();
         next.applications.enabled = enabled;
         next.applications.semantic_enabled = semantic_enabled;
+        if let Some(value) = mixed_search { next.applications.mixed_search = value; }
         next.save(&shell.settings_path).map_err(|e| e.to_string())?;
         *settings = next;
         settings.applications.clone()
@@ -258,23 +272,26 @@ pub fn set_app_override(
 
 pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
     shell.applications.start();
-    if !crate::applications::Catalog::supported() {
-        return;
-    }
     let weak = Arc::downgrade(shell);
     let app = app.clone();
     std::thread::spawn(move || {
         let mut previous = Value::Null;
+        let mut renewed = Instant::now() - Duration::from_secs(3);
         loop {
             std::thread::sleep(Duration::from_millis(150));
             let Some(shell) = weak.upgrade() else { break };
             if shell.quitting.load(Ordering::SeqCst) {
                 break;
             }
+            if renewed.elapsed() >= Duration::from_millis(500)
+                && (shell.app_foreground.load(Ordering::SeqCst) != 0 || shell.app_last_query.lock().unwrap().elapsed() < Duration::from_secs(1)) {
+                shell.index.foreground(); renewed = Instant::now();
+            }
+            if !crate::applications::Catalog::supported() { continue; }
             if !shell.applications.semantic_enabled()
                 || !shell.model_ready()
                 || shell.app_foreground.load(Ordering::SeqCst) != 0
-                || shell.app_last_query.lock().unwrap().elapsed() < Duration::from_millis(500)
+                || shell.app_last_query.lock().unwrap().elapsed() < Duration::from_secs(1)
             {
                 continue;
             }

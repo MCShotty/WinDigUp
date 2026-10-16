@@ -257,12 +257,14 @@ fn folder_arguments(settings: &Settings, code_folders: &[String]) -> Vec<String>
 
 /// The panel's and the window's questions for `search-service`.
 #[tauri::command]
-async fn ask(shell: State<'_, Arc<Shell>>, mut request: Value) -> Result<Value, String> {
-    let _foreground = application_commands::Foreground::new(&shell);
-    let op = request.get("op").and_then(Value::as_str).unwrap_or_default();
-    if !["search", "embed_ahead", "text", "render", "prewarm", "status", "summaries"].contains(&op) {
+async fn ask(window: tauri::WebviewWindow, shell: State<'_, Arc<Shell>>, mut request: Value) -> Result<Value, String> {
+    let op = request.get("op").and_then(Value::as_str).unwrap_or_default().to_string();
+    let _foreground = (matches!(op.as_str(),"search" | "embed_ahead" | "prewarm") && request["passive"] != true)
+        .then(|| application_commands::Foreground::new(&shell));
+    if !["search", "cancel", "embed_ahead", "text", "render", "prewarm", "status", "summaries"].contains(&op.as_str()) {
         return Err(format!("not a question the panel asks: {op}"));
     }
+    request["session"] = json!(format!("{}:{}:files",window.label(),request["session_id"].as_u64().unwrap_or(0)));
     // A query while the model downloads must not permanently poison the helper's encoder state.
     if !shell.model_ready() {
         if op == "prewarm" || op == "embed_ahead" { return Ok(json!({"ok":true,"encoder":"stopped"})); }
@@ -477,6 +479,7 @@ fn reveal(app: AppHandle, path: String) -> Result<(), String> {
 #[tauri::command]
 fn hide_panel(app: AppHandle) {
     if let Some(panel) = panel_window(&app) {
+        let _ = panel.emit("panel-hidden", ());
         let _ = panel.hide();
     }
 }
@@ -532,6 +535,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "state": shell.snapshot(),
         "search": search.map(|(query, kind)| json!({"query": query, "kind": kind})),
         "hasCode": !shell.code_folders().is_empty(),
+        "applications":shell.applications.info(),
         "debugQuery": shell.options.debug_window,
         "debugSettings": shell.options.debug_settings,
         "debugCopy": shell.options.debug_copy,
@@ -656,7 +660,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
             panel_area, settings_info, set_open_at_login, set_center_panel, debug_query, debug_report, window_info,
-            app_state, activity_snapshot, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
+            app_state, activity_snapshot, record_search_timing, search_session, application_commands::cancel_app_search, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
@@ -1293,6 +1297,17 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
 
 /// In-memory activity only: no inference requests, log reads or directory enumeration.
 #[tauri::command]
+fn search_session() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn record_search_timing(window: tauri::WebviewWindow, shell: State<'_, Arc<Shell>>, sample: Value) -> Result<(), String> {
+    shell.diagnostics.record_search(window.label(), &sample)
+}
+
+#[tauri::command]
 async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
     let shell = shell.inner().clone();
     // Settings saves can briefly own a shared lock; even that wait stays off the UI thread.
@@ -1342,6 +1357,7 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             "estimating":shell.estimating.load(Ordering::SeqCst),"state":shell.snapshot(),
             "indexHelper":shell.index.snapshot(),"searchHelper":shell.search.snapshot(),
             "applications":shell.applications.info(),"applicationSemantic":shell.app_semantic.lock().unwrap().clone(),
+            "searchTimings":shell.diagnostics.search_timings(),
             "recent":shell.diagnostics.recent()});
         let mut text = serde_json::to_string_pretty(&report).unwrap_or_default();
         for name in ["indexing.jsonl", "index.log", "search.log", "model.log", "speed.log"] {

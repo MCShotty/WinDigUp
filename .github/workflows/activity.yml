@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Native activity, catalog and transport contracts
-        run: cargo test --manifest-path tests/applications/native/Cargo.toml --locked
+        run: cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked
       - name: Actual-page browser regressions
         env:
           DIGUP_ACTIVITY_SCREENSHOTS: ${{ runner.temp }}/activity-screenshots
@@ -28,6 +28,8 @@ jobs:
           node tests/ui/activity.cjs
           node tests/ui/apps-editor.cjs
           node tests/ui/bug-regressions.cjs
+          export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
+          node tests/ui/search-responsiveness.cjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -39,5 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Pinned Tauri CLI without npm PATH shims
+        shell: bash
+        run: bash scripts/tauri-cli.sh --version
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
+      - name: Compile portable search-vector conversion for Windows x64
+        run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"

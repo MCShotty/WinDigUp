@@ -5,7 +5,29 @@
 
 const tauri = window.__TAURI__;
 const invoke = (command, args) => tauri.core.invoke(command, args);
-const ask = (request) => invoke("ask", { request });
+const ask = async (request) => invoke("ask", { request:{...request,session_id:await SearchTiming.session} });
+// Input-to-render duration is measured here; helper durations have their own monotonic origin.
+const SearchTiming = {
+  session:invoke("search_session").then(value=>Number.isSafeInteger(value)?value:0).catch(()=>0),
+  generation: 0, input: 0, nextId: 0,
+  begin(generation) { this.generation = generation; this.input = performance.now(); },
+  async measure(phase, action, passive=false) {
+    const generation=this.generation,input=this.input,start=performance.now(),requestId=++this.nextId;
+    const reply=await action();const received=performance.now();
+    if(!passive&&reply?.status!=="superseded")requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      if(generation!==this.generation)return;
+      const end=performance.now(),ms=(reply?.ms&&typeof reply.ms==="object"?reply.ms:
+        phase==="app_purpose"&&reply?.semantic?.ms&&typeof reply.semantic.ms==="object"?reply.semantic.ms:{});
+      const sample={...ms,phase,generation,requestId,total:end-input,roundtrip:received-start,debounce:start-input,
+        render:end-received,native:typeof reply?.ms==="number"?reply.ms:undefined,
+        nativeRequestId:reply?.id??(phase==="app_purpose"?reply?.semantic?.id:undefined),
+        cacheHit:ms.cache_hit===true,semantic:reply?.meaning===true||reply?.semantic?.meaning===true};
+      invoke("record_search_timing",{sample}).catch(()=>{});
+      window.dispatchEvent(new CustomEvent("digup-search-timing",{detail:sample}));
+    }));
+    return reply;
+  },
+};
 const fileURL = (path) => tauri.core.convertFileSrc(path);
 
 const isMac = /Mac/.test(navigator.platform);
@@ -239,10 +261,18 @@ function kindIcon(kind) {
 
 /// The helper's JPEG of a page, a frame or a picture, asked for once per file and place.
 const renders = new Map();
-function rendered(path, kind, loc, pixels) {
+function rendered(path, kind, loc, pixels, foreground=false) {
   const key = `${path}|${kind}|${loc}|${pixels}`;
-  if (!renders.has(key)) renders.set(key, ask({ op: "render", path, kind, loc, pixels }).then((reply) => reply.image));
-  return renders.get(key);
+  const generation=SearchTiming.generation,previous=renders.get(key);
+  if(previous&&(previous.done||(previous.generation===generation&&(previous.foreground||!foreground))))return previous.promise;
+  const entry={generation,foreground,done:false};
+  entry.promise=ask({ op: "render", path, kind, loc, pixels, generation, foreground }).then(reply=>{
+    if(!reply.image){const error=new Error("Preview was superseded");error.superseded=reply.status==="superseded";throw error;}
+    entry.done=true;return reply.image;
+  }).catch(error=>{if(renders.get(key)===entry)renders.delete(key);throw error;});
+  renders.set(key,entry);
+  if(renders.size>256)renders.delete(renders.keys().next().value);
+  return entry.promise;
 }
 
 /// What the helper renders for a result's picture: [kind, place], or null when it has none (documents, audio, code).

@@ -170,6 +170,8 @@
     <section class="tab" id="apps" role="tabpanel" hidden>
       <label class="option"><input type="checkbox" id="apps-enabled"><span class="text"><span class="name">Include installed applications</span><span class="info">Find and launch the applications registered with Windows.</span></span></label>
       <label class="option"><input type="checkbox" id="apps-semantic"><span class="text"><span class="name">Match applications by purpose</span><span class="info">Describe what you want to do. Uses the selected inference device; name matching works while the model is unavailable.</span></span></label>
+      <label class="option"><span class="text"><span class="name">Apps in ordinary searches</span><span class="info">Choose how applications appear alongside your files. The Apps filter and apps: always search applications directly.</span></span>
+        <select id="apps-placement" aria-label="Apps in ordinary searches"><option value="smart">Smart placement</option><option value="files-first">Files first</option><option value="apps-only">Apps view only</option></select></label>
       <div id="apps-status" class="apps-settings-status" aria-label="Application availability"><p id="apps-catalog-status"></p><p id="apps-purpose-status"></p></div>
       <div class="apps-settings-actions"><button id="apps-refresh">Refresh applications</button>
         <button id="apps-prepare">Prepare purpose matching</button><button class="link" id="apps-diagnostics">Activity and diagnostics…</button></div>

@@ -134,7 +134,13 @@ window.ActivityUI = (() => {
       inference.verified?.backend ? `Verified backend: ${inference.verified.backend}; precision: ${inference.verified.precision_profile || "reported in runtime details"}` : "",
       inference.verified?.build_identity ? `Native build: ${inference.verified.build_identity}` : "",
       inference.verified?.runtime_version ? `CUDA runtime API: ${inference.verified.runtime_version}; driver API: ${inference.verified.driver_version || "unknown"}` : "",
-      `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`].filter(Boolean).join("\n");
+      `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`,
+      snapshot.search?.last ? `Last search (${snapshot.search.last.phase}): ${Math.round(snapshot.search.last.total||0)} ms input to render; ${searchBreakdown(snapshot.search.last)}` : ""].filter(Boolean).join("\n");
+  }
+  function searchBreakdown(sample) {
+    return [["debounce","Typing pause"],["queue","Helper queue"],["transport","Dispatch"],["model_load","Model startup"],
+      ["encode","Query encoding"],["scoring","Vector scoring"],["keywords","Keyword search"],["metadata","Metadata"],["render","Rendering"]]
+      .filter(([key])=>Number.isFinite(sample?.[key])).map(([key,label])=>`${label} ${Math.round(sample[key])} ms`).join(" · ");
   }
 
   class View {
@@ -163,6 +169,8 @@ window.ActivityUI = (() => {
               <dl><div><dt>Searchable files</dt><dd data-key="searchable"></dd></div><div><dt>Queued files</dt><dd data-key="pending"></dd></div>
               <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
           </section>
+          <section class="activity-section"><h3>Last search</h3><p data-key="search-total">No search timing reported yet.</p>
+            <p data-key="search-breakdown" class="activity-muted"></p><p class="activity-muted">Local timings; inference and cached queries are measured separately.</p></section>
           <section class="activity-section" data-key="apps-section"><h3>Applications</h3><dl>
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
@@ -242,6 +250,9 @@ window.ActivityUI = (() => {
       this.setTab(this.tab);
       const f = snapshot.files, apps = snapshot.applications, catalog = apps.catalog || {}, purpose = apps.purpose || {}, inference = snapshot.inference;
       const put = (key, value) => { const el=this.get(key), text=value == null ? "" : String(value); if(el.textContent !== text) el.textContent=text; };
+      const search=snapshot.search?.last;
+      put("search-total",search?`${Math.round(search.total||0)} ms input to render · ${search.phase.replace(/_/g," ")}${search.cacheHit?" · Cached query":""}`:"No search timing reported yet.");
+      put("search-breakdown",search?searchBreakdown(search):"");
       const scanning = ["discovering", "preparing_queue", "starting"].includes(f.phase);
       const title = phases[f.phase] || "File indexing";
       put("phase", title);

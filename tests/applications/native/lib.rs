@@ -52,6 +52,19 @@ mod tests {
         )
     }
     #[tokio::test(flavor = "current_thread")]
+    async fn native_sessions_discard_stale_requests_without_starting_a_helper() {
+        let service=python("import sys,json\nfor line in sys.stdin:\n r=json.loads(line); print(json.dumps(r),flush=True)", |_|{});
+        service.advance_session("window:1:apps",2);
+        let stale=service.ask(json!({"op":"apps_search","session":"window:1:apps","generation":1})).await.unwrap();
+        assert_eq!(stale["status"],"superseded");
+        assert_eq!(service.snapshot()["running"],false);
+        let current=service.ask(json!({"op":"apps_search","session":"window:1:apps","generation":2})).await.unwrap();
+        assert_eq!(current["generation"],2);
+        let panel=service.ask(json!({"op":"search","session":"panel:2:files","generation":1})).await.unwrap();
+        assert_eq!(panel["generation"],1);
+        service.stop();
+    }
+    #[tokio::test(flavor = "current_thread")]
     async fn stalled_helper_pipe_does_not_block_executor_or_shutdown() {
         let ready = Arc::new(AtomicBool::new(false));
         let signal = ready.clone();
