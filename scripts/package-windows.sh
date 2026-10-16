@@ -41,7 +41,7 @@ cp shell/src-tauri/target/release/digup-discovery.exe "$helper/"
 "$python" - "$helper/digup-discovery.exe" <<'PYDISCOVERY'
 import re, subprocess, sys
 report=subprocess.run(["dumpbin.exe", "/DEPENDENTS", sys.argv[1]],check=True,capture_output=True,text=True).stdout
-libraries=re.findall(r"^\\s+([\\w.-]+\\.dll)\\s*$",report,re.M|re.I)
+libraries=re.findall(r"^\s+([\w.-]+\.dll)\s*$",report,re.M|re.I)
 assert libraries, "Discovery component dependency audit returned no imports"
 for name in libraries:
  assert not re.match(r"(swift|ggml|llama|cudart|cublas|vcruntime|msvcp|WebView2Loader)",name,re.I), "Discovery must run independently: "+name
