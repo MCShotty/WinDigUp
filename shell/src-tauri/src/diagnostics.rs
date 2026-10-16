@@ -92,7 +92,8 @@ impl Diagnostics {
         let mut clean = json!({"schemaVersion":1,"capturedAt":now(),"view":view,"phase":phase,
             "timingOrigin":"ui_input",
             "generation":sample["generation"].as_u64().unwrap_or(0),"requestId":sample["requestId"].as_u64().unwrap_or(0)});
-        for key in ["total", "roundtrip", "debounce", "render", "queue", "helper_total", "helper_startup", "model_load", "encode", "search", "scoring", "keywords", "metadata", "vector_load", "retrieval_queue", "transport"] {
+        if let Some(id)=sample["nativeRequestId"].as_u64() { clean["nativeRequestId"]=json!(id); }
+        for key in ["total", "roundtrip", "debounce", "render", "native", "queue", "helper_total", "helper_startup", "model_load", "encode", "search", "scoring", "keywords", "metadata", "vector_load", "retrieval_queue", "transport"] {
             if let Some(value) = sample[key].as_f64().filter(|v| v.is_finite() && *v >= 0.0 && *v <= 86_400_000.0) { clean[key] = json!(value); }
         }
         clean["cacheHit"] = json!(sample["cacheHit"] == true);
@@ -132,11 +133,13 @@ mod tests {
         let d=Diagnostics::new(&dir);
         for n in 0..250 {
             d.record_search("window",&json!({"phase":"file_words","generation":n,"total":12.5,
-                "encode":-1,"metadata":3,"q":"private query","path":"C:/private.txt"})).unwrap();
+                "encode":-1,"metadata":3,"native":2,"nativeRequestId":n+1,"q":"private query","path":"C:/private.txt"})).unwrap();
         }
         let samples=d.search_timings();assert_eq!(samples.as_array().unwrap().len(),200);
         assert!(samples[0].get("q").is_none());assert!(samples[0].get("path").is_none());assert!(samples[0].get("encode").is_none());
         assert_eq!(d.runtime()["lastSearch"]["total"],12.5);
+        assert_eq!(d.runtime()["lastSearch"]["nativeRequestId"],250);
+        assert_eq!(d.runtime()["lastSearch"]["native"],2.0);
         assert!(d.record_search("window",&json!({"phase":"unknown"})).is_err());
         assert!(!dir.join("indexing.jsonl").exists());
     }

@@ -166,7 +166,9 @@ final class SearchService: @unchecked Sendable {
             finish(request, value, admitted: admitted)
         }
         if op == "render" {
-            previewsQueue.submit(key: key, foreground: (r["pixels"] as? Int ?? 1024) > 512, cancel: cancel) { [self] in
+            previewsQueue.submit(
+                key: key, foreground: r["foreground"] as? Bool ?? ((r["pixels"] as? Int ?? 1024) > 512), cancel: cancel
+            ) { [self] in
                 let started = Self.now
                 guard current(request) else {
                     cancel()
@@ -364,6 +366,7 @@ final class SearchService: @unchecked Sendable {
             guard text.count <= 4096 else { throw CLIError("Application query is too long") }
             var reply = try applicationState(db)
             reply["hits"] = []
+            reply["meaning"] = false
             if !text.isEmpty,
                 let vector = vector(for: text, code: false, active: !(request["passive"] as? Bool ?? false)),
                 let encoder
@@ -371,6 +374,7 @@ final class SearchService: @unchecked Sendable {
                 let fp = try applicationFingerprint(encoder)
                 try db.prepare(fingerprint: fp)
                 reply = try applicationState(db)
+                reply["meaning"] = true
                 reply["hits"] = try db.search(
                     vector, fingerprint: fp,
                     minimumCosine: min(
@@ -380,6 +384,7 @@ final class SearchService: @unchecked Sendable {
             } else {
                 reply = try applicationState(db)
                 reply["hits"] = []
+                reply["meaning"] = false
             }
             reply["ms"] = lastEncodingTimings
             return reply

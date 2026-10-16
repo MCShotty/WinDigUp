@@ -16,9 +16,12 @@ const SearchTiming = {
     const reply=await action();const received=performance.now();
     if(!passive&&reply?.status!=="superseded")requestAnimationFrame(()=>requestAnimationFrame(()=>{
       if(generation!==this.generation)return;
-      const end=performance.now(),ms=reply?.ms||{};
+      const end=performance.now(),ms=(reply?.ms&&typeof reply.ms==="object"?reply.ms:
+        phase==="app_purpose"&&reply?.semantic?.ms&&typeof reply.semantic.ms==="object"?reply.semantic.ms:{});
       const sample={...ms,phase,generation,requestId,total:end-input,roundtrip:received-start,debounce:start-input,
-        render:end-received,cacheHit:ms.cache_hit===true,semantic:reply?.meaning===true};
+        render:end-received,native:typeof reply?.ms==="number"?reply.ms:undefined,
+        nativeRequestId:reply?.id??(phase==="app_purpose"?reply?.semantic?.id:undefined),
+        cacheHit:ms.cache_hit===true,semantic:reply?.meaning===true||reply?.semantic?.meaning===true};
       invoke("record_search_timing",{sample}).catch(()=>{});
       window.dispatchEvent(new CustomEvent("digup-search-timing",{detail:sample}));
     }));
@@ -258,12 +261,12 @@ function kindIcon(kind) {
 
 /// The helper's JPEG of a page, a frame or a picture, asked for once per file and place.
 const renders = new Map();
-function rendered(path, kind, loc, pixels) {
+function rendered(path, kind, loc, pixels, foreground=false) {
   const key = `${path}|${kind}|${loc}|${pixels}`;
   const generation=SearchTiming.generation,previous=renders.get(key);
-  if(previous&&(previous.done||previous.generation===generation))return previous.promise;
-  const entry={generation,done:false};
-  entry.promise=ask({ op: "render", path, kind, loc, pixels, generation }).then(reply=>{
+  if(previous&&(previous.done||(previous.generation===generation&&(previous.foreground||!foreground))))return previous.promise;
+  const entry={generation,foreground,done:false};
+  entry.promise=ask({ op: "render", path, kind, loc, pixels, generation, foreground }).then(reply=>{
     if(!reply.image){const error=new Error("Preview was superseded");error.superseded=reply.status==="superseded";throw error;}
     entry.done=true;return reply.image;
   }).catch(error=>{if(renders.get(key)===entry)renders.delete(key);throw error;});

@@ -766,7 +766,7 @@ function previewPicture(hit) {
   // The cell's picture first (already drawn), then the bigger one.
   const small = renders.get(`${hit.path}|${what[0]}|${what[1]}|${Math.round(240 * (window.devicePixelRatio || 1))}`);
   small?.then((file) => { if (!image.dataset.big) image.src = fileURL(file); }).catch(() => {});
-  rendered(hit.path, what[0], what[1], Math.round(300 * (window.devicePixelRatio || 1)))
+  rendered(hit.path, what[0], what[1], Math.round(300 * (window.devicePixelRatio || 1)), true)
     .then((file) => { image.dataset.big = "1"; image.src = fileURL(file); })
     .catch(() => {});
   image.ondblclick = () => open(hit);
@@ -870,7 +870,7 @@ function bigView(hit) {
     image.src = fileURL(hit.path);
   } else {
     const pixels = Math.round(Math.max(innerWidth, innerHeight) * (window.devicePixelRatio || 1));
-    rendered(hit.path, what[0], what[1], pixels).then((file) => { image.src = fileURL(file); }).catch(() => {});
+    rendered(hit.path, what[0], what[1], pixels, true).then((file) => { image.src = fileURL(file); }).catch(() => {});
   }
   image.ondblclick = () => { closeBig(); open(hit); };
   view.append(image);

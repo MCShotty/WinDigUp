@@ -102,14 +102,20 @@ let browser;
     const first=rendered('C:/fixture.pdf','pdf',1,240).catch(error=>error.superseded);
     await new Promise(resolve=>setTimeout(resolve,0));
     SearchTiming.begin(SearchTiming.generation+1);
-    const current=await rendered('C:/fixture.pdf','pdf',1,240);
+    const current=await rendered('C:/fixture.pdf','pdf',1,240,true);
     release({status:'superseded'});
-    if(await first!==true||current!=='C:/cache/current.jpg'||calls.length!==2||calls[0].generation===calls[1].generation)
+    if(await first!==true||current!=='C:/cache/current.jpg'||calls.length!==2||calls[0].generation===calls[1].generation||calls[1].foreground!==true)
       throw new Error('Obsolete preview promise leaked into the current generation');
     if(await rendered('C:/fixture.pdf','pdf',1,240)!==current||calls.length!==2)
       throw new Error('Obsolete preview completion evicted the current cached image');
     window.__TAURI__.core.invoke=old;
+    await SearchTiming.measure('app_purpose',async()=>({ms:9,semantic:{id:777,meaning:true,ms:{queue:2,encode:7,cache_hit:true}}}));
   });
+  await page.waitForFunction(()=>window.calls.some(c=>c.command==='record_search_timing'&&c.args.sample.nativeRequestId===777));
+  assert.equal(await page.evaluate(()=>{
+    const sample=window.calls.find(c=>c.command==='record_search_timing'&&c.args.sample.nativeRequestId===777).args.sample;
+    return sample.encode===7&&sample.queue===2&&sample.native===9&&sample.cacheHit&&sample.semantic;
+  }),true,'Purpose timing lost the encoder breakdown or native request correlation');
   await page.goto(base+'/index.html');await page.fill('#query','Firefox');await page.waitForSelector('.row');
   await page.waitForFunction(()=>document.querySelector('.group-title')?.textContent==='Best match · App');
   await page.press('#query','ArrowDown');await page.press('#query','Enter');
