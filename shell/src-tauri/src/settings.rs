@@ -58,7 +58,23 @@ pub struct WindowPlace {
 impl Settings {
     /// The file's settings, or the defaults when there's none (or it can't be read).
     pub fn load(path: &Path) -> Settings {
-        std::fs::read(path).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default()
+        let read = std::fs::read(path);
+        if read.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) { return Settings::default(); }
+        let mut settings: Settings = match read.ok().and_then(|data| serde_json::from_slice(&data).ok()) {
+            Some(settings) => settings,
+            None => {
+                let mut settings = Settings::default();
+                settings.acceleration.discovery_pending = false;
+                settings.acceleration.discovery_error = Some("Settings could not be read. The original settings file was preserved; restore it or review Settings before enabling inference.".into());
+                return settings;
+            }
+        };
+        if settings.acceleration.migrate() {
+            if let Err(error) = settings.save(path) {
+                settings.acceleration.discovery_error = Some(format!("Can't save accelerator settings migration: {error}"));
+            }
+        }
+        settings
     }
 
     /// Written whole to a temporary file first, so a crash never leaves half of it.
@@ -69,5 +85,33 @@ impl Settings {
         let temporary = path.with_extension("json.new");
         std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temporary, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn migration_is_atomic_isolated_and_preserves_annotations_and_folders() {
+        let dir=std::env::temp_dir().join(format!("digup-settings-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path=dir.join("custom-settings.json");
+        let original=json!({"acceleration":{"backend":"nvidia-vulkan","gpu":"Vulkan1"},
+            "folders":["C:/Users/Zoë/Documents"],"codeFolders":["C:/src"],"indexHoursOn":true,
+            "applications":{"enabled":true,"overrides":{"app:one":{"aliases":["写真"],"purpose":"Edit images","hidden":true}}}});
+        std::fs::write(&path,serde_json::to_vec(&original).unwrap()).unwrap();
+        let migrated=Settings::load(&path);
+        assert_eq!(migrated.acceleration.backend,"nvidia-cuda"); assert!(migrated.acceleration.gpu.is_empty());
+        assert_eq!(migrated.folders,vec!["C:/Users/Zoë/Documents"]); assert!(migrated.index_hours_on);
+        assert_eq!(migrated.applications.overrides["app:one"].aliases,vec!["写真"]);
+        assert!(migrated.applications.overrides["app:one"].hidden);
+        let once=std::fs::read(&path).unwrap();
+        let again=Settings::load(&path); assert_eq!(again.acceleration.version,2);
+        assert_eq!(std::fs::read(&path).unwrap(),once);
+        assert!(!dir.join("settings.json").exists());
+        std::fs::write(&path,b"{broken").unwrap(); let _=Settings::load(&path);
+        assert_eq!(std::fs::read(&path).unwrap(),b"{broken");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

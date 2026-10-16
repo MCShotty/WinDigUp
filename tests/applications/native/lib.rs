@@ -15,6 +15,14 @@ pub mod diagnostics;
 pub mod helper;
 #[path = "../../../shell/src-tauri/src/status.rs"]
 pub mod status;
+#[path = "../../../shell/src-tauri/src/acceleration.rs"]
+pub mod acceleration;
+#[path = "../../../shell/src-tauri/src/accelerator_probe.rs"]
+pub mod accelerator_probe;
+#[path = "../../../shell/src-tauri/src/hours.rs"]
+pub mod hours;
+#[path = "../../../shell/src-tauri/src/settings.rs"]
+pub mod settings;
 
 #[cfg(test)]
 mod tests {

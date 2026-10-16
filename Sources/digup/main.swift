@@ -54,7 +54,7 @@ let usage = """
 
     The model: EmbeddingGemma 2 on llama.cpp, from $DIGUP_MODELS (only there, when set), else
     ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_ACCELERATOR chooses vulkan,
-    amd-vulkan, nvidia-vulkan or openvino-npu. CPU inference and unverified worker overrides are disabled.
+    amd-vulkan, nvidia-cuda or openvino-npu. CPU inference and unverified worker overrides are disabled.
     """
 
 struct CLIError: Error, CustomStringConvertible {
@@ -97,9 +97,7 @@ struct Arguments {
     var indexFolder: URL {
         let base = (values["--index"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
             ?? AppPaths.defaultIndex).standardizedFileURL
-        // NPU exports have their own fingerprint and store, including for code search.
-        return (ProcessInfo.processInfo.environment["DIGUP_ACCELERATOR"] == "openvino-npu" && base.lastPathComponent != "openvino-npu"
-            ? base.appendingPathComponent("openvino-npu") : base).standardizedFileURL
+        return ((try? Acceleration.selected()) ?? .vulkan).indexDirectory(base: base)
     }
 
     /// `--code`: the code index, not the main one.
@@ -511,7 +509,11 @@ func modelSpeed(_ args: Arguments) throws {
     _ = try Acceleration.selected()
     let folder = args.indexFolder
     let json = args.flags.contains("--json")
-    let key = "accelerator-only:" + Acceleration.cacheKey
+    var key = "accelerator-only:" + Acceleration.cacheKey
+    if try Acceleration.selected() == .nvidiaCUDA {
+        let device = try LlamaEmbedder.verifyDevice()
+        key += ":" + device.cacheIdentity + ":" + LlamaEmbedder.modelInfo.vectorSource
+    }
     let saved = MeasuredCosts.load(from: folder)
     var speed = saved.speed ?? MeasuredCosts.Speed(embedding: 1, ocr: 1)
     let checks = speed.device == key ? speed.checks ?? 0 : 0
@@ -534,10 +536,11 @@ func modelSpeed(_ args: Arguments) throws {
     if !args.flags.contains("--measure-only") {
         MeasuredCosts.setSpeed(speed, in: folder, forgetTallies: saved.speed?.device != key)
     }
-    let fields: [String: Any] = ["event": "speed", "kinds": speed.kinds ?? [:], "seconds": measured.times.fields,
+    var fields: [String: Any] = ["event": "speed", "kinds": speed.kinds ?? [:], "seconds": measured.times.fields,
         "load": load, "total": Date().timeIntervalSince(started), "measured": true, "device": model.info.device ?? key,
         "execution_policy": "accelerator-only", "tries": measured.tries, "others": measured.others,
         "waited": quiet.waited, "settled": quiet.settled, "doubtful": speed.doubtful ?? false, "checks": checks + 1]
+    for (name, value) in model.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"].contains(name) { fields[name] = value }
     if json { emit(fields) } else { print("Accelerator: \(model.info.device ?? key); CPU inference disabled. \(measured.times.fields)") }
 }
 
@@ -648,12 +651,17 @@ do {
     }
     switch command {
     case "accelerator":
+        _ = try Acceleration.selected()
+        if args.flags.contains("--list") { emit(try LlamaEmbedder.deviceInventory()); break }
         if try Acceleration.selected() == .openvinoNPU {
             let model = try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"))
             defer { model.close() }
             emit(["device": model.info.device ?? "", "execution_policy": model.info.executionPolicy ?? ""])
         } else {
-            emit(["device": try LlamaEmbedder.verifyGPU(), "execution_policy": "accelerator-only"])
+            let value = try LlamaEmbedder.verifyDevice()
+            var result = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]
+            result["device"] = value.name; result["execution_policy"] = "accelerator-only"; result["probe_only"] = true
+            emit(result)
         }
     case "estimate": try estimate(args)
     case "index": try index(args)

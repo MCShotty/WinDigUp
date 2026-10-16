@@ -39,6 +39,9 @@ impl Diagnostics {
                     || (source == "search" && event["event"] == "encoder" && event["state"] == "ready"));
             if verified {
                 runtime["verified"] = json!({"device":event["device"],"executionPolicy":"accelerator-only","at":time,"source":source});
+                for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"] {
+                    if let Some(value) = event.get(key) { runtime["verified"][key] = value.clone(); }
+                }
             }
         }
         let entry = json!({"time": time, "source": source, "event": event});

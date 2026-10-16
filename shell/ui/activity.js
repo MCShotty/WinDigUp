@@ -131,6 +131,7 @@ window.ActivityUI = (() => {
       `Purpose matching: ${apps.purpose.state || "idle"}; ${number(apps.purpose.embedded)} of ${number(apps.purpose.total)} prepared`,
       `Configured accelerator: ${inference.configured.backend || "unknown"}`,
       `Verified device: ${inference.verified?.device || "No runtime verification reported"}`,
+      inference.verified?.backend ? `Verified backend: ${inference.verified.backend}; precision: ${inference.verified.precision_profile || "reported in runtime details"}` : "",
       `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`].filter(Boolean).join("\n");
   }
 
@@ -298,7 +299,7 @@ window.ActivityUI = (() => {
       put("purpose-note", purpose.message || (sourceErrors.length ? `Some sources could not refresh: ${sourceErrors.join("; ")}` : "Names and launching use the Windows catalog."));
       const verified = inference.verified?.device;
       put("device", verified || "Device not verified yet");
-      put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}`);
+      put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}${inference.verified?.backend ? ` · Running: ${inference.verified.backend}` : ""}`);
       put("encoder", `${inference.model?.state === "ready" ? "Model files: available" : `Model status: ${inference.model?.state || "unknown"}`} · Encoder: ${inference.encoder}`);
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);

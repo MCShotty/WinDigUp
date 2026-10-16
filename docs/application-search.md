@@ -67,7 +67,7 @@ execution paths.
 ## Purpose matching
 
 With **Match applications by purpose** enabled, try descriptions such as “retouch a portrait.” DigUp embeds the app's
-name, available Windows description, aliases and user-supplied purpose using the selected AMD/NVIDIA Vulkan GPU or
+name, available Windows description, aliases and user-supplied purpose using the selected AMD Vulkan / NVIDIA CUDA GPU or
 Intel OpenVINO NPU. Names appear first; semantic suggestions supplement them after the model answers. Exact names and
 aliases retain priority. Selecting a result with the keyboard or mouse preserves it as later results arrive.
 
@@ -129,7 +129,7 @@ On a machine with model files and the configured accelerator, evaluate synthetic
 real strict helper:
 
 ```powershell
-$env:DIGUP_ACCELERATOR = 'amd-vulkan' # or nvidia-vulkan / openvino-npu with its documented configuration
+$env:DIGUP_ACCELERATOR = 'amd-vulkan' # or nvidia-cuda / openvino-npu with its documented configuration
 python scripts/check-app-semantics.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe" --output app-relevance.json
 ```
 

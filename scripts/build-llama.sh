@@ -17,19 +17,28 @@ COMMIT=4d756bc72bf00a4aacf410ae15a2d315f3db400d   # TAG's commit: a tag can be m
 # (DIGUP_WRITE_REFERENCE=1 swift test --filter ReferenceVectorTests): every index then embeds again.
 PATCH=scripts/llama.cpp-no-logits.patch
 STRICT_PATCH=scripts/llama.cpp-accelerator-only.patch
+CUDA_PATCH=scripts/llama.cpp-cuda-policy.patch
+CUDA_ARCHS="75-real;86-real;89-real;120a-real"
 SOURCE="${LLAMA_SOURCE:-Vendor/llama.cpp}"
 BUILD="${LLAMA_BUILD:-Vendor/llama-build}"
 OUT=Vendor/llama
 OS=$(uname -s)
 if [[ $OS == Darwin ]]; then
   FLAVOR=metal
-elif command -v glslc > /dev/null; then
-  FLAVOR=vulkan
 else
-  echo "Vulkan SDK (glslc) required. CPU-only production builds are disabled." >&2
-  exit 1
+  command -v glslc > /dev/null || { echo "Vulkan SDK (glslc) required; CPU-only production builds are disabled." >&2; exit 1; }
+  FLAVOR=vulkan
+  if [[ $OS == MINGW* || $OS == MSYS* || ${DIGUP_BUILD_CUDA:-0} == 1 ]]; then
+    command -v nvcc > /dev/null || { echo "Pinned CUDA Toolkit 12.9.1 required for NVIDIA builds." >&2; exit 1; }
+    nvcc --version | grep -q 'V12.9.86' || { echo "Expected CUDA 12.9.1 (nvcc 12.9.86)." >&2; exit 1; }
+    FLAVOR=vulkan-cuda
+  fi
 fi
-STAMP="$TAG $(cat "$0" "$PATCH" "$STRICT_PATCH" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-12) $FLAVOR accelerator-only"
+PATCH_ID=$(cat "$0" "$PATCH" "$STRICT_PATCH" "$CUDA_PATCH" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-24)
+COMPILER_ID=$(${CXX:-c++} --version 2>&1 | head -1 || true)
+if [[ $OS == MINGW* || $OS == MSYS* ]]; then COMPILER_ID=$(cl 2>&1 | head -1 || true); fi
+STAMP="$TAG $PATCH_ID $FLAVOR $COMPILER_ID $CUDA_ARCHS cuda12.9.1 accelerator-policy2"
+BUILD_ID=$(printf '%s' "$STAMP" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-32)
 if [[ ( -f "$OUT/lib/libllamacpp.a" || -f "$OUT/lib/libllama.so" || -f "$OUT/lib/llama.dll" ) \
       && "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then
   exit 0
@@ -52,7 +61,11 @@ if [[ "$(git -C "$SOURCE" rev-parse HEAD)" != "$COMMIT" ]]; then
 fi
 # Without the patch, every input token costs 1 MiB of logits that an embedding model never produces (262k vocabulary).
 # Its path is absolute: git -C reads a relative one from the source folder, which LLAMA_SOURCE can put anywhere.
-for patch in "$PATCH" "$STRICT_PATCH"; do
+# Remove previously applied patches in reverse order before applying this set. Custom source edits must still pass git apply checks.
+for patch in "$CUDA_PATCH" "$STRICT_PATCH" "$PATCH"; do
+  if git -C "$SOURCE" apply --reverse --check "$PWD/$patch" 2>/dev/null; then git -C "$SOURCE" apply --reverse "$PWD/$patch"; fi
+done
+for patch in "$PATCH" "$STRICT_PATCH" "$CUDA_PATCH"; do
   if git -C "$SOURCE" apply --check "$PWD/$patch" 2>/dev/null; then
     git -C "$SOURCE" apply "$PWD/$patch"
   elif ! git -C "$SOURCE" apply --reverse --check "$PWD/$patch" 2>/dev/null; then
@@ -106,7 +119,8 @@ else
     fi
   fi
   case $FLAVOR in
-    vulkan) GPU=(-DGGML_VULKAN=ON) ;;
+    vulkan) GPU=(-DGGML_VULKAN=ON -DGGML_CUDA=OFF) ;;
+    vulkan-cuda) GPU=(-DGGML_VULKAN=ON -DGGML_CUDA=ON -DCMAKE_CUDA_RUNTIME_LIBRARY=Shared -DGGML_CUDA_FA=OFF -DGGML_CUDA_GRAPHS=OFF "-DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS") ;;
     *) GPU=() ;;
   esac
   # Shared libraries, the backends as modules (every CPU variant, so one build fits any x86-64 or arm64 machine).
@@ -115,7 +129,7 @@ else
     -DLLAMA_BUILD_MTMD=ON -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF \
     -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF \
     -DLLAMA_CURL=OFF > /dev/null
-  cmake --build "$BUILD" --config Release -j "$(nproc)" > /dev/null
+  cmake --build "$BUILD" --config Release -j "${DIGUP_BUILD_JOBS:-$(nproc)}" > /dev/null
   rm -rf "$OUT/lib" && mkdir -p "$OUT/lib" "$OUT/include"
   if [[ $OS == MINGW* || $OS == MSYS* ]]; then
     # The DLLs (the backends among them), and the import libraries the helper links against.
@@ -131,7 +145,17 @@ cp "$SOURCE/include/llama.h" "$SOURCE"/ggml/include/*.h "$SOURCE/tools/mtmd/mtmd
   "$OUT/include/"
 # The build, for logs and `digup status` (indexes record LlamaEmbedder.vectorVersion, not this). SwiftPM doesn't see a
 # changed header, so the Swift file that reads it is touched.
-printf '// Written by scripts/build-llama.sh.\n#define LLAMA_BUILD_TAG "%s"\n' "$TAG" > "$OUT/include/llama-build.h"
+printf '// Written by scripts/build-llama.sh.\n#define LLAMA_BUILD_TAG "%s"\n#define LLAMA_BUILD_ID "%s"\n#define LLAMA_RUNTIME_FLAVOR "%s"\n' "$TAG" "$BUILD_ID" "$FLAVOR" > "$OUT/include/llama-build.h"
+python=python3
+python3 -c '' 2>/dev/null || python=python
+"$python" - "$OUT" "$TAG" "$COMMIT" "$BUILD_ID" "$FLAVOR" "$CUDA_ARCHS" <<'PYMETA'
+import json,sys
+from pathlib import Path
+out,tag,commit,build,flavor,archs=sys.argv[1:]
+Path(out,'native-runtime.json').write_text(json.dumps({'schemaVersion':1,'tag':tag,'commit':commit,'buildIdentity':build,
+ 'flavor':flavor,'policyVersion':2,'cudaToolkit':'12.9.1' if 'cuda' in flavor else None,
+ 'cudaPrecision':'cuda-fp32-v1','cudaArchitectures':archs.split(';'),'minimumWindowsDriver':'576.57'},indent=2)+'\n')
+PYMETA
 touch Sources/LlamaRuntime/LlamaEmbedder.swift
 echo "$STAMP" > "$OUT/BUILD"
 echo "Built llama.cpp $TAG (patched, $FLAVOR${CC:+, $CC}) into $OUT"

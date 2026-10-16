@@ -11,9 +11,17 @@ public struct WorkerInfo: Codable, Sendable {
     public let loadSeconds: Double?
     public let device: String?
     public let executionPolicy: String?
+    public let backend: String?
+    public let deviceId: String?
+    public let driverVersion: Int?
+    public let runtimeVersion: Int?
+    public let precisionProfile: String?
+    public let buildIdentity: String?
 
     public init(model: String, revision: String, runtime: String, dtype: String, dim: Int, textOnly: Bool,
-                loadSeconds: Double?, device: String? = nil, executionPolicy: String? = nil) {
+                loadSeconds: Double?, device: String? = nil, executionPolicy: String? = nil,
+                backend: String? = nil, deviceId: String? = nil, driverVersion: Int? = nil, runtimeVersion: Int? = nil,
+                precisionProfile: String? = nil, buildIdentity: String? = nil) {
         self.model = model
         self.revision = revision
         self.runtime = runtime
@@ -23,10 +31,27 @@ public struct WorkerInfo: Codable, Sendable {
         self.loadSeconds = loadSeconds
         self.device = device
         self.executionPolicy = executionPolicy
+        self.backend = backend; self.deviceId = deviceId; self.driverVersion = driverVersion
+        self.runtimeVersion = runtimeVersion; self.precisionProfile = precisionProfile; self.buildIdentity = buildIdentity
     }
 
     /// Vectors from different models, revisions, runtimes or precisions must never share an index.
-    public var vectorSource: String { "\(model)@\(revision.prefix(7)) \(runtime) \(dtype)" }
+    public var vectorSource: String {
+        if backend == "nvidia-cuda" {
+            return "cuda-v1:" + [model, revision, runtime, dtype, String(dim), backend ?? "", precisionProfile ?? "", buildIdentity ?? ""]
+                .map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
+        }
+        return "\(model)@\(revision.prefix(7)) \(runtime) \(dtype)"
+    }
+
+    public var fields: [String: Any] {
+        var value: [String: Any] = ["model": model, "revision": revision, "runtime": runtime, "dtype": dtype,
+            "dim": dim, "text_only": textOnly, "load_seconds": loadSeconds ?? 0,
+            "device": device ?? "", "execution_policy": executionPolicy ?? ""]
+        value["backend"] = backend; value["device_id"] = deviceId; value["driver_version"] = driverVersion
+        value["runtime_version"] = runtimeVersion; value["precision_profile"] = precisionProfile; value["build_identity"] = buildIdentity
+        return value
+    }
 }
 
 /// The four calls every embedding runtime answers: the model linked into this process (llama.cpp, `LlamaRuntime`), or

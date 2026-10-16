@@ -1,0 +1,274 @@
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -31,6 +31,17 @@
+ 
+     // True only when the loaded library enforces the accelerator-only execution policy.
+     GGML_API bool ggml_backend_accelerator_only(void);
++    GGML_API int ggml_backend_accelerator_policy_version(void);
++    GGML_API bool ggml_backend_vulkan_vendor_allowed(uint32_t vendor_id);
++    struct ggml_accelerator_device_info {
++        uint32_t vendor_id;
++        int compute_capability;
++        int driver_version;
++        int runtime_version;
++        int policy_version;
++        char stable_id[96];
++    };
++    GGML_API bool ggml_backend_dev_accelerator_info(ggml_backend_dev_t device, struct ggml_accelerator_device_info * info);
+ 
+ 
+     //
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -585,6 +585,30 @@
+     backend->iface.graph_plan_free(backend, plan);
+ }
+ 
++int ggml_backend_accelerator_policy_version(void) {
++#ifdef GGML_ACCELERATOR_ONLY
++    return 2;
++#else
++    return 0;
++#endif
++}
++
++bool ggml_backend_vulkan_vendor_allowed(uint32_t vendor_id) {
++#ifdef GGML_ACCELERATOR_ONLY
++    return vendor_id != 0x10de; // NVIDIA is CUDA-only in this fork.
++#else
++    return true;
++#endif
++}
++
++bool ggml_backend_dev_accelerator_info(ggml_backend_dev_t device, ggml_accelerator_device_info * info) {
++    if (!device || !info) { return false; }
++    memset(info, 0, sizeof(*info));
++    using get_info = bool (*)(ggml_backend_dev_t, ggml_accelerator_device_info *);
++    auto fn = reinterpret_cast<get_info>(ggml_backend_reg_get_proc_address(device->reg, "digup_device_info_v1"));
++    return fn && fn(device, info);
++}
++
+ bool ggml_backend_accelerator_only(void) {
+ #ifdef GGML_ACCELERATOR_ONLY
+     return true;
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -4008,6 +4008,9 @@
+             throw std::runtime_error("Device not found");
+         }
+ 
++        if (!ggml_backend_vulkan_vendor_allowed(physical_devices[dev_num].getProperties().vendorID)) {
++            throw std::runtime_error("NVIDIA cannot initialize a Vulkan inference device; select nvidia-cuda");
++        }
+         device->physical_device = physical_devices[dev_num];
+         const std::vector<vk::ExtensionProperties> ext_props = device->physical_device.enumerateDeviceExtensionProperties();
+ 
+@@ -5299,6 +5302,9 @@
+                 std::cerr << "ggml_vulkan: Invalid device index " << tmp << " in GGML_VK_VISIBLE_DEVICES." << std::endl;
+                 throw std::runtime_error("Invalid Vulkan device index");
+             }
++            if (!ggml_backend_vulkan_vendor_allowed(devices[tmp].getProperties().vendorID)) {
++                throw std::runtime_error("NVIDIA Vulkan has been removed; select nvidia-cuda");
++            }
+             vk_instance.device_indices.push_back(tmp);
+         }
+     } else {
+@@ -5317,7 +5323,7 @@
+             new_driver.pNext = &new_id;
+             devices[i].getProperties2(&new_props);
+ 
+-            if ((new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) && ggml_vk_device_is_supported(devices[i])) {
++            if ((new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) && ggml_backend_vulkan_vendor_allowed(new_props.properties.vendorID) && ggml_vk_device_is_supported(devices[i])) {
+                 // Check if there are two physical devices corresponding to the same GPU
+                 // This handles the case where the same GPU appears with different drivers (e.g., RADV + AMDVLK on Linux),
+                 // see https://github.com/ggml-org/llama.cpp/pull/7582 for original deduplication.
+@@ -16190,11 +16196,39 @@
+     return devices[device];
+ }
+ 
++static bool digup_vulkan_device_info(ggml_backend_dev_t dev, ggml_accelerator_device_info * info) {
++    auto * ctx = static_cast<ggml_backend_vk_device_context *>(dev->context);
++    auto devices = vk_instance.instance.enumeratePhysicalDevices();
++    auto physical = devices.at(vk_instance.device_indices.at(ctx->device));
++    vk::PhysicalDeviceProperties2 props;
++    vk::PhysicalDeviceIDProperties id;
++    props.pNext = &id;
++    physical.getProperties2(&props);
++    if (!ggml_backend_vulkan_vendor_allowed(props.properties.vendorID)) { return false; }
++    info->vendor_id = props.properties.vendorID;
++    #ifdef GGML_ACCELERATOR_ONLY
++    info->policy_version = 2;
++#else
++    info->policy_version = 0;
++#endif
++    snprintf(info->stable_id, sizeof(info->stable_id), "VK-%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
++        id.deviceUUID[0], id.deviceUUID[1], id.deviceUUID[2], id.deviceUUID[3],
++        id.deviceUUID[4], id.deviceUUID[5], id.deviceUUID[6], id.deviceUUID[7],
++        id.deviceUUID[8], id.deviceUUID[9], id.deviceUUID[10], id.deviceUUID[11],
++        id.deviceUUID[12], id.deviceUUID[13], id.deviceUUID[14], id.deviceUUID[15]);
++    return true;
++}
++
++static void * digup_vulkan_proc(ggml_backend_reg_t reg, const char * name) {
++    UNUSED(reg);
++    return strcmp(name, "digup_device_info_v1") == 0 ? reinterpret_cast<void *>(digup_vulkan_device_info) : nullptr;
++}
++
+ static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
+     /* .get_name         = */ ggml_backend_vk_reg_get_name,
+     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
+     /* .get_device       = */ ggml_backend_vk_reg_get_device,
+-    /* .get_proc_address = */ NULL,
++    /* .get_proc_address = */ digup_vulkan_proc,
+ };
+ 
+ ggml_backend_reg_t ggml_backend_vk_reg() {
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -141,6 +141,12 @@
+ static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
+     ggml_cuda_set_device(device);
+     cudaError_t err;
++#ifdef GGML_ACCELERATOR_ONLY
++    if (getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr) {
++        GGML_LOG_ERROR("accelerator-only: CUDA managed-memory spill is disabled\n");
++        return cudaErrorNotSupported;
++    }
++#endif
+     if (getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr) {
+         err = cudaMallocManaged(ptr, size);
+ #if defined(GGML_USE_HIP)
+@@ -1500,6 +1506,9 @@
+     size_t nbd3 = dst->nb[3];
+ 
+     cublasComputeType_t cu_compute_type = traits::compute_type;
++#ifdef GGML_ACCELERATOR_ONLY
++    if constexpr (compute_type == GGML_TYPE_F32) { cu_compute_type = CUBLAS_COMPUTE_32F_PEDANTIC; }
++#endif
+     cudaDataType_t cu_data_type = traits::data_type;
+     cudaDataType_t cu_data_type_a = traits::data_type;
+     cudaDataType_t cu_data_type_b = traits::data_type;
+@@ -1659,6 +1668,9 @@
+         }
+     }
+ 
++#ifdef GGML_ACCELERATOR_ONLY
++    compute_type = GGML_TYPE_F32; // environment settings cannot down-convert EmbeddingGemma activations
++#endif
+     constexpr size_t max_src0_convert_size = 512ull * 1024 * 1024;
+     const size_t src0_f32_size = ggml_nelements(src0) * sizeof(float);
+ 
+@@ -1904,6 +1916,10 @@
+ }
+ 
+ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
++#ifdef GGML_ACCELERATOR_ONLY
++    ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
++    return;
++#endif
+     GGML_TENSOR_BINARY_OP_LOCALS
+ 
+     if (ggml_cuda_op_mul_mat_use_fwht(dst) && ggml_cuda_op_fwht(ctx, src1, dst)) {
+@@ -3532,7 +3548,11 @@
+ // try and fuse nodes and return the number of nodes to skip
+ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+ 
++#ifdef GGML_ACCELERATOR_ONLY
++    static const bool disable_fusion = true;
++#else
+     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
++#endif
+     if (disable_fusion) {
+         return 0;
+     }
+@@ -4631,7 +4651,11 @@
+ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+ 
++#ifdef GGML_ACCELERATOR_ONLY
++    static const bool disable_fusion = true;
++#else
+     static const bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
++#endif
+ 
+     auto add_alloc_deps = [&](size_t start, size_t last_node) {
+ 
+@@ -4750,11 +4774,15 @@
+     GGML_UNUSED(cgraph);
+ #endif
+ 
++#ifdef GGML_ACCELERATOR_ONLY
++    const bool enable_graph_optimization = false;
++#else
+     static bool enable_graph_optimization = [] {
+         const char * env     = getenv("GGML_CUDA_GRAPH_OPT");
+         return env != nullptr && atoi(env) == 1;
+     }();
+ 
++#endif
+     if (!enable_graph_optimization) {
+         return;
+     }
+@@ -5910,7 +5938,27 @@
+     GGML_UNUSED(reg);
+ }
+ 
++static bool digup_cuda_device_info(ggml_backend_dev_t dev, ggml_accelerator_device_info * info) {
++    auto * ctx = static_cast<ggml_backend_cuda_device_context *>(dev->context);
++    cudaDeviceProp props;
++    if (cudaGetDeviceProperties(&props, ggml_cuda_get_physical_device(ctx->device)) != cudaSuccess) { return false; }
++    info->vendor_id = 0x10de;
++    info->compute_capability = props.major * 10 + props.minor;
++    if (cudaDriverGetVersion(&info->driver_version) != cudaSuccess ||
++        cudaRuntimeGetVersion(&info->runtime_version) != cudaSuccess) { return false; }
++    #ifdef GGML_ACCELERATOR_ONLY
++    info->policy_version = 2;
++#else
++    info->policy_version = 0;
++#endif
++    const auto * id = reinterpret_cast<const unsigned char *>(props.uuid.bytes);
++    snprintf(info->stable_id, sizeof(info->stable_id), "GPU-%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
++        id[0],id[1],id[2],id[3],id[4],id[5],id[6],id[7],id[8],id[9],id[10],id[11],id[12],id[13],id[14],id[15]);
++    return true;
++}
++
+ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
++    if (strcmp(name, "digup_device_info_v1") == 0) { return reinterpret_cast<void *>(digup_cuda_device_info); }
+     GGML_UNUSED(reg);
+     if (strcmp(name, "ggml_backend_comm_init") == 0) {
+         return (void *)ggml_backend_cuda_comm_init;
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -1532,7 +1532,11 @@
+         if (cublas_handles[device][curr_stream_no] == nullptr) {
+             ggml_cuda_set_device(device);
+             CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
++#ifdef GGML_ACCELERATOR_ONLY
++            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device][curr_stream_no], CUBLAS_PEDANTIC_MATH));
++#else
+             CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device][curr_stream_no], CUBLAS_TF32_TENSOR_OP_MATH));
++#endif
+             CUBLAS_CHECK(cublasSetStream(cublas_handles[device][curr_stream_no], stream()));
+ #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2))
+             if (cublas_workspace_sizes[device] == 0) {
+diff --git a/ggml/src/ggml-cuda/CMakeLists.txt b/ggml/src/ggml-cuda/CMakeLists.txt
+--- a/ggml/src/ggml-cuda/CMakeLists.txt
++++ b/ggml/src/ggml-cuda/CMakeLists.txt
+@@ -193,7 +193,11 @@
+ 
+     set(CUDA_CXX_FLAGS "")
+ 
+-    set(CUDA_FLAGS -use_fast_math -extended-lambda)
++    if (GGML_ACCELERATOR_ONLY)
++        set(CUDA_FLAGS -extended-lambda)
++    else()
++        set(CUDA_FLAGS -use_fast_math -extended-lambda)
++    endif()
+ 
+     if (GGML_CUDA_DEBUG)
+         list(APPEND CUDA_FLAGS -lineinfo)

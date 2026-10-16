@@ -10,6 +10,15 @@ cd "$(dirname "$0")/.."
 [[ -x Vendor/ffmpeg/bin/ffmpeg.exe ]] || { echo "no Vendor/ffmpeg/bin/ffmpeg.exe: run scripts/build-ffmpeg.sh in MSYS2" >&2; exit 1; }
 TAURI_CLI=2.12.2
 
+test -f Vendor/llama/lib/ggml-cuda.dll || { echo "CUDA backend missing: run the pinned CUDA/Vulkan build first" >&2; exit 1; }
+python=python3
+python3 -c '' 2>/dev/null || python=python
+"$python" - <<'PYVERIFY'
+import json
+from pathlib import Path
+m=json.loads(Path('Vendor/llama/native-runtime.json').read_text())
+assert m['policyVersion']==2 and m['flavor']=='vulkan-cuda' and m['cudaToolkit']=='12.9.1', 'Native build is not the pinned CUDA/Vulkan runtime'
+PYVERIFY
 swift build -c release --product digup
 
 # What the installer puts beside DigUp.exe, in helper\ ("DigUp.exe" and "digup.exe" can't share a folder): the helper
@@ -23,8 +32,10 @@ rm -rf "$helper"
 mkdir -p "$helper"
 cp .build/release/digup.exe Vendor/llama/lib/*.dll Vendor/pdfium/bin/pdfium.dll "$helper/"
 cp "$swift_runtime"/*.dll "$helper/"
+cp Vendor/llama/native-runtime.json "$helper/"
 cp "$crt"/*.dll "$helper/"   # over the Swift runtime's copies of the same: the newer C++ runtime
 cp Vendor/ffmpeg/bin/ffmpeg.exe Vendor/ffmpeg/bin/ffprobe.exe "$helper/"   # the small static build, no DLLs
+"$python" scripts/package-cuda-runtime.py --helper "$helper"
 mkdir -p "$helper/openvino"
 cp worker/openvino/*.py worker/openvino/requirements.txt "$helper/openvino/"
 

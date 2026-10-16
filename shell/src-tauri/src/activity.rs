@@ -40,7 +40,9 @@ pub fn snapshot(input: Input) -> Value {
     let done = total.map(|n| work["done"].as_u64().unwrap_or(0).min(n));
     let semantic_verified = semantic["encoder"] == "ready" && semantic["execution_policy"] == "accelerator-only"
         && semantic["device"].as_str().is_some_and(|s| !s.is_empty());
-    let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"]}) }
+    let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"] ,
+        "backend":semantic["backend"],"device_id":semantic["device_id"],"driver_version":semantic["driver_version"],
+        "runtime_version":semantic["runtime_version"],"precision_profile":semantic["precision_profile"],"build_identity":semantic["build_identity"]}) }
         else { runtime["verified"].clone() };
     let encoder = if helpers["search"]["running"] == false { "stopped" }
         else { runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown") };

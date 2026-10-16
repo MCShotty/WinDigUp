@@ -21,6 +21,11 @@ const notes = {
 
 let info = {};
 let accelerationDirty = false;
+let displayedBackend = null;
+let deviceProbe = null;
+let deviceProbeStarted = false;
+let deviceProbeBusy = false;
+const gpuDrafts = new Map();
 let summaries = null;        // what's indexed under each folder (search-service's summaries)
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
@@ -49,12 +54,18 @@ function renderGeneral() {
   const acceleration = info.acceleration || { backend: "vulkan" };
   if (!accelerationDirty) {
     $("accelerator").value = acceleration.backend;
-    $("gpu-device").value = acceleration.gpu || "";
+    $("gpu-device").value = acceleration.selectionRequired ? "" : acceleration.gpu || "";
+    displayedBackend = acceleration.backend;
+    gpuDrafts.set(displayedBackend, $("gpu-device").value);
     $("npu-python").value = acceleration.python || "";
     $("npu-models").value = acceleration.models || "";
   }
   $("accelerator").querySelector('option[value="metal"]').hidden = !/Mac/.test(navigator.platform);
   showAcceleratorOptions();
+  const notice = acceleration.discoveryError || acceleration.migrationNotice || (acceleration.discoveryPending ? "Discovering hardware. App name search and launching are ready." : "");
+  $("accelerator-migration").textContent = notice;
+  $("accelerator-migration").hidden = !notice;
+  if (!deviceProbeStarted) { deviceProbeStarted = true; refreshGPUDevices(); }
   $("login-option").hidden = !info.canOpenAtLogin;
   $("login").checked = info.openAtLogin;
   $("tray-click-option").hidden = !info.canChooseTrayClick;
@@ -76,8 +87,49 @@ function showAcceleratorOptions() {
   const npu = $("accelerator").value === "openvino-npu";
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
+  $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
+  renderGPUDevices();
 }
-$("accelerator").onchange = () => { accelerationDirty = true; showAcceleratorOptions(); };
+$("accelerator").onchange = () => {
+  if (displayedBackend) gpuDrafts.set(displayedBackend, $("gpu-device").value);
+  displayedBackend = $("accelerator").value;
+  $("gpu-device").value = gpuDrafts.get(displayedBackend) || "";
+  accelerationDirty = true; showAcceleratorOptions();
+};
+
+function renderGPUDevices() {
+  const backend = $("accelerator").value === "nvidia-cuda" ? "cuda" : $("accelerator").value === "metal" ? "metal" : "vulkan";
+  const devices = (deviceProbe?.devices || []).filter(d => d.backend === backend && d.available && (backend !== "vulkan" || d.vendorID !== 0x10de)
+    && ($("accelerator").value !== "amd-vulkan" || d.vendorID === 0x1002));
+  $("gpu-devices").replaceChildren(...devices.map(d => {
+    const option = document.createElement("option"); option.value = d.stableID || d.id; option.label = `${d.name} · ${d.id}`; return option;
+  }));
+  if (deviceProbeBusy) { $("gpu-discovery").textContent = "Checking device availability…"; return; }
+  if (!deviceProbe) return;
+  const problem = deviceProbe.backends?.find(b => b.backend === backend && b.state !== "available");
+  const detected = (deviceProbe.windowsAdapters || []).filter(d => !d.software && (backend !== "cuda" || d.vendorID === 0x10de));
+  $("gpu-discovery").textContent = devices.length
+    ? `${devices.map(d => d.name).join(", ")}. Device available; model execution is verified separately.`
+    : `${detected.length ? `Windows detects ${detected.map(d => d.name).join(", ")}. ` : ""}${problem?.message || "No eligible device was found for this backend."}`;
+}
+
+async function refreshGPUDevices() {
+  if (deviceProbeBusy) return;
+  deviceProbeBusy = true; $("refresh-gpus").disabled = true; renderGPUDevices();
+  try {
+    const result = await invoke("accelerator_devices");
+    if (result?.schemaVersion !== 1) throw new Error("Device discovery is unavailable for this build.");
+    deviceProbe = result;
+  } catch (error) { $("gpu-discovery").textContent = error?.message || String(error); }
+  finally {
+    deviceProbeBusy = false; $("refresh-gpus").disabled = false;
+    if (deviceProbe) renderGPUDevices();
+  }
+}
+$("refresh-gpus").onclick = refreshGPUDevices;
+window.__TAURI__.event.listen("acceleration", ({ payload }) => {
+  if (!accelerationDirty && info.shortcut) { info.acceleration = payload; renderGeneral(); }
+});
 for (const id of ["gpu-device", "npu-python", "npu-models"]) $(id).oninput = () => { accelerationDirty = true; };
 $("apply-accelerator").onclick = async () => {
   $("problem").hidden = true;

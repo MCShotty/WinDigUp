@@ -160,6 +160,10 @@ impl SearchService {
         self.launch.lock().unwrap().args = args;
     }
 
+    pub fn set_environment(&self, environment: Vec<(String, String)>) {
+        self.launch.lock().unwrap().env = environment;
+    }
+
     /// Sends a request and waits for its reply.
     pub async fn ask(&self, mut request: Value) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);

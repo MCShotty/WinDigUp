@@ -52,16 +52,20 @@
       <h3>Model acceleration</h3>
       <label for="accelerator">Inference device</label>
       <select class="field" id="accelerator">
-        <option value="vulkan">Vulkan GPU — automatic hardware selection</option>
+        <option value="vulkan">Vulkan GPU — non-NVIDIA hardware</option>
         <option value="amd-vulkan">AMD Vulkan — RDNA1 / RX 5000 and newer</option>
-        <option value="nvidia-vulkan">NVIDIA Vulkan</option>
+        <option value="nvidia-cuda">NVIDIA CUDA — RTX 20-series and newer</option>
         <option value="openvino-npu">Intel NPU — OpenVINO</option>
         <option value="metal">Apple Metal</option>
       </select>
       <div id="gpu-options">
         <label for="gpu-device">GPU device (optional)</label>
-        <input class="field" id="gpu-device" placeholder="Automatic, or Vulkan0 / Vulkan1" spellcheck="false">
+        <input class="field" id="gpu-device" list="gpu-devices" placeholder="Automatic, or choose a discovered GPU" spellcheck="false">
+        <datalist id="gpu-devices"></datalist>
+        <button id="refresh-gpus" type="button">Refresh devices</button>
+        <p id="gpu-discovery" class="note" role="status"></p>
       </div>
+      <p id="accelerator-migration" class="note" role="status" hidden></p>
       <div id="npu-options" hidden>
         <label for="npu-python">OpenVINO Python executable</label>
         <input class="field" id="npu-python" placeholder="C:\DigUpNPU\.venv\Scripts\python.exe" spellcheck="false">

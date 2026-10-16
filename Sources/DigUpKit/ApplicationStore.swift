@@ -69,8 +69,9 @@ public final class ApplicationStore {
     /// Includes the full revision, not the abbreviated display label, and the actual NPU bundle runtime fingerprint.
     public static func fingerprint(info: WorkerInfo, backend: String, runtimeBuild: String = "") -> String {
         // SQLite's text binder uses NUL termination. Encode components before joining, keeping the identity lossless.
-        [info.model, info.revision, info.runtime, runtimeBuild, info.dtype, String(info.dim), backend, promptVersion]
-            .map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
+        var components = [info.model, info.revision, info.runtime, runtimeBuild, info.dtype, String(info.dim), backend, promptVersion]
+        if backend == "nvidia-cuda" { components += [info.precisionProfile ?? "", info.buildIdentity ?? ""] }
+        return components.map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
     }
 
     public func synchronize(_ documents: [ApplicationDocument], revision: String) throws {

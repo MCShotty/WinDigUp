@@ -4,7 +4,13 @@
 ; this one doesn't (another ffmpeg's DLLs).
 !macro NSIS_HOOK_PREINSTALL
   ${If} $INSTDIR != ""
+    IfFileExists "$INSTDIR\helper\*.*" 0 digup_runtime_cleaned
+    ClearErrors
     RMDir /r "$INSTDIR\helper"
+    IfErrors 0 digup_runtime_cleaned
+    MessageBox MB_OK|MB_ICONSTOP "DigUp's runtime is still in use. Quit DigUp from the tray and run the installer again." /SD IDOK
+    Abort
+    digup_runtime_cleaned:
   ${EndIf}
 !macroend
 

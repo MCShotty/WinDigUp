@@ -339,7 +339,7 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     private func applicationFingerprint(_ worker: any Embedder) throws -> String {
         let backend = try Acceleration.selected()
         return ApplicationStore.fingerprint(info: worker.info, backend: backend.rawValue,
-            runtimeBuild: backend == .openvinoNPU ? "" : LlamaEmbedder.buildTag)
+            runtimeBuild: backend == .openvinoNPU ? "" : backend == .nvidiaCUDA ? LlamaEmbedder.buildIdentity : LlamaEmbedder.buildTag)
     }
 
     private func applicationState(_ store: ApplicationStore) throws -> [String: Any] {
@@ -353,6 +353,7 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             reply["fingerprint"] = try applicationFingerprint(encoder)
             reply["device"] = encoder.info.device ?? ""
             reply["execution_policy"] = encoder.info.executionPolicy ?? ""
+            for (key, value) in encoder.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"].contains(key) { reply[key] = value }
         }
         if let encoderError { reply["message"] = encoderError }
         return reply
@@ -361,7 +362,7 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
     /// The query's vector (cached), or nil when the encoder can't run: keyword results still work.
     private func vector(for text: String, code: Bool) -> [Float]? {
         lastQuery = Date()
-        let key = (code ? "code\u{0}" : "") + text
+        let key = (embedderSource() ?? Acceleration.cacheKey) + "\u{0}" + (code ? "code\u{0}" : "") + text
         if let cached = vectorCache[key] { return cached }
         guard let encoder = runningEncoder() else { return nil }
         do {
@@ -386,9 +387,10 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
             encoder = worker
             encoderState = "ready"
             encoderError = nil
-            write(["event": "encoder", "state": "ready", "seconds": (Date().timeIntervalSince(started) * 100).rounded() / 100,
-                  "source": worker.info.vectorSource, "device": worker.info.device ?? "",
-                  "execution_policy": worker.info.executionPolicy ?? ""])
+            var receipt = worker.info.fields
+            receipt["event"] = "encoder"; receipt["state"] = "ready"; receipt["source"] = worker.info.vectorSource
+            receipt["seconds"] = (Date().timeIntervalSince(started) * 100).rounded() / 100
+            write(receipt)
             return worker
         } catch {
             encoderState = "unavailable"
