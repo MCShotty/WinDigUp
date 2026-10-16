@@ -89,4 +89,11 @@ struct AccelerationTests {
         #expect(try decoder.decode(WorkerInfo.self,from:encoded).buildIdentity == reference.buildIdentity)
     }
 
+    @Test func cudaFailuresDescribeMemoryAndUnsupportedOperationsWithoutFallback() {
+        #expect(Acceleration.cudaFailure(diagnostic: "CUDA error: out of memory", fallback: "failed").hasPrefix("insufficient_vram:"))
+        #expect(Acceleration.cudaFailure(diagnostic: "CUBLAS_STATUS_ALLOC_FAILED", fallback: "failed").hasPrefix("insufficient_vram:"))
+        #expect(Acceleration.cudaFailure(diagnostic: "accelerator-only: refusing CPU graph execution", fallback: "failed").hasPrefix("unsupported_operation:"))
+        #expect(Acceleration.cudaFailure(diagnostic: "no kernel image is available for execution", fallback: "failed").hasPrefix("unsupported_operation:"))
+        #expect(Acceleration.cudaFailure(diagnostic: "invalid model header", fallback: "failed") == "failed")
+    }
 }

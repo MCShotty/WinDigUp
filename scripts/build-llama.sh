@@ -13,8 +13,8 @@ cd "$(dirname "$0")/.."
 TAG=b11461   # the first tags with EmbeddingGemma 2 (text + vision + audio) are b11452+
 COMMIT=4d756bc72bf00a4aacf410ae15a2d315f3db400d   # TAG's commit: a tag can be moved, a commit can't
 # A new TAG ships only if `swift test` passes: ReferenceVectorTests checks it makes the same vectors, so every index is
-# kept. If it fails, keep this TAG, or bump LlamaEmbedder.vectorVersion and write the reference vectors again
-# (DIGUP_WRITE_REFERENCE=1 swift test --filter ReferenceVectorTests): every index then embeds again.
+# kept. If it fails, investigate the runtime and precision policy; do not regenerate references to make a backend pass.
+# Intentional future changes to the model/vector space need their own versioned migration and reference review.
 PATCH=scripts/llama.cpp-no-logits.patch
 STRICT_PATCH=scripts/llama.cpp-accelerator-only.patch
 CUDA_PATCH=scripts/llama.cpp-cuda-policy.patch
@@ -91,7 +91,9 @@ if [[ $OS == Darwin ]]; then
     -DBUILD_SHARED_LIBS=OFF -DGGML_ACCELERATOR_ONLY=ON -DGGML_OPENMP=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_MTMD=ON \
     -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
     -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF > /dev/null
-  cmake --build "$BUILD" --config Release -j "$(sysctl -n hw.ncpu)" --target llama mtmd > /dev/null
+  cmake --build "$BUILD" --config Release -j "$(sysctl -n hw.ncpu)" --target llama mtmd > "$BUILD/digup-build.log" 2>&1 || {
+    tail -n 180 "$BUILD/digup-build.log" >&2; exit 1;
+  }
 
   B="$BUILD"
   mkdir -p "$OUT/lib" "$OUT/include"
@@ -132,7 +134,13 @@ else
     -DLLAMA_BUILD_MTMD=ON -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF \
     -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF \
     -DLLAMA_CURL=OFF > /dev/null
-  cmake --build "$BUILD" --config Release -j "${DIGUP_BUILD_JOBS:-$(nproc)}" > /dev/null
+  # Validate the shared Vulkan hooks before spending time on CUDA's four architecture targets.
+  cmake --build "$BUILD" --config Release -j "${DIGUP_BUILD_JOBS:-$(nproc)}" --target ggml-vulkan > "$BUILD/digup-vulkan.log" 2>&1 || {
+    tail -n 180 "$BUILD/digup-vulkan.log" >&2; exit 1;
+  }
+  cmake --build "$BUILD" --config Release -j "${DIGUP_BUILD_JOBS:-$(nproc)}" > "$BUILD/digup-build.log" 2>&1 || {
+    tail -n 180 "$BUILD/digup-build.log" >&2; exit 1;
+  }
   rm -rf "$OUT/lib" && mkdir -p "$OUT/lib" "$OUT/include"
   if [[ $OS == MINGW* || $OS == MSYS* ]]; then
     # The DLLs (the backends among them), and the import libraries the helper links against.

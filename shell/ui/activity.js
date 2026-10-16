@@ -302,7 +302,7 @@ window.ActivityUI = (() => {
       put("purpose-note", purpose.message || (sourceErrors.length ? `Some sources could not refresh: ${sourceErrors.join("; ")}` : "Names and launching use the Windows catalog."));
       const verified = inference.verified?.device;
       put("device", verified || "Device not verified yet");
-      put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}${inference.verified?.backend ? ` · Running: ${inference.verified.backend}` : ""}`);
+      put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}${inference.verified?.backend ? ` · Verified: ${inference.verified.backend}` : ""}`);
       put("encoder", `${inference.model?.state === "ready" ? "Model files: available" : `Model status: ${inference.model?.state || "unknown"}`} · Encoder: ${inference.encoder}`);
       const receipt = inference.verified || {};
       const api = value => Number.isInteger(value) ? `${Math.floor(value / 1000)}.${Math.floor((value % 1000) / 10)}` : "unknown";

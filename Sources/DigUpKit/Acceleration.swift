@@ -8,6 +8,18 @@ public enum Acceleration: String, Sendable, CaseIterable {
     /// Matches the shipped real-code targets; unknown future SMs require a new validated build.
     public static let cudaComputeCapabilities: Set<Int> = [75, 86, 89, 120]
 
+    /// Classify a failed CUDA operation from bounded native diagnostics; never retry another execution path.
+    public static func cudaFailure(diagnostic: String, fallback: String) -> String {
+        let text = diagnostic.lowercased()
+        if ["out of memory", "cudaerrormemoryallocation", "cublas_status_alloc_failed"].contains(where: text.contains) {
+            return "insufficient_vram: Not enough GPU memory for the CUDA model. Free GPU memory and retry. CPU fallback is disabled."
+        }
+        if ["unsupported op", "operation not supported", "no kernel image", "accelerator-only: refusing"].contains(where: text.contains) {
+            return "unsupported_operation: A required operation could not run on the selected CUDA GPU. Check the driver and Activity details. CPU fallback is disabled."
+        }
+        return fallback
+    }
+
     public var registry: String {
         switch self {
         case .nvidiaCUDA: "cuda"

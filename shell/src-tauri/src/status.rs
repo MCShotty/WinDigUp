@@ -55,7 +55,21 @@ impl Status {
 
     /// A helper started before device discovery may reply after the effective store has changed.
     pub fn cached_counts(&mut self, reply: &Value, expected_file: &std::path::Path) -> bool {
-        if reply["index"].as_str().map(std::path::Path::new) != Some(expected_file)
+        // The helper standardizes --index to an absolute path. Match that lexical form without touching the disk.
+        let normalize = |path: &std::path::Path| -> Option<std::path::PathBuf> {
+            let mut result = std::path::PathBuf::new();
+            for component in std::path::absolute(path).ok()?.components() {
+                match component {
+                    std::path::Component::ParentDir => { result.pop(); }
+                    std::path::Component::CurDir => {}
+                    _ => result.push(component),
+                }
+            }
+            Some(result)
+        };
+        let expected = normalize(expected_file);
+        let actual = reply["index"].as_str().and_then(|file| normalize(std::path::Path::new(file)));
+        if expected.is_none() || actual != expected
             || self.files != 0 || !reply["files"].is_u64() { return false; }
         self.apply(&json!({"event":"counts", "files":reply["files"], "searchable":reply["searchable"],
             "pending":reply["pending"], "unfinished":reply["unfinished"]}));
@@ -462,6 +476,10 @@ mod tests {
         assert!(status.cached_counts(&json!({"index":"base/nvidia-cuda/index.sqlite","files":2,"searchable":1}), expected));
         assert_eq!(status.searchable, 1);
         assert!(!status.cached_counts(&json!({"index":"base/nvidia-cuda/index.sqlite","files":3}), expected));
+        let mut relative = Status::default();
+        let absolute = std::env::current_dir().unwrap().join("base/nvidia-cuda/index.sqlite");
+        assert!(relative.cached_counts(&json!({"index":absolute,"files":2,"searchable":1}), std::path::Path::new("base/./old/../nvidia-cuda/index.sqlite")));
+        assert_eq!(relative.searchable,1);
     }
 
     #[test]

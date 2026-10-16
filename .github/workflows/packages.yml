@@ -219,12 +219,25 @@ jobs:
             Vendor/llama.cpp/LICENSE
             Vendor/llama.cpp/licenses
           key: llama-windows-vulkan-cuda12.9.1-msvc14.44-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
-      - name: Native libraries
+      - name: Fetch native dependencies
         shell: bash
         run: |
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/fetch-vendor.sh
+      - name: Native libraries
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
           DIGUP_BUILD_JOBS=2 scripts/build-llama.sh
+      - name: Native build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DigUp-native-build-diagnostics
+          path: |
+            Vendor/llama-build/**/digup-*.log
+            Vendor/llama-build/**/CMakeCache.txt
+            Vendor/llama-build/**/CMakeFiles/CMakeConfigureLog.yaml
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: steps.llama.outputs.cache-hit != 'true'
         with:

@@ -30,7 +30,10 @@ impl Diagnostics {
                 runtime["applicationState"] = state;
             }
             if source == "search" && event["event"] == "encoder" {
-                runtime["encoder"] = json!({"state":event["state"],"updatedAt":time,"message":event["error"]});
+                let message = if event["state"] == "ready" && event["inference_verified"] != true {
+                    runtime["encoder"]["message"].clone()
+                } else { event["error"].clone() };
+                runtime["encoder"] = json!({"state":event["state"],"updatedAt":time,"message":message});
             }
             let verified = event["execution_policy"] == "accelerator-only"
                 && event["device"].as_str().is_some_and(|device| !device.is_empty())
@@ -140,6 +143,16 @@ mod tests {
         assert_eq!(d.significant().as_array().unwrap().len(),2);
         for n in 0..40 {d.record("index",json!({"event":"error","message":format!("error {n}")}));}
         assert_eq!(d.significant().as_array().unwrap().len(),30);
+    }
+
+    #[test]
+    fn retry_does_not_hide_a_cuda_failure_before_successful_inference() {
+        let d=Diagnostics::new(&std::env::temp_dir().join("digup-retry-failure-absent"));
+        d.record("search",json!({"event":"encoder","state":"unavailable","error":"insufficient_vram"}));
+        d.record("search",json!({"event":"encoder","state":"ready","inference_verified":false}));
+        assert_eq!(d.runtime()["encoder"]["message"],"insufficient_vram");
+        d.record("search",json!({"event":"encoder","state":"ready","inference_verified":true}));
+        assert!(d.runtime()["encoder"]["message"].is_null());
     }
 
     #[test]

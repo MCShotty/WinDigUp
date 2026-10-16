@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force $Output | Out-Null
 $Output = (Resolve-Path $Output).Path
 $Models = (Resolve-Path $Models).Path
 $previous = @{}
-foreach ($name in @('PATH','DIGUP_ACCELERATOR','DIGUP_GPU','DIGUP_MODELS','RUNNER_TEMP')) {
+foreach ($name in @('PATH','DIGUP_ACCELERATOR','DIGUP_GPU','DIGUP_MODELS','RUNNER_TEMP','CUDA_PATH','CUDA_HOME','CUDAToolkit_ROOT')) {
     $previous[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 $result = @{ passed=$false; capturedAt=[DateTime]::UtcNow.ToString('o'); physicalValidationAttempted=$true; durationsSeconds=@{} }
@@ -37,13 +37,15 @@ function Invoke-Helper([string[]]$Arguments, [string]$Name) {
     if (!$process.WaitForExit(180000)) { $process.Kill($true); throw "CUDA check timed out: $Name" }
     $watch.Stop(); $result.durationsSeconds[$Name]=$watch.Elapsed.TotalSeconds
     $stdout=$outTask.GetAwaiter().GetResult(); $stderr=$errorTask.GetAwaiter().GetResult()
-    [IO.File]::WriteAllText((Join-Path $Output ($Name+'.json')),$stdout)
+    $extension=if($Arguments -contains '--json'){'.json'}else{'.txt'}
+    [IO.File]::WriteAllText((Join-Path $Output ($Name+$extension)),$stdout)
     [IO.File]::WriteAllText((Join-Path $Output ($Name+'.log')),$stderr)
     if ($process.ExitCode -ne 0) { throw "$Name failed: $stderr $stdout" }
     return $stdout
 }
 try {
     $env:PATH = $helperDirectory+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot
+    foreach ($name in @('CUDA_PATH','CUDA_HOME','CUDAToolkit_ROOT')) { [Environment]::SetEnvironmentVariable($name,$null) }
     $env:DIGUP_ACCELERATOR='nvidia-cuda'; $env:DIGUP_MODELS=$Models; $env:DIGUP_GPU=$GPU
     $result.windows = Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber
     $result.adapters = @(Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,PNPDeviceID)

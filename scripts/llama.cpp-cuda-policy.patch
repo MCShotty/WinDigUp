@@ -113,7 +113,7 @@ diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vu
 +}
 +
 +static void * digup_vulkan_proc(ggml_backend_reg_t reg, const char * name) {
-+    UNUSED(reg);
++    GGML_UNUSED(reg);
 +    return strcmp(name, "digup_device_info_v1") == 0 ? reinterpret_cast<void *>(digup_vulkan_device_info) : nullptr;
 +}
 +

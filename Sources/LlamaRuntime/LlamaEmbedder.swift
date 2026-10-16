@@ -75,7 +75,7 @@ public final class LlamaEmbedder: Embedder {
             return llama_model_load_from_file(models.text.path, modelParams)
         }
         guard let model = loaded else {
-            throw WorkerError.failed("can't load the complete model on \(deviceName); CPU fallback is disabled")
+            throw WorkerError.failed(LlamaLog.shared.failure("can't load the complete model on \(deviceName); CPU fallback is disabled"))
         }
         // One input must fit one micro-batch: 2048 tokens (the reference's cut), which also holds a 1120-token image or
         // a 750-token 30 s clip. Queries are short, so the query encoder reserves less and cuts at 512.
@@ -101,7 +101,7 @@ public final class LlamaEmbedder: Embedder {
         #endif
         guard let context = llama_init_from_model(model, params) else {
             llama_model_free(model)
-            throw WorkerError.failed("can't create a llama.cpp context")
+            throw WorkerError.failed(LlamaLog.shared.failure("can't create a llama.cpp context"))
         }
         var media: OpaquePointer?
         if let mediaFile = models.media, !textOnly {
@@ -120,7 +120,7 @@ public final class LlamaEmbedder: Embedder {
             if media == nil {
                 llama_free(context)
                 llama_model_free(model)
-                throw WorkerError.failed("can't load \(mediaFile.path)")
+                throw WorkerError.failed(LlamaLog.shared.failure("can't load \(mediaFile.path)"))
             }
         }
         self.model = model
@@ -224,7 +224,7 @@ public final class LlamaEmbedder: Embedder {
                 for i in 0..<count { try add(token: tokens[i]) }
             } else {
                 guard mtmd_encode_chunk(media, chunk) == 0, let rows = mtmd_get_output_embd(media) else {
-                    throw LlamaError("the encoder failed on \(path)")
+                    throw LlamaError(LlamaLog.shared.failure("the encoder failed on \(path)"))
                 }
                 try add(rows: rows, count: mtmd_input_chunk_get_n_tokens(chunk))
             }
@@ -308,6 +308,7 @@ public final class LlamaEmbedder: Embedder {
 
     /// Drops everything added so far, including an input that failed halfway.
     private func reset() {
+        LlamaLog.shared.clearFailure()
         llama_batch_ext_clear(batch)
         sequences = 0
         tokens = 0
@@ -338,7 +339,7 @@ public final class LlamaEmbedder: Embedder {
     private func run() throws -> [[Float]] {
         defer { reset() }
         let status = llama_process(context, LLAMA_PROCESS_TYPE_ENCODE, batch)
-        guard status == 0 else { throw WorkerError.failed("llama_process failed (\(status))") }
+        guard status == 0 else { throw WorkerError.failed(LlamaLog.shared.failure("llama_process failed (\(status))")) }
         return try (0..<sequences).map { sequence in
             guard let pooled = llama_get_embeddings_seq(context, sequence) else {
                 throw WorkerError.failed("no pooled embedding for input \(sequence)")
@@ -522,11 +523,20 @@ final class LlamaLog: @unchecked Sendable {
     private let lock = NSLock()
     private var file: FileHandle?             // nil: stderr
     private var level = GGML_LOG_LEVEL_INFO   // CONT continues the previous message, at its level
+    private var recent = ""
+
+    func clearFailure() { lock.withLock { recent = "" } }
+
+    func failure(_ fallback: String) -> String {
+        guard (try? Acceleration.selected()) == .nvidiaCUDA else { return fallback }
+        return lock.withLock { Acceleration.cudaFailure(diagnostic: recent, fallback: fallback) }
+    }
 
     func send(to url: URL?) {
         lock.withLock {
             try? file?.close()
             file = nil
+            recent = ""
             guard let url else { return }
             if !FileManager.default.fileExists(atPath: url.path) {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -545,6 +555,7 @@ final class LlamaLog: @unchecked Sendable {
         lock.withLock {
             if level != GGML_LOG_LEVEL_CONT { self.level = level }
             guard self.level.rawValue >= GGML_LOG_LEVEL_WARN.rawValue else { return }
+            recent = String((recent + text).suffix(16_384))
             (file ?? .standardError).write(Data(text.utf8))
         }
     }

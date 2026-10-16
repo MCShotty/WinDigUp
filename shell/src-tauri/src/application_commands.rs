@@ -194,6 +194,12 @@ pub async fn prepare_apps(shell: State<'_, Arc<Shell>>) -> Result<Value, String>
     if !shell.applications.semantic_enabled() { return Err("Enable application purpose matching first.".into()); }
     if !shell.model_ready() { return Err("The selected accelerator is not ready. Check General and Storage.".into()); }
     let _foreground = Foreground::new(&shell);
+    let retry = shell.app_semantic.lock().unwrap()["encoder"] == "unavailable" || shell.search.snapshot()["error"].is_string();
+    if retry {
+        let search = shell.search.clone();
+        tauri::async_runtime::spawn_blocking(move || search.stop()).await.map_err(|error|error.to_string())?;
+        *shell.app_sync.lock().await = None;
+    }
     synchronize(&shell).await?;
     let reply = shell.search.ask(json!({"op":"prewarm"})).await?;
     let state = shell.search.ask(json!({"op":"apps_status"})).await?;

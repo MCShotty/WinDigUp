@@ -16,6 +16,8 @@ normalization, must remain on the selected NVIDIA CUDA device. CPU input prepara
 Record GPU name/UUID, driver and CUDA API versions, native build identity, precision profile, complete model
 revision, installed artifact checksum and Windows version. NVIDIA driver 576.57 or newer is the initial supported
 baseline. End-user acceptance must run without the CUDA Toolkit on PATH.
+Use a Windows installation with no CUDA Toolkit installed for the final self-contained installation gate. The
+validation script clears Toolkit location overrides as well as developer PATH entries; it never supplies a driver.
 
 Run device discovery without weights, then the `accelerator` probe. The latter is a device probe, not evidence of
 model execution. Exercise the full-model reference corpus (multilingual queries, short/long documents, screenshot,
@@ -60,3 +62,8 @@ describe a new worker process with potentially warm filesystem caches, not cold 
 These checks do not by themselves certify low-memory behavior, concurrent indexing/search, idle unloading,
 application embedding scheduling, driver recovery or other accelerator regressions. Record those scenarios and
 device memory measurements separately. Keep the generation matrix marked Not run until physical evidence is reviewed.
+
+Native fixtures cover fatal CUDA helper exits and memory/unsupported-operation diagnostics. They verify that typing
+cannot restart a failed native helper, that an explicit retry may start a new generation, and that old log messages
+cannot classify a later process's failure. Encoder loading during a retry retains the previous error until a vector
+is successfully computed. These are process/protocol fixtures, not evidence of GPU execution or actual low-VRAM recovery.

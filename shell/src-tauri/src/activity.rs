@@ -52,7 +52,12 @@ pub fn snapshot(input: Input) -> Value {
     if catalog["enabled"] == false || catalog["semanticEnabled"] == false { purpose["state"]=json!("disabled"); }
     else if state["model"]["state"] == "failed" { purpose["state"]=json!("unavailable");purpose["message"]=state["model"]["message"].clone(); }
     else if state["model"]["state"] != "ready" { purpose["state"]=json!("preparing"); }
-    let inference_error = if state["model"]["state"] == "failed" { &state["model"]["message"] } else { &runtime["encoder"]["message"] };
+    if helpers["search"]["error"].is_string() && catalog["enabled"] != false && catalog["semanticEnabled"] != false {
+        purpose["state"]=json!("unavailable"); purpose["message"]=helpers["search"]["error"].clone();
+    }
+    let inference_error = if state["model"]["state"] == "failed" { &state["model"]["message"] }
+        else if helpers["search"]["error"].is_string() { &helpers["search"]["error"] }
+        else { &runtime["encoder"]["message"] };
     json!({
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
         "files":{"schemaVersion":1,"phase":phase,"line":state["line"],

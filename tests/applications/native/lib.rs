@@ -137,6 +137,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn fatal_cuda_helpers_remain_stopped_until_explicit_retry() {
+        use std::sync::Mutex;
+        let directory=std::env::temp_dir().join(format!("digup-fatal-cuda-{}",std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let log=directory.join("worker.log");
+        std::fs::write(&log,"previous process: unsupported op\n").unwrap();
+        let events=Arc::new(Mutex::new(Vec::new())); let record=events.clone();
+        let service=SearchService::new(Launch {
+            program:PathBuf::from(if cfg!(windows){"python"}else{"python3"}),
+            args:vec!["-u".into(),"-c".into(),"import sys; sys.stdin.readline(); print('CUDA error: out of memory',file=sys.stderr,flush=True); sys.exit(1)".into()],
+            env:vec![("DIGUP_ACCELERATOR".into(),"nvidia-cuda".into())],log:Some(log.clone()),background:false,
+        },move |event|record.lock().unwrap().push(event));
+        assert!(service.ask(json!({"op":"search"})).await.unwrap_err().contains("insufficient_vram"));
+        let generation=service.generation();
+        let error=service.ask(json!({"op":"search"})).await.unwrap_err();
+        assert!(error.contains("insufficient_vram"),"{error}");
+        assert_eq!(service.generation(),generation,"a keystroke restarted failed CUDA inference");
+        assert_eq!(service.snapshot()["running"],false);
+        assert!(service.snapshot()["error"].as_str().unwrap().contains("insufficient_vram"));
+        service.stop();
+        assert!(service.snapshot()["error"].is_null());
+        assert!(service.ask(json!({"op":"explicit-retry"})).await.is_err());
+        assert_ne!(service.generation(),generation,"explicit retry did not create a new generation");
+        service.stop();
+        // The current process's offset must exclude an older memory failure from its classification.
+        std::fs::write(&log,"previous process: CUDA error: out of memory\n").unwrap();
+        let second=SearchService::new(Launch {
+            program:PathBuf::from(if cfg!(windows){"python"}else{"python3"}),
+            args:vec!["-u".into(),"-c".into(),"import sys; sys.stdin.readline(); print('unsupported operation in CUDA',file=sys.stderr,flush=True); sys.exit(1)".into()],
+            env:vec![("DIGUP_ACCELERATOR".into(),"nvidia-cuda".into())],log:Some(log),background:false,
+        }, |_|{});
+        assert!(second.ask(json!({"op":"search"})).await.is_err());
+        assert!(second.ask(json!({"op":"search"})).await.unwrap_err().contains("unsupported_operation"));
+        second.stop();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn retired_search_process_cannot_publish_over_its_replacement() {
         use std::sync::Mutex;
         let held = Arc::new(AtomicBool::new(false));
