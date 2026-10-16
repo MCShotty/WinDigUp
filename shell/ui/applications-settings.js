@@ -12,9 +12,11 @@ function renderApplications(statusOnly = false) {
   if (!appOptionsPending) {
     document.getElementById("apps-enabled").checked = Boolean(catalog.enabled);
     document.getElementById("apps-semantic").checked = Boolean(catalog.semanticEnabled);
+    document.getElementById("apps-placement").value = catalog.mixedSearch || "smart";
   }
   document.getElementById("apps-enabled").disabled = appOptionsPending;
   document.getElementById("apps-semantic").disabled = appOptionsPending || !catalog.enabled;
+  document.getElementById("apps-placement").disabled = appOptionsPending || !catalog.enabled;
   const issues = Object.values(catalog.sourceErrors || {});
   const complete = typeof semantic.total === "number" && semantic.embedded === semantic.total;
   const prepared = typeof semantic.total === "number" && typeof semantic.embedded === "number"
@@ -178,11 +180,12 @@ function renderApplicationEditor(force = false) {
   if(appSavesPending.has(hit.id))for(const field of form.querySelectorAll("textarea,input,button"))field.disabled=true;
 }
 
-for(const id of ["apps-enabled","apps-semantic"]){
+for(const id of ["apps-enabled","apps-semantic","apps-placement"]){
   document.getElementById(id).onchange=async()=>{
     const enabled=document.getElementById("apps-enabled").checked,semanticEnabled=document.getElementById("apps-semantic").checked;
+    const mixedSearch=document.getElementById("apps-placement").value;
     appOptionsPending=true;renderApplications(true);
-    try{info.applications=await invoke("set_app_options",{enabled,semanticEnabled});}
+    try{info.applications=await invoke("set_app_options",{enabled,semanticEnabled,mixedSearch});}
     catch(error){fail(error?.message||error);}
     finally{appOptionsPending=false;renderApplications();}
   };

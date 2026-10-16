@@ -67,14 +67,42 @@ function closeActivity() {
   activityView.hide(); state.activityOpen = false; document.body.classList.remove("activity-open"); renderSide();
   (activityReturnFocus?.isConnected ? activityReturnFocus : $query).focus();
 }
-const applicationSearch = new ApplicationSearch(() => {
-  state.counts.apps = applicationSearch.total;
-  if (applicationSearch.hits.length || isAppsMode()) state.hasResults = true;
-  const shown = rows();
-  if (!state.navigated || !shown.some(hit => resultKey(hit) === state.selection)) state.selection = shown.length ? resultKey(shown[0]) : null;
-  render();
-  if (debugPending && isAppsMode() && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
-}, 100, () => isAppsMode() ? state.selection : null);
+const applicationSearch = new ApplicationSearch((statusOnly=false) => {
+  if(statusOnly&&!isAppsMode()){renderStatus();return;}
+  state.counts.apps=applicationSearch.total;
+  const old=state.selection,shown=rows();
+  if(shown.length)state.hasResults=true;
+  if(!state.navigated||!shown.some(hit=>resultKey(hit)===state.selection))
+    state.selection=!isAppsMode()&&!state.lexicalReady&&state.filesPending?null:shown.length?resultKey(shown[0]):null;
+  if(isAppsMode()){
+    state.hasResults=true;
+    if(!statusOnly)render();else {
+      const label=$content.querySelector(".app-purpose-state");if(label)label.textContent=applicationSearch.purposeLabel();
+    }
+  }else{
+    // App changes never discard file DOM, thumbnails, or a playing file preview.
+    const scroll=$content.scrollTop,focus=document.activeElement.closest?.(".app-row")?.dataset.resultKey;
+    $content.querySelectorAll(".app-group").forEach(group=>group.remove());
+    const placement=appPlacement();
+    if(placement.before.length)$content.prepend(applicationGroup(placement.before,"Best match · App"));
+    if(placement.after.length)$content.append(applicationGroup(placement.after));
+    for(const node of $content.querySelectorAll("[data-result-key]")){
+      const selected=node.dataset.resultKey===state.selection;node.classList.toggle("selected",selected);node.setAttribute("aria-selected",String(selected));
+    }
+    $content.scrollTop=scroll;
+    if(focus)$content.querySelector(`[data-result-key="${CSS.escape(focus)}"] .app-launch`)?.focus({preventScroll:true});
+    if(old!==state.selection||isApp(selectedHit()))renderSide();
+    const count=$kinds.querySelector('[data-title="Apps"] .number');if(count)count.textContent=String(applicationSearch.total);
+    if(Boolean($kinds.querySelector('[data-title="Apps"]'))!==(Apps.supported&&Apps.enabled))renderBar();
+    renderStatus();
+  }
+  if(debugPending&&isAppsMode()&&(applicationSearch.hits.length||!applicationSearch.catalog.refreshing))report();
+},3,()=>isAppsMode()?state.selection:null);
+function appPlacement(){
+  return Apps.placement(applicationSearch.hits,state.fileWords||[],{appsOnly:isAppsMode(),text:state.text,
+    lexicalReady:state.lexicalReady||Boolean(state.fileError)||!state.info.folders.length,categoryQuery:state.categoryQuery,
+    exactFilenameKnown:state.exactFilenameKnown,exactFilename:state.exactFilename});
+}
 
 // MARK: Searching
 
@@ -88,7 +116,12 @@ function hasQuery() { return Boolean(state.query.trim()) || isAppsMode(); }
 /// filter), all at once. The query's meaning is embedded on every keystroke, so the pause is the whole wait.
 function run() {
   const generation = ++state.generation;
+  SearchTiming.begin(generation);
+  state.exactFilenameKnown=false;state.exactFilename=false;
+  state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;state.finalGeneration=-1;
   clearTimeout(state.timer);
+  cancelAnimationFrame(state.frame);
+  state.refine=null;
   state.navigated = false;
   state.error = null;
   state.fileError = null;
@@ -97,8 +130,11 @@ function run() {
   const mode = Apps.parse(typed, state.filter);
   const code = mode.code;
   const text = mode.text;
-  applicationSearch.limit = mode.mode === "apps" ? 100 : 6;
-  applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"));
+  if((mode.mode==="apps"||!typed||(code&&!text))&&state.filesStarted){
+    state.filesStarted=false;ask({op:"cancel",generation}).catch(()=>{});
+  }
+  applicationSearch.limit = mode.mode === "apps" ? 100 : 3;
+  applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"),mode.mode);
   state.codePhase = null;
   if (mode.mode === "apps") {
     Object.assign(state, { ranked: [], weaker: [], counts: {}, text, hasResults: true, filesPending: false, selection: null });
@@ -110,39 +146,47 @@ function run() {
     render();
     return;
   }
-  ask({ op: "embed_ahead", q: text, code }).catch(() => {});
-  state.filesPending = true;
-  // Results of an earlier query stay until these are in; with none to show, a spinner.
-  renderBar();
-  if (!state.hasResults) renderContent();
-  const filter = FILTERS.find((item) => item.key === state.filter);
-  state.timer = setTimeout(async () => {
+  state.text=text;
+  state.filesPending=true;
+  render();
+  const filter=FILTERS.find(item=>item.key===state.filter);
+  const search=async (meaning,passive=false)=>{
+    state.filesStarted=true;
     try {
-      const all = await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT });
-      const shown = filter && !code
-        ? await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT, kinds: filter.kinds }) : all;
-      if (generation !== state.generation) return;
-      state.filesPending = false;
-      const counts = {};
-      counts.apps = applicationSearch.total;
-      if (code) counts.code = all.strong;
-      else for (const hit of all.hits.slice(0, all.strong)) {
-        const key = FILTER_OF_KIND[hit.kind];
-        counts[key] = (counts[key] || 0) + 1;
-      }
-      Object.assign(state, { counts, text, meaning: shown.meaning, hasResults: true, showWeaker: false,
-                             ranked: shown.hits.slice(0, shown.strong), weaker: shown.hits.slice(shown.strong) });
-      if (!rows().some((hit) => resultKey(hit) === state.selection)) state.selection = rows().length ? resultKey(rows()[0]) : null;
-      render();
-      if (debugPending) report();
-    } catch (error) {
-      if (generation !== state.generation) return;
-      state.filesPending = false;
-      state.error = String(error);
-      state.fileError = String(error);
+      const shown=await SearchTiming.measure(meaning?"file_meaning":"file_words",()=>ask({op:"search",q:text,code,meaning,
+        prefix_last:!meaning,limit:LIMIT,kinds:filter&&!code?filter.kinds:null,facets:!code,generation,passive,phase:meaning?"meaning":"words"}),passive);
+      if(generation!==state.generation||shown.status==="superseded")return;
+      if(!meaning){state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;}
+      if(!meaning&&state.finalGeneration===generation){state.lexicalReady=true;state.fileWords=shown.hits||[];applicationSearch.changed();return;}
+      if(meaning)state.finalGeneration=generation;
+      else {state.lexicalReady=true;state.fileWords=shown.hits||[];state.categoryQuery=shown.category_query===true;}
+      state.filesPending=false;
+      if(meaning&&shown.semantic_error)state.error=shown.semantic_error;
+      const hits=shown.hits||[],strong=shown.strong??hits.length;
+      const counts={apps:applicationSearch.total};
+      if(code)counts.code=strong;
+      else if(shown.facets&&Object.keys(shown.facets).length)for(const [kind,count] of Object.entries(shown.facets)){
+        const key=FILTER_OF_KIND[kind];counts[key]=(counts[key]||0)+count;
+      } else for(const hit of hits.slice(0,strong)){const key=FILTER_OF_KIND[hit.kind];counts[key]=(counts[key]||0)+1;}
+      Object.assign(state,{counts,countScope:shown.count_scope,text,meaning:shown.meaning,hasResults:true,showWeaker:state.navigated&&state.showWeaker,
+        ranked:hits.slice(0,strong),weaker:hits.slice(strong)});
+      const shownRows=rows();
+      if(!state.navigated||!shownRows.some(hit=>resultKey(hit)===state.selection))state.selection=shownRows.length?resultKey(shownRows[0]):null;
+      render();if(debugPending&&meaning)report();
+    }catch(error){
+      if(generation!==state.generation)return;
+      state.filesPending=false;state.lexicalReady=true;
+      if(!state.ranked.length){state.error=String(error);state.fileError=String(error);}
+      if(!state.navigated){const shown=rows();state.selection=shown.length?resultKey(shown[0]):null;}
       render();
     }
-  }, TYPING_PAUSE);
+  };
+  cancelAnimationFrame(state.frame);
+  state.frame=requestAnimationFrame(()=>search(false));
+  state.refine=(passive=false)=>search(true,passive);
+  state.refreshWords=()=>search(false,true);
+  state.timer=setTimeout(()=>search(true),TYPING_PAUSE);
+
 }
 
 function setQuery(text) {
@@ -151,6 +195,7 @@ function setQuery(text) {
 }
 
 function queryChanged() {
+  if(state.composing)return;
   closeBig();
   state.query = $query.value;
   $("clear").hidden = !state.query;
@@ -173,12 +218,13 @@ function setFilter(key) {
 
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
 function rows() {
-  return [...applicationSearch.hits, ...state.ranked, ...(state.showWeaker ? state.weaker : [])];
+  const app=appPlacement();
+  return [...app.before,...state.ranked,...(state.showWeaker?state.weaker:[]),...app.after];
 }
 
 function selectedHit() {
   const shown = rows();
-  return shown.find((hit) => resultKey(hit) === state.selection) ?? shown[0] ?? null;
+  return shown.find((hit) => resultKey(hit) === state.selection) ?? null;
 }
 
 // MARK: Drawing
@@ -215,10 +261,12 @@ function renderBar() {
 /// All · Screenshots 4 · Images 9 · …: what the query found of each kind; a click shows only that kind.
 function chip(title, icon, count, selected, action, number) {
   const button = element("button", "chip" + (selected ? " selected" : ""));
+  button.dataset.title=title;
   if (icon) button.insertAdjacentHTML("beforeend", ICONS[icon]);
   button.append(title);
   if (count != null && state.query.trim()) button.append(element("span", "number", count.toLocaleString()));
   button.title = `${title} (${MOD}${number})`;
+  if(count!=null&&state.countScope==="ranked_candidates")button.title+=" · Counts cover the current matching result set";
   button.setAttribute("aria-pressed", String(selected));
   button.onclick = action;
   return button;
@@ -230,26 +278,28 @@ function renderContent() {
   state.renderedGeneration = state.generation;
   thumbnails.disconnect();
   $content.replaceChildren();
-  if (isAppsMode()) $content.append(applicationGroup());
+  const placement=appPlacement();
+  if (isAppsMode()) $content.append(applicationGroup(placement.before));
   else {
-    if (applicationSearch.hits.length) $content.append(applicationGroup());
+    if(placement.before.length)$content.append(applicationGroup(placement.before,"Best match · App"));
     if (!state.info.folders.length && !isCode()) $content.append(chooseFolders());
     else if (!state.query.trim()) $content.append(home());
     else if (state.codePhase) $content.append(codeHintOrOff());
     else if (state.fileError) $content.append(fileSearchFailure());
-    else if (!state.hasResults || state.filesPending) $content.append(centered(element("div", "spinner")));
+    else if (!state.lexicalReady&&!state.ranked.length) $content.append(centered(element("div", "spinner")));
     else if (!state.ranked.length && !state.weaker.length) $content.append(nothingFound());
     else if (isCode()) $content.append(codeList());
     else $content.append(grid());
+    if(placement.after.length)$content.append(applicationGroup(placement.after));
   }
   $content.scrollTop = scroll;
   if(focusedLaunch) ($content.querySelector(`[data-result-key="${CSS.escape(focusedLaunch)}"] .app-launch`) || $query).focus({preventScroll:true});
 }
 
-function applicationGroup() {
-  const box = element("section", "app-group"); box.setAttribute("aria-label", "Applications");
+function applicationGroup(hits=applicationSearch.hits,title="Apps") {
+  const box = element("section", "app-group"+(isAppsMode()?"":" app-group-mixed")); box.setAttribute("aria-label", "Applications");
   const heading=element("div", "app-group-heading");
-  heading.append(element("h2", "app-group-title", "Apps"));
+  heading.append(element("h2", "app-group-title", title));
   if(isAppsMode()) {
     heading.append(element("span", "app-group-count", `${applicationSearch.total.toLocaleString()} ${state.text ? "matches" : "applications"}`),
       element("span", "app-purpose-state", applicationSearch.purposeLabel()));
@@ -257,7 +307,7 @@ function applicationGroup() {
   box.append(heading);
   if(isAppsMode()) box.append(element("p", "app-catalog-note", "Installed on this PC · Launch through Windows"));
   const list=element("div", "app-results"); list.setAttribute("role","grid"); list.setAttribute("aria-label","Matching applications");
-  for (const hit of applicationSearch.hits) {
+  for (const hit of hits) {
     const row = Apps.row(hit, state.selection === resultKey(hit), select, open, true);
     row.oncontextmenu = (event) => {
       event.preventDefault(); select(resultKey(hit));
@@ -267,11 +317,11 @@ function applicationGroup() {
     list.append(row);
   }
   box.append(list);
-  if (applicationSearch.total > applicationSearch.hits.length) {
+  if (applicationSearch.total > (isAppsMode()?hits.length:appPlacement().before.length+appPlacement().after.length)) {
     const more = element("button", "app-more", isAppsMode() ? "Show more applications" : `Show all ${applicationSearch.total} matching apps…`);
     more.onclick = () => isAppsMode() ? applicationSearch.more() : setFilter("apps"); box.append(more);
   }
-  if(!applicationSearch.hits.length || applicationSearch.error) box.append(element("div", "app-status", applicationSearch.status()));
+  if(!hits.length || applicationSearch.error) box.append(element("div", "app-status", applicationSearch.status()));
   if(isAppsMode()) {
     const manage=element("button","app-manage","Manage apps…"); manage.onclick=()=>invoke("open_settings",{tab:"apps"}).catch(failed); box.append(manage);
     box.append(element("p","app-keyboard-help","↑ ↓ Select · Enter Launch · Ctrl+8 Apps"));
@@ -289,6 +339,7 @@ function grid() {
   return box;
 }
 
+const fileCells=new Map();
 function cells(hits, className) {
   const box = element("div", className);
   for (const hit of hits) box.append(cell(hit));
@@ -298,6 +349,13 @@ function cells(hits, className) {
 /// A result in the grid: its picture in a fixed box (a picture's own shape never sizes the cell), what kind it is,
 /// the page or moment that matched, its name and folder.
 function cell(hit) {
+  const key=resultKey(hit),signature=JSON.stringify(hit);
+  const previous=fileCells.get(key);
+  if(previous?.signature===signature){
+    previous.node.classList.toggle("selected",key===state.selection);
+    const image=previous.node.querySelector("img[data-render]");if(image&&!image.src)thumbnails.observe(image);
+    return previous.node;
+  }
   const item = element("div", "cell" + (resultKey(hit) === state.selection ? " selected" : ""));
   item.dataset.path = hit.path;
   item.dataset.resultKey = resultKey(hit);
@@ -314,6 +372,8 @@ function cell(hit) {
   if (place) picture.append(element("span", "place on-image", place));
   item.append(picture, element("div", "name", "‎" + nameOf(hit.path)), folderLine(folderOf(hit)));
   wire(item, hit);
+  fileCells.set(key,{signature,node:item});
+  if(fileCells.size>240)fileCells.delete(fileCells.keys().next().value);
   return item;
 }
 
@@ -354,6 +414,7 @@ const thumbnails = new IntersectionObserver((entries) => {
     const path = image.closest("[data-path]").dataset.path;
     rendered(path, kind, loc, pixels)
       .then((file) => {
+        if(!image.isConnected)return;
         image.src = fileURL(file);
         image.closest("[data-path]").dataset.thumb = file;   // the picture under the pointer when it's dragged out
       })
@@ -641,9 +702,13 @@ function centered(...children) {
 
 // MARK: The preview pane
 
-let playing = null;   // the audio of the selected result, while it plays
+let playing = null,sideSignature=null;   // the audio of the selected result, while it plays
 
 function renderSide() {
+  const selected=selectedHit();
+  const signature=JSON.stringify([state.activityOpen,state.showsPreview,state.text,selected]);
+  if(signature===sideSignature)return;
+  sideSignature=signature;
   stopPlaying();
   if (state.activityOpen) {
     $side.removeAttribute("aria-live");
@@ -986,7 +1051,7 @@ function renderStatus() {
     const strong = state.ranked.length, weaker = state.weaker.length;
     count = app.caveat || (!state.meaning ? "Words only: meaning search isn't available"
       : `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : ""));
-    if (applicationSearch.hits.length) count = `${applicationSearch.total} apps · ${strong} file ${strong === 1 ? "result" : "results"}`;
+    if (applicationSearch.hits.length) count = `${applicationSearch.total} ${applicationSearch.total===1?"app":"apps"} · ${strong} file ${strong === 1 ? "result" : "results"}`;
   }
   $("count").textContent = count;
   renderUpdate(app.update);
@@ -1206,6 +1271,12 @@ tauri.event.listen("state", ({ payload }) => {
 tauri.event.listen("model", ({ payload }) => {
   if (payload.state === "ready" && !isAppsMode()) ask({ op: "prewarm" }).catch(() => {});
 });
+tauri.event.listen("helper",({payload})=>{
+  if(payload.from==="search"&&payload.event?.event==="search_index"&&payload.event.state==="words_ready"
+    &&!document.hidden&&!isAppsMode()&&state.query.trim())state.refreshWords?.();
+  if(payload.from==="search"&&payload.event?.event==="search_index"&&payload.event.state==="ready"
+    &&!document.hidden&&!isAppsMode()&&state.query.trim())state.refine?.(true);
+});
 
 // The panel handed its search over (Ctrl+O, "Show all…"): this window was already open.
 tauri.event.listen("window-search", ({ payload }) => {
@@ -1252,6 +1323,7 @@ function loadIndexed() {
 async function start() {
   const info = await invoke("window_info");
   state.info = { ...state.info, ...info };
+  Apps.configure(info.applications);
   state.app = info.state || {};
   if (info.search) {
     state.filter = info.search.kind || null;
@@ -1331,3 +1403,10 @@ function report() {
 }
 
 start();
+
+$query.addEventListener("compositionstart",()=>{state.composing=true;clearTimeout(state.timer);cancelAnimationFrame(state.frame);});
+$query.addEventListener("compositionend",()=>{state.composing=false;queryChanged();});
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){clearTimeout(state.timer);cancelAnimationFrame(state.frame);applicationSearch.suspend();ask({op:"cancel",generation:++state.generation}).catch(()=>{});}
+  else if(state.query.trim())run();
+});

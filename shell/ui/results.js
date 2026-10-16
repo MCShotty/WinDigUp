@@ -5,7 +5,26 @@
 
 const tauri = window.__TAURI__;
 const invoke = (command, args) => tauri.core.invoke(command, args);
-const ask = (request) => invoke("ask", { request });
+const ask = async (request) => invoke("ask", { request:{...request,session_id:await SearchTiming.session} });
+// Input-to-render duration is measured here; helper durations have their own monotonic origin.
+const SearchTiming = {
+  session:invoke("search_session").then(value=>Number.isSafeInteger(value)?value:0).catch(()=>0),
+  generation: 0, input: 0, nextId: 0,
+  begin(generation) { this.generation = generation; this.input = performance.now(); },
+  async measure(phase, action, passive=false) {
+    const generation=this.generation,input=this.input,start=performance.now(),requestId=++this.nextId;
+    const reply=await action();const received=performance.now();
+    if(!passive&&reply?.status!=="superseded")requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      if(generation!==this.generation)return;
+      const end=performance.now(),ms=reply?.ms||{};
+      const sample={...ms,phase,generation,requestId,total:end-input,roundtrip:received-start,debounce:start-input,
+        render:end-received,cacheHit:ms.cache_hit===true,semantic:reply?.meaning===true};
+      invoke("record_search_timing",{sample}).catch(()=>{});
+      window.dispatchEvent(new CustomEvent("digup-search-timing",{detail:sample}));
+    }));
+    return reply;
+  },
+};
 const fileURL = (path) => tauri.core.convertFileSrc(path);
 
 const isMac = /Mac/.test(navigator.platform);
@@ -241,7 +260,13 @@ function kindIcon(kind) {
 const renders = new Map();
 function rendered(path, kind, loc, pixels) {
   const key = `${path}|${kind}|${loc}|${pixels}`;
-  if (!renders.has(key)) renders.set(key, ask({ op: "render", path, kind, loc, pixels }).then((reply) => reply.image));
+  if (!renders.has(key)) {
+    const pending=ask({ op: "render", path, kind, loc, pixels }).then(reply=>{
+      if(!reply.image)throw new Error("Preview was superseded");return reply.image;
+    }).catch(error=>{if(renders.get(key)===pending)renders.delete(key);throw error;});
+    renders.set(key,pending);
+    if(renders.size>256)renders.delete(renders.keys().next().value);
+  }
   return renders.get(key);
 }
 

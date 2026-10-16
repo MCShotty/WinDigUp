@@ -41,6 +41,7 @@ const {setup, photo, semantic} = require('./application-fixtures.cjs');
   await page.fill('#query','photo ');
   await page.waitForSelector('.row');
   await page.press('#query','ArrowDown');
+  await page.press('#query','ArrowUp'); // Files are now first; return from the following app to the file.
   assert.match(await page.locator('.row.selected').textContent(),/photos.txt/);
   await page.waitForFunction(()=>document.querySelectorAll('.app-row').length===2);
   assert.match(await page.locator('.row.selected').textContent(),/photos.txt/);
@@ -49,7 +50,7 @@ const {setup, photo, semantic} = require('./application-fixtures.cjs');
   await page.waitForFunction(()=>document.querySelector('.app-row')?.textContent.includes('Application 000'));
   assert.equal(await page.locator('.app-row').count(),6);
   await page.waitForTimeout(200);
-  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='ask').length),0);
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='ask'&&c.args.request.op!=='cancel').length),0,'Apps-only browsing submitted work beyond cancelling the old file search');
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='search_apps'&&c.args.meaning).length),0);
 
   await page.goto(base+'/window.html');
