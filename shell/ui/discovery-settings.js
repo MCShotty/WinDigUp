@@ -59,8 +59,8 @@ const DiscoverySettings = {
     this.el("win-settings-purpose").checked=Boolean(w.semanticEnabled);this.el("win-settings-ordinary").checked=Boolean(w.ordinarySearches);
     this.el("win-settings-purpose").disabled=this.busy||!w.enabled;this.el("win-settings-ordinary").disabled=this.busy||!w.enabled;
     this.el("win-settings-enabled").disabled=this.busy;
-    this.text("win-settings-status",`${this.n(w.count)} destinations · ${!w.semanticEnabled?"Purpose matching off":s.message||(`${this.n(s.embedded)} of ${this.n(s.total)} prepared`)}`);
-    this.el("win-settings-prepare").disabled=this.busy||!w.enabled||!w.semanticEnabled||info.state?.model?.state!=="ready"||(typeof s.total==="number"&&s.embedded===s.total);
+    this.text("win-settings-status",`${this.n(w.count)} destinations · ${!w.semanticEnabled?"Purpose matching off":s.message||(typeof s.total==="number"?`${this.n(s.embedded)} of ${this.n(s.total)} prepared`:"Purpose matching starts when needed")}`);
+    this.el("win-settings-prepare").disabled=this.busy||!w.enabled||!w.semanticEnabled||info.state?.model?.state!=="ready"||(typeof s.total==="number"&&s.embedded===s.total&&s.state!=="unavailable"&&s.encoder!=="unavailable");
     this.el("descriptions-enabled").checked=Boolean(e.options?.enabled);this.el("descriptions-publishers").checked=Boolean(e.options?.publisherPages);
     this.el("descriptions-enabled").disabled=this.busy;this.el("descriptions-publishers").disabled=this.busy;
     this.el("descriptions-refresh").disabled=this.busy||!e.options?.enabled||["inventory","fetching"].includes(ep.state);

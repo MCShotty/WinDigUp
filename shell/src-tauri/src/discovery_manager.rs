@@ -265,7 +265,10 @@ impl Manager {
             }else if metadata.is_file()&&entry.path().extension().is_some_and(|x|x.eq_ignore_ascii_case("exe")){
                 let path=entry.path().to_string_lossy().into_owned();
                 let Ok(info)=fs::file_info(&path)else{skipped+=1;continue};
-                let mut candidate=Candidate{id:format!("exe:{}",applications::digest(&format!("{id}|{}|{path}",info.id().text()))),
+                let parent_path=entry.path().parent().unwrap().to_path_buf();
+                let Ok(parent)=fs::directory_info(&parent_path.to_string_lossy())else{skipped+=1;continue};
+                let identity=format!("{id}|{}|{}|{}|{}",info.serial(),info.id().text(),parent.id().text(),entry.file_name().to_string_lossy());
+                let mut candidate=Candidate{id:format!("exe:{}",applications::digest(&identity)),
                     volume:id.into(),file_id:info.id().text(),path:path.clone(),file_stamp:info.stamp(),..Candidate::default()};
                 let (portable,gui)=fs::pe_info(&entry.path()).unwrap_or((false,false));
                 let (product,publisher,description)=fs::metadata(&path);candidate.name=if product.is_empty(){entry.path().file_stem().unwrap_or_default().to_string_lossy().into_owned()}else{product.clone()};

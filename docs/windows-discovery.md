@@ -120,7 +120,7 @@ one-document background steps and shared query-cache reuse; they do not establis
 
 The Windows workflows build a real disposable GUI fixture and an isolated NTFS VHD. The component test exercises
 real filesystem controls, Unicode names, renames/hard links, standard-user access filtering and component updates.
-The installed-app check additionally verifies portable application dispatch and lifetime outside DigUp's workers.
+The installed-app check additionally verifies portable application dispatch and lifetime outside DigUp's workers through both the NTFS service and unprivileged directory fallback.
 Workflow results must pass on the exact reviewed commit before these checks are reported as successful.
 
 Physical Windows 10/11 page activation, large SSD/HDD inventories, CPU/RAM/I/O measurements and full-model

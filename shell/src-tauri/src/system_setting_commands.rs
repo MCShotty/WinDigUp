@@ -84,7 +84,7 @@ pub async fn prepare_windows_settings(shell:State<'_,Arc<Shell>>)->Result<Value,
     if !shell.windows_settings.semantic_enabled(){return Err("Enable Windows settings purpose matching first.".into())}
     if !shell.model_ready(){return Err("The selected accelerator is not ready. Check General and Storage.".into())}
     let _foreground=Foreground::new(&shell);
-    if shell.settings_semantic.lock().unwrap()["encoder"]=="unavailable"{
+    if shell.settings_semantic.lock().unwrap()["encoder"]=="unavailable"||shell.search.snapshot()["error"].is_string(){
         let search=shell.search.clone();
         tauri::async_runtime::spawn_blocking(move||search.stop()).await.map_err(|e|e.to_string())?;
         *shell.settings_sync.lock().await=None;*shell.app_sync.lock().await=None;

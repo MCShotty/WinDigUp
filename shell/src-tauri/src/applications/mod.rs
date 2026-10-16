@@ -642,10 +642,10 @@ impl Catalog {
             self.refresh();
             error
         })?;
-        if let Target::Shortcut { path } = &record.target {
+        if let Target::Shortcut { path } | Target::Executable { path,.. } = &record.target {
             if !std::path::Path::new(path).is_file() {
                 self.refresh();
-                return Err(AppError::new("unavailable", id, "The application's shortcut is no longer available. Refreshing installed applications."));
+                return Err(AppError::new("unavailable", id, "The application is no longer available. Refreshing applications and selected drives."));
             }
         }
         if !self.launching.lock().unwrap().insert(id.into()) {

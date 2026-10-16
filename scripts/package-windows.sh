@@ -38,6 +38,15 @@ cp Vendor/ffmpeg/bin/ffmpeg.exe Vendor/ffmpeg/bin/ffprobe.exe "$helper/"   # the
 # Installed only on explicit request with UAC. It never inherits a writable user installation as its service path.
 (cd shell/src-tauri && cargo build --release --locked --bin digup-discovery)
 cp shell/src-tauri/target/release/digup-discovery.exe "$helper/"
+"$python" - "$helper/digup-discovery.exe" <<'PYDISCOVERY'
+import re, subprocess, sys
+report=subprocess.run(["dumpbin.exe", "/DEPENDENTS", sys.argv[1]],check=True,capture_output=True,text=True).stdout
+libraries=re.findall(r"^\\s+([\\w.-]+\\.dll)\\s*$",report,re.M|re.I)
+assert libraries, "Discovery component dependency audit returned no imports"
+for name in libraries:
+ assert not re.match(r"(swift|ggml|llama|cudart|cublas|vcruntime|msvcp|WebView2Loader)",name,re.I), "Discovery must run independently: "+name
+print("Discovery component imports:", ", ".join(libraries))
+PYDISCOVERY
 "$python" scripts/package-cuda-runtime.py --helper "$helper"
 mkdir -p "$helper/openvino"
 cp worker/openvino/*.py worker/openvino/requirements.txt "$helper/openvino/"

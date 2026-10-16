@@ -98,11 +98,13 @@ Write-Output `$out;[Console]::Error.WriteLine(`$err);exit `$p.ExitCode
  $afterUpdate=@(Probe 'DigUp Portable Fixture.exe')[-1]
  if ($afterUpdate.expectedId -ne $linked.expectedId) { throw 'Component update discarded stable identities' }
  if (!$ComponentOnly) {
+ foreach($scope in @('ntfs','directory')){
+ if($scope -eq 'directory'){Run-Component @('--uninstall') | Out-Null}
  $settings=Join-Path $work 'settings.json'
  @{setUp=$true;updateChecksOff=$true;applications=@{enabled=$true;semanticEnabled=$false};discovery=@{enabled=$true;volumes=@($volume)};acceleration=@{version=2;backend='openvino-npu'}} |
   ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $settings
  $stdout=Join-Path $work 'ui.json';$stderr=Join-Path $work 'ui-error.txt'
- $arguments='--settings "'+$settings+'" --index "'+(Join-Path $work 'index')+'" --debug-window "apps: DigUp Portable Fixture" --debug-launch --debug-quit'
+ $arguments='--settings "'+$settings+'" --index "'+(Join-Path $work ('index-'+$scope))+'" --debug-window "apps: DigUp Portable Fixture" --debug-launch --debug-quit'
  $app=Start-Process $InstalledApp -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
  if (!$app.WaitForExit(90000)) { throw 'Installed app did not finish portable discovery and launch' }
  $reports=@(Get-Content $stdout | ForEach-Object {try {$_ | ConvertFrom-Json} catch {}})
@@ -113,6 +115,9 @@ Write-Output `$out;[Console]::Error.WriteLine(`$err);exit `$p.ExitCode
  if ($record.cwd.TrimEnd('\') -ne $portableFolder.TrimEnd('\') -and $record.cwd -notlike '*Portable العربية') { throw 'Executable working directory was changed' }
  if ($record.args.Count -ne 1) { throw 'Search text was passed as executable arguments' }
  if (!(Get-Process -Id $launched -ErrorAction SilentlyContinue)) { throw 'Portable application was terminated with DigUp workers' }
+ Write-Host ("PASS: installed portable discovery and detached launch via "+$scope)
+ Stop-Process -Id $launched -ErrorAction SilentlyContinue;$launched=$null;Remove-Item $recordPath -Force
+ }
  }
  Write-Output 'PASS: real installed NTFS service, Unicode records, rename identity, hard links, standard-user permissions, service update, portable app launch and detached lifetime; no model'
 } finally {

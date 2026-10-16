@@ -171,9 +171,9 @@ pub async fn launch_app(
 ) -> Result<Value, AppError> {
     let catalog = shell.applications.clone();
     let id = app_id.clone();
-    tauri::async_runtime::spawn_blocking(move || catalog.launch(&id))
-        .await
-        .map_err(|e| AppError::new("launch_failed", &app_id, e.to_string()))??;
+    let result=tauri::async_runtime::spawn_blocking(move || catalog.launch(&id))
+        .await.map_err(|e| AppError::new("launch_failed", &app_id, e.to_string()))?;
+    if let Err(error)=result{shell.discovery.schedule(false);return Err(error)}
     crate::hide_panel(app);
     Ok(json!({"accepted":true,"appId":app_id}))
 }

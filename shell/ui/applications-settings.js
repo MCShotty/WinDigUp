@@ -29,7 +29,7 @@ function renderApplications(statusOnly = false) {
   document.getElementById("apps-catalog-status").textContent = !catalog.enabled ? "Application discovery off. Your annotations are kept."
     : `${(catalog.count || 0).toLocaleString()} apps available by name${catalog.refreshing ? " · Refreshing Windows catalog…" : " · Launch through Windows"}${issues.length ? ` · Some sources could not refresh: ${issues.join("; ")}` : ""}`;
   document.getElementById("apps-purpose-status").textContent = purpose + (catalog.semanticOverflow ? ` · ${catalog.semanticOverflow.toLocaleString()} further apps available by name; purpose preparation is limited to ${catalog.semanticLimit.toLocaleString()} prioritized apps.` : "");
-  document.getElementById("apps-prepare").disabled = !catalog.enabled || !catalog.semanticEnabled || model.state !== "ready" || complete || appPreparationPending;
+  document.getElementById("apps-prepare").disabled = !catalog.enabled || !catalog.semanticEnabled || model.state !== "ready" || (complete && semantic.state !== "unavailable" && semantic.encoder !== "unavailable") || appPreparationPending;
   document.getElementById("apps-refresh").disabled = !catalog.enabled || Boolean(catalog.refreshing);
   updateAppDraftCount();
   DiscoverySettings.render();

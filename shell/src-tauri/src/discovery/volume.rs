@@ -14,6 +14,7 @@ pub fn error()->String {std::io::Error::last_os_error().to_string()}
     size_high:u32,size_low:u32,links:u32,index_high:u32,index_low:u32,
 }
 impl FileInfo {
+    pub fn serial(&self)->u32{self.serial}
     pub fn links(&self)->u32{self.links}
     pub fn id(&self)->FileId {let mut bytes=[0;16];bytes[..8].copy_from_slice(&(((self.index_high as u64)<<32)|self.index_low as u64).to_le_bytes());FileId(bytes)}
     pub fn stamp(&self)->String{format!("{}:{}:{}:{}:{}",self.serial,self.size_high,self.size_low,self.written[0],self.written[1])}
@@ -217,4 +218,12 @@ pub fn shell_path(path:&str)->Option<String>{
     if unsafe{GetVolumePathNamesForVolumeNameW(wide(volume).as_ptr(),mounts.as_mut_ptr(),mounts.len()as u32,&mut needed)}==0{return None}
     let mount=mounts.split(|c|*c==0).take_while(|s|!s.is_empty()).map(String::from_utf16_lossy).min_by_key(String::len)?;
     Some(format!("{}{}",mount,canonical[end..].trim_start_matches('\\')))
+}
+
+pub fn directory_info(path:&str)->Result<FileInfo,String>{
+    let handle=unsafe{CreateFileW(wide(path).as_ptr(),0,7,std::ptr::null(),3,0x02000000|0x00200000,std::ptr::null_mut())};
+    if handle==INVALID{return Err(error())}let handle=Handle(handle);let mut info=FileInfo::default();
+    if unsafe{GetFileInformationByHandle(handle.0,&mut info)}==0{return Err(error())}
+    if info.attrs&0x10==0||info.attrs&(0x400|0x1000)!=0{return Err("Application directory is redirected or offline.".into())}
+    Ok(info)
 }
