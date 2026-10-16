@@ -72,8 +72,8 @@ const applicationSearch = new ApplicationSearch((statusOnly=false) => {
   state.counts.apps=applicationSearch.total;
   const old=state.selection,shown=rows();
   if(shown.length)state.hasResults=true;
-  if(!state.navigated||!shown.some(hit=>resultKey(hit)===state.selection))
-    state.selection=!isAppsMode()&&!state.lexicalReady&&state.filesPending?null:shown.length?resultKey(shown[0]):null;
+  if(!state.navigated)state.selection=!isAppsMode()&&!state.lexicalReady&&state.filesPending?null:shown.length?resultKey(shown[0]):null;
+  else if(!shown.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
   if(isAppsMode()){
     state.hasResults=true;
     if(!statusOnly)render();else {
@@ -123,6 +123,7 @@ function run() {
   cancelAnimationFrame(state.frame);
   state.refine=null;
   state.navigated = false;
+  state.chosen = null;
   state.error = null;
   state.fileError = null;
   state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = null;
@@ -171,7 +172,8 @@ function run() {
       Object.assign(state,{counts,countScope:shown.count_scope,text,meaning:shown.meaning,hasResults:true,showWeaker:state.navigated&&state.showWeaker,
         ranked:hits.slice(0,strong),weaker:hits.slice(strong)});
       const shownRows=rows();
-      if(!state.navigated||!shownRows.some(hit=>resultKey(hit)===state.selection))state.selection=shownRows.length?resultKey(shownRows[0]):null;
+      if(!state.navigated)state.selection=shownRows.length?resultKey(shownRows[0]):null;
+      else if(!shownRows.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
       render();if(debugPending&&meaning)report();
     }catch(error){
       if(generation!==state.generation)return;
@@ -224,7 +226,8 @@ function rows() {
 
 function selectedHit() {
   const shown = rows();
-  return shown.find((hit) => resultKey(hit) === state.selection) ?? null;
+  const current=shown.find((hit) => resultKey(hit) === state.selection) ?? null;
+  return current&&state.navigated&&state.chosen&&resultKey(state.chosen)===state.selection?state.chosen:current;
 }
 
 // MARK: Drawing
@@ -536,6 +539,7 @@ function wire(item, hit) {
 
 function select(path) {
   state.selection = path;
+  state.chosen = rows().find(hit=>resultKey(hit)===path)??null;
   state.navigated = true;
   for (const item of $content.querySelectorAll("[data-result-key]")) {
     const selected=item.dataset.resultKey === path; item.classList.toggle("selected", selected);item.setAttribute("aria-selected",String(selected));
@@ -562,7 +566,7 @@ function columns() {
 }
 
 function open(hit) {
-  state.selection = resultKey(hit); state.navigated = true;
+  state.selection = resultKey(hit); state.navigated = true;state.chosen=hit;
   return openResult(hit).catch(failed);
 }
 

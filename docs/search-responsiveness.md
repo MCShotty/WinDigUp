@@ -86,6 +86,9 @@ measures the portable conversion/cache-retirement follow-up. Raw reports include
 The larger scales are exploratory; their smaller sample counts do not establish robust performance budgets. Keyword
 roundtrips during refresh had p95 2.0–2.2 ms, with outliers up to **124 ms**. Refreshes took 2.8–6.3 seconds. These
 outliers and real-world corpora still need installed-Windows measurements. No UI, GPU, NPU or model speedup is claimed.
+An [independent repeat](evidence/search-scale-repeat.json) with the published script measured retrieval p95
+42/128/487 ms at the three scales, with refresh-time keyword outliers up to 167 ms. Preserve these outliers when
+assessing foreground responsiveness; the small p95 alone does not establish a consistently instant experience.
 
 Reproduce on Linux after building the release helper:
 
@@ -95,6 +98,10 @@ python3 scripts/benchmark-search-scale.py --helper .build/release/digup --output
 
 Use `--samples 100 100 100` for a longer host run. The fixture creates and removes its own temporary index; it does
 not open the configured user index. Existing file/code schemas, vectors and model fingerprints need no rebuild.
+
+After keyboard/click selection or activation, the chosen launch target (including a PDF page or code line) remains
+fixed through current-query refinements. If that result disappears, selection clears instead of redirecting Enter
+to another result. A new query or explicit selection uses the current results.
 
 ## Recording physical latency
 

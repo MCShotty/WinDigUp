@@ -45,7 +45,8 @@ const state = {
 let debugPending = false;
 const applicationSearch = new ApplicationSearch((statusOnly=false) => {
   const ids = rowIDs();
-  if (!state.navigated || !ids.includes(state.selection)) state.selection = !state.isApps&&!state.lexicalReady&&!state.error?null:ids[0]??null;
+  if (!state.navigated) state.selection = !state.isApps&&!state.lexicalReady&&!state.error?null:ids[0]??null;
+  else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
   if(statusOnly){renderFooter();return;}
   render();
   if (debugPending && state.isApps && (applicationSearch.hits.length || !applicationSearch.catalog.refreshing)) report();
@@ -63,6 +64,7 @@ function queryChanged() {
   cancelAnimationFrame(state.frame);
   state.refine=null;
   state.navigated = false;
+  state.chosen = null;
   state.error = null;
   const typed = $query.value.trim();
   const mode = Apps.parse(typed);
@@ -127,7 +129,8 @@ function show(reply, text, phase) {
   if (!state.navigated) state.showWeaker = false;
   // Follow the top hit until you pick something with the arrow keys.
   const ids = rowIDs();
-  if (!state.navigated || !ids.includes(state.selection)) state.selection = ids[0] ?? null;
+  if (!state.navigated) state.selection = ids[0] ?? null;
+  else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
   render();
 }
 
@@ -151,14 +154,17 @@ function rowIDs() {
 }
 
 function selectedHit() {
-  return [...applicationSearch.hits, ...state.strong, ...state.weaker].find((hit) => resultKey(hit) === state.selection) ?? null;
+  const current=rawSelectedHit();
+  return current&&state.navigated&&state.chosen&&resultKey(state.chosen)===state.selection?state.chosen:current;
 }
+function rawSelectedHit(){return [...applicationSearch.hits,...state.strong,...state.weaker].find(hit=>resultKey(hit)===state.selection)??null;}
 
 function move(step) {
   const ids = rowIDs();
   if (!ids.length) return;
   const index = ids.indexOf(state.selection);
   state.selection = ids[Math.max(0, Math.min(ids.length - 1, (index < 0 ? -1 : index) + step))];
+  state.chosen=rawSelectedHit();
   state.navigated = true;
   render();
 }
@@ -171,7 +177,7 @@ function toggleWeaker() {
 
 function openSelected() {
   const hit = selectedHit();
-  if (hit) state.navigated = true;
+  if (hit){state.navigated = true;state.chosen=hit;}
   if (hit) openResult(hit).catch(failed);
 }
 
@@ -232,7 +238,7 @@ function renderList() {
     if(!hits.length)return section;
     section.append(element("div","group-title",title));
     for(const hit of hits)section.append(Apps.row(hit,state.selection===resultKey(hit),key=>{
-      state.selection=key;state.navigated=true;render();
+      state.selection=key;state.chosen=rawSelectedHit();state.navigated=true;render();
     },hit=>openResult(hit).catch(failed)));
     return section;
   };
@@ -282,6 +288,7 @@ function row(hit) {
   item.append(text);
   item.onclick = () => {
     state.selection = resultKey(hit);
+    state.chosen=hit;
     state.navigated = true;
     render();
   };

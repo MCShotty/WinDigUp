@@ -17,8 +17,9 @@ let browser;
     const catalog=()=>({enabled:true,supported:true,semanticEnabled:true,count:4,revision:'search-fixture',mixedSearch:window.mixed});
     const app=(id,name,reason='prefix')=>({id:`app:${id.repeat(64)}`,resultType:'application',kind:'app',name,reason,
       publisher:'Example Software',description:'A browser for websites and online documents',aliases:[],hidden:false});
-    const file=q=>({path:window.collision?'C:/docs/Firefox.txt':'C:/docs/Project notes.txt',kind:'doc',segment:'chunk',segment_id:1,
-      modified:1,size:50,info:{},excerpt:`Project notes for ${q}`,score:5,keyword_rank:1});
+    const file=(q,meaning)=>({...{path:window.collision?'C:/docs/Firefox.txt':'C:/docs/Project notes.txt',kind:'doc',segment:'chunk',segment_id:1,
+      modified:1,size:50,info:{},excerpt:`Project notes for ${q}`,score:5,keyword_rank:1},
+      ...(q==='page test'?{path:'C:/docs/report.pdf',kind:'pdf',segment:'page',loc:2}:{}),...(meaning?window.replacement||{}:{})});
     window.__TAURI__.core.invoke=async(command,args={})=>{
       if(command==='window_info')return {...await old(command,args),applications:catalog()};
       if(command==='search_apps'){
@@ -39,7 +40,7 @@ let browser;
         window.calls.push({command,args});
         if(args.request.meaning&&window.blockMeaning)await new Promise(resolve=>window.delayed.push(resolve));
         else await new Promise(resolve=>setTimeout(resolve,5));
-        return {hits:[file(args.request.q)],strong:1,meaning:args.request.meaning,generation:args.request.generation,
+        return {hits:[file(args.request.q,args.request.meaning)],strong:1,meaning:args.request.meaning,generation:args.request.generation,
           ms:{queue:1,encode:args.request.meaning?4:0,scoring:1,metadata:1},facets:{doc:1}};
       }
       return old(command,args);
@@ -58,6 +59,18 @@ let browser;
   assert.equal(await page.evaluate(()=>window.savedCell===document.querySelector('.cell')),true,'App progress rebuilt file results');
   assert.equal(await page.evaluate(()=>window.savedPreview===document.querySelector('#side').firstChild),true,'App progress reset the selected preview');
   await page.press('#query','Enter');assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_path').length),1);
+  await page.evaluate(()=>{window.replacement={path:'C:/docs/Other note.txt'};window.releaseMeaning();});
+  await page.waitForFunction(()=>document.querySelector('.cell .name')?.textContent.includes('Other note.txt'));
+  await page.press('#query','Enter');
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_path').length),1,'A delayed replacement redirected Enter to another file');
+  await page.evaluate(()=>{window.replacement=null;window.blockMeaning=true;});
+  await page.fill('#query','page test');await page.waitForSelector('.cell');await page.locator('.cell').click();
+  await page.press('#query','Enter');
+  await page.evaluate(()=>{window.replacement={loc:7};window.releaseMeaning();});
+  await page.waitForFunction(()=>state.meaning===true&&state.ranked[0]?.loc===7);
+  await page.press('#query','Enter');
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_path').at(-1).args.page),2,'A delayed segment update redirected the selected PDF page');
+  await page.evaluate(()=>{window.replacement=null;window.blockMeaning=true;});
   await page.fill('#query','Firefox');await page.waitForFunction(()=>document.querySelector('.app-group-title')?.textContent==='Best match · App');
   assert.ok(await page.evaluate(()=>document.querySelector('.app-row').compareDocumentPosition(document.querySelector('.cell'))&Node.DOCUMENT_POSITION_FOLLOWING));
   await page.evaluate(()=>{window.collision=true;});await page.fill('#query','Firefox ');
@@ -120,6 +133,16 @@ let browser;
   await page.waitForFunction(()=>document.querySelector('.group-title')?.textContent==='Best match · App');
   await page.press('#query','ArrowDown');await page.press('#query','Enter');
   assert.ok(await page.evaluate(()=>window.calls.some(c=>c.command==='open_path')),'Panel keyboard order did not follow visible rows');
+  const opened=await page.evaluate(()=>window.calls.filter(c=>['open_path','launch_app'].includes(c.command)).length);
+  await page.evaluate(()=>{window.replacement={path:'C:/docs/Other note.txt'};window.releaseMeaning();});
+  await page.waitForFunction(()=>state.strong[0]?.path==='C:/docs/Other note.txt');await page.press('#query','Enter');
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>['open_path','launch_app'].includes(c.command)).length),opened,'Panel refinement redirected the chosen target');
+  await page.evaluate(()=>{window.replacement=null;window.blockMeaning=true;});
+  await page.fill('#query','page test');await page.waitForSelector('.row');await page.locator('.row').first().click();
+  await page.press('#query','Enter');
+  await page.evaluate(()=>{window.replacement={loc:7};window.releaseMeaning();});
+  await page.waitForFunction(()=>state.strong[0]?.loc===7);await page.press('#query','Enter');
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_path').at(-1).args.page),2,'Panel refinement changed the selected PDF page');
   assert.deepEqual(errors,[]);
   console.log('PASS: immediate keywords under blocked meaning; exact-app exception, filename/category/ambiguous-name gates, placement modes, purpose suggestions, stable DOM/preview, timing privacy, dark/scaled views and panel ordering');
   await browser.close();
