@@ -12,6 +12,8 @@ impl VolumeStore {
         db.run("CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY,parent TEXT NOT NULL,name TEXT NOT NULL,attrs INTEGER NOT NULL,usn INTEGER NOT NULL,executable INTEGER NOT NULL)",&[])?;
         db.run("CREATE INDEX IF NOT EXISTS executable_nodes ON nodes(executable)",&[])?;
         db.run("CREATE INDEX IF NOT EXISTS parent_nodes ON nodes(parent)",&[])?;
+        db.run("CREATE TABLE IF NOT EXISTS launch_links(file_id TEXT NOT NULL,parent TEXT NOT NULL,name TEXT NOT NULL,identity TEXT NOT NULL,PRIMARY KEY(file_id,parent,name))",&[])?;
+        db.run("CREATE TABLE IF NOT EXISTS pending_renames(file_id TEXT PRIMARY KEY,parent TEXT NOT NULL,name TEXT NOT NULL)",&[])?;
         db.run("PRAGMA user_version=1",&[])?;
         Ok(Self{db})
     }
@@ -29,6 +31,16 @@ impl VolumeStore {
         let result=(||{
             for r in records {
                 let id=r.id.text();let parent=r.parent.text();
+                if deleted&&r.reason&0x1000!=0 {
+                    self.db.run("INSERT INTO pending_renames VALUES(?,?,?) ON CONFLICT(file_id) DO UPDATE SET parent=excluded.parent,name=excluded.name",&[Value::Text(&id),Value::Text(&parent),Value::Text(&r.name)])?;
+                }
+                if deleted&&r.reason&0x2000!=0 {
+                    if let Some(old)=self.db.rows("SELECT parent,name FROM pending_renames WHERE file_id=?",&[Value::Text(&id)])?.first(){
+                        self.db.run("DELETE FROM launch_links WHERE file_id=? AND parent=? AND name=?",&[Value::Text(&id),Value::Text(&parent),Value::Text(&r.name)])?;
+                        self.db.run("UPDATE launch_links SET parent=?,name=? WHERE file_id=? AND parent=? AND name=?",&[Value::Text(&parent),Value::Text(&r.name),Value::Text(&id),Value::Text(&old[0]),Value::Text(&old[1])])?;
+                        self.db.run("DELETE FROM pending_renames WHERE file_id=?",&[Value::Text(&id)])?;
+                    }
+                }
                 if deleted&&r.reason&0x200!=0 {
                     self.db.run("DELETE FROM nodes WHERE id=?",&[Value::Text(&id)])?;
                 }else{
@@ -54,6 +66,14 @@ impl VolumeStore {
         }
         Ok(None)
     }
+    pub fn launch_identity(&self,volume:&str,file:&str,parent:&str,name:&str)->Result<String,String>{
+        if let Some(row)=self.db.rows("SELECT identity FROM launch_links WHERE file_id=? AND parent=? AND name=?",
+            &[Value::Text(file),Value::Text(parent),Value::Text(name)])?.first(){return Ok(row[0].clone())}
+        use sha2::{Digest,Sha256};
+        let identity=format!("exe:{:x}",Sha256::digest(format!("{volume}|{file}|{parent}|{name}").as_bytes()));
+        self.db.run("INSERT INTO launch_links VALUES(?,?,?,?)",&[Value::Text(file),Value::Text(parent),Value::Text(name),Value::Text(&identity)])?;
+        Ok(identity)
+    }
     pub fn executable_ids(&self,after:&str,limit:usize)->Result<Vec<String>,String> {
         Ok(self.db.rows("SELECT id FROM nodes WHERE executable=1 AND id>? ORDER BY id LIMIT ?",
             &[Value::Text(after),Value::Integer(limit.clamp(1,1000)as i64)])?.into_iter().map(|r|r[0].clone()).collect())
@@ -67,6 +87,7 @@ impl CandidateStore {
         let db=Database::open(path,false)?;db.run("PRAGMA journal_mode=WAL",&[])?;
         db.run("CREATE TABLE IF NOT EXISTS candidates(id TEXT PRIMARY KEY,volume TEXT NOT NULL,revision TEXT NOT NULL,record TEXT NOT NULL,classification TEXT NOT NULL,name TEXT NOT NULL)",&[])?;
         db.run("CREATE INDEX IF NOT EXISTS candidates_volume ON candidates(volume)",&[])?;
+        db.run("CREATE TABLE IF NOT EXISTS discovery_meta(volume TEXT PRIMARY KEY,revision TEXT NOT NULL)",&[])?;
         db.run("PRAGMA user_version=1",&[])?;Ok(Self{db})
     }
     pub fn save(&self,record:&Candidate,revision:&str)->Result<(),String> {
@@ -77,6 +98,14 @@ impl CandidateStore {
     pub fn finish(&self,volume:&str,revision:&str)->Result<(),String> {
         self.db.run("DELETE FROM candidates WHERE volume=? AND revision!=?",&[Value::Text(volume),Value::Text(revision)])
     }
+    pub fn revision(&self,volume:&str)->Result<String,String>{
+        Ok(self.db.rows("SELECT revision FROM discovery_meta WHERE volume=?",&[Value::Text(volume)])?.first().map(|r|r[0].clone()).unwrap_or_default())
+    }
+    pub fn set_revision(&self,volume:&str,revision:&str)->Result<(),String>{
+        self.db.run("INSERT INTO discovery_meta VALUES(?,?) ON CONFLICT(volume) DO UPDATE SET revision=excluded.revision",
+            &[Value::Text(volume),Value::Text(revision)])
+    }
+    pub fn read(path:&Path)->Result<Self,String>{Ok(Self{db:Database::open(path,true)?})}
     pub fn get(&self,id:&str)->Result<Option<Candidate>,String> {
         self.db.rows("SELECT record FROM candidates WHERE id=?",&[Value::Text(id)])?.first()
             .map(|r|serde_json::from_str(&r[0]).map_err(|e|e.to_string())).transpose()
@@ -116,6 +145,20 @@ impl CandidateStore {
             assert!(store.path(&id(3).text(),"V:\\",&id(1).text()).unwrap().is_none());
             let mut deleted=record(3,2,"写真.exe",0);deleted.reason=0x200;store.apply(&[deleted],true).unwrap();
             assert!(store.executable_ids("",100).unwrap().is_empty());
+        }
+        let _=std::fs::remove_file(file);
+    }
+    #[test]fn distinct_hard_link_names_and_rename_pairs_preserve_identity(){
+        let file=file();
+        {
+            let store=VolumeStore::open(&file).unwrap();
+            let first=store.launch_identity("v",&id(3).text(),&id(2).text(),"Editor.exe").unwrap();
+            let variant=store.launch_identity("v",&id(3).text(),&id(2).text(),"Helper.exe").unwrap();
+            assert_ne!(first,variant,"Same file and directory do not establish identical launch semantics.");
+            let old=Record{id:id(3),parent:id(2),name:"Editor.exe".into(),usn:10,reason:0x1000,attributes:0};
+            let new=Record{id:id(3),parent:id(4),name:"Renamed.exe".into(),usn:11,reason:0x2000,attributes:0};
+            store.apply(&[old],true).unwrap();store.apply(&[new],true).unwrap();
+            assert_eq!(store.launch_identity("v",&id(3).text(),&id(4).text(),"Renamed.exe").unwrap(),first);
         }
         let _=std::fs::remove_file(file);
     }

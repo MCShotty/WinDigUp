@@ -85,6 +85,7 @@ pub struct Candidate {
     pub classification:String,
     pub reason:String,
     pub file_stamp:String,
+    pub launch_key:String,
 }
 /// Deterministic and deliberately conservative. Uncertain programs remain reviewable.
 pub fn classify(candidate:&Candidate)->(&'static str,&'static str) {

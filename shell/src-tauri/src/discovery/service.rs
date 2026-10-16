@@ -255,7 +255,8 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
                     if handle==(-1isize as HandleValue){continue}
                     let handle=volume::Handle(handle);let mut info=volume::FileInfo::default();
                     if unsafe{volume::GetFileInformationByHandle(handle.0,&mut info)}==0{continue}info.id().text()};
-                let candidate_id=format!("exe:{:x}",Sha256::digest(format!("{id}|{file_id}|{parent_id}").as_bytes()));
+                let link_name=Path::new(&path).file_name().unwrap_or_default().to_string_lossy();
+                let candidate_id=store.launch_identity(id,&file_id,&parent_id,&link_name)?;
                 candidates+=1;
                 pipe.send(&json!({"version":1,"kind":"candidate","candidate":{"id":candidate_id,"volume":id,
                     "fileId":file_id,"path":path,"fileStamp":stamp}}))?;

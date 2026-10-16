@@ -20,7 +20,7 @@ pub fn digest(text: &str) -> String {
 pub fn page_hits(mut hits: Vec<Hit>, visibility: &str, offset: usize, limit: usize) -> (Vec<Hit>, usize, usize) {
     hits.retain(|hit| visibility == "all" || hit.hidden == (visibility == "hidden"));
     let total=hits.len();
-    let offset=offset.min(20_000);
+    let offset=offset.min(1_000_000);
     (hits.into_iter().skip(offset).take(limit.clamp(1,100)).collect(),total,offset)
 }
 
@@ -88,6 +88,7 @@ impl Override {
 pub enum Target {
     Shortcut { path: String },
     Shell { parsing_name: String },
+    Executable { path: String, working_directory: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,6 +103,11 @@ pub struct Record {
     pub keywords: String,
     #[serde(default)]
     pub icon_revision: String,
+    #[serde(default)] pub launch_key: String,
+    #[serde(default)] pub executable: String,
+    #[serde(default)] pub working_directory: String,
+    #[serde(default)] pub arguments: String,
+    #[serde(default)] pub product: String,
     pub source: String,
     pub target: Target,
     pub shortcut: Option<String>,
@@ -120,6 +126,8 @@ impl Record {
             description: String::new(),
             keywords: String::new(),
             icon_revision: String::new(),
+            launch_key: String::new(), executable: String::new(), working_directory: String::new(),
+            arguments: String::new(), product: String::new(),
             source: source.into(),
             target,
             shortcut,
@@ -156,6 +164,7 @@ pub struct Hit {
 struct Cache {
     version: u32,
     sources: BTreeMap<String, Vec<Record>>,
+    #[serde(default)] launch_identities: BTreeMap<String,String>,
 }
 #[derive(Clone, Default)]
 struct Snapshot {
@@ -191,6 +200,9 @@ pub struct Catalog {
     last_refresh: Mutex<Option<Instant>>,
     launching: Mutex<HashSet<String>>,
     icons: Mutex<()>,
+    save_lock: Mutex<()>,
+    discovery_sources: RwLock<HashSet<String>>,
+    discovery_hidden: RwLock<HashSet<String>>,
     notify: Arc<dyn Fn(Value) + Send + Sync>,
 }
 impl Catalog {
@@ -216,6 +228,9 @@ impl Catalog {
             last_refresh: Mutex::new(None),
             launching: Mutex::default(),
             icons: Mutex::new(()),
+            save_lock: Mutex::new(()),
+            discovery_sources: RwLock::new(HashSet::new()),
+            discovery_hidden: RwLock::new(HashSet::new()),
             notify: Arc::new(notify),
         });
         service.rebuild();
@@ -243,6 +258,7 @@ impl Catalog {
             "mixedSearch":options.mixed_search,
             "count":s.hits.iter().filter(|h| !h.hidden).count(), "totalCount":s.hits.len(),
             "hiddenCount":s.hits.iter().filter(|h| h.hidden).count(), "revision":s.revision,
+            "semanticLimit":20000,"semanticOverflow":s.hits.iter().filter(|h|!h.hidden).count().saturating_sub(20000),
             "refreshing":self.refreshing.load(Ordering::Relaxed), "sourceErrors":s.errors})
     }
     pub fn configure(self: &Arc<Self>, options: Options) {
@@ -259,10 +275,23 @@ impl Catalog {
         }
     }
     fn rebuild(&self) {
-        let cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().unwrap();
         let options = self.options.read().unwrap();
+        let discovery=self.discovery_sources.read().unwrap();
+        let hidden_discoveries=self.discovery_hidden.read().unwrap();
+        let priority=|r:&Record|match r.source.as_str(){"userPrograms"=>3,"commonPrograms"=>2,_=>1};
+        let mut input:Vec<Record>=cache.sources.iter().filter(|(source,_)|!source.starts_with("drive:")||discovery.contains(*source))
+            .flat_map(|(_,records)|records.iter().cloned())
+            .filter(|r|!r.identity.strip_prefix("discovered:").is_some_and(|id|hidden_discoveries.contains(id))).collect();
+        input.sort_by(|a,b|priority(b).cmp(&priority(a)).then_with(||a.id.cmp(&b.id)));
         let mut records: BTreeMap<String, Record> = BTreeMap::new();
-        for record in cache.sources.values().flatten() {
+        for original in &input {
+            let mut record=original.clone();
+            if !record.launch_key.is_empty() {
+                let canonical=cache.launch_identities.entry(record.launch_key.clone()).or_insert_with(||record.identity.clone()).clone();
+                record.identity=canonical;record.id=format!("app:{}",digest(&record.identity));
+            }
+            let record=&record;
             if let Some(existing) = records.get_mut(&record.id) {
                 let priority = |r: &Record| match r.source.as_str() {
                     "userPrograms" => 3,
@@ -406,11 +435,27 @@ impl Catalog {
         (self.notify)(self.info());
     }
     fn save(&self) -> std::io::Result<()> {
+        let _writer=self.save_lock.lock().unwrap();
         std::fs::create_dir_all(&self.root)?;
         let tmp = self.root.join("catalog.json.tmp");
         std::fs::write(&tmp, serde_json::to_vec(&*self.cache.lock().unwrap())?)?;
         std::fs::rename(tmp, self.root.join("catalog.json"))
     }
+    pub fn configure_discovery(&self,sources:HashSet<String>,hidden:HashSet<String>){
+        *self.discovery_sources.write().unwrap()=sources;
+        *self.discovery_hidden.write().unwrap()=hidden;self.rebuild();(self.notify)(self.info());
+    }
+    pub fn publish_discovery(&self,source:&str,records:Vec<Record>,complete:bool){
+        if !source.starts_with("drive:"){return}
+        let records=if complete{records}else{
+            let mut merged:BTreeMap<String,Record>=self.cache.lock().unwrap().sources.get(source).into_iter()
+                .flatten().cloned().map(|r|(r.id.clone(),r)).collect();
+            for record in records{merged.insert(record.id.clone(),record);}
+            merged.into_values().collect()
+        };
+        self.publish_source(source,Ok(records));
+    }
+    pub fn records(&self)->Vec<Record>{self.snapshot.read().unwrap().records.values().cloned().collect()}
     pub fn start(self: &Arc<Self>) {
         #[cfg(all(windows, not(test)))]
         windows::watch(Arc::downgrade(self));
@@ -503,6 +548,7 @@ impl Catalog {
             s.hits
                 .iter()
                 .filter(|h| !h.hidden)
+                .take(20_000)
                 .map(|h| {
                     // Identity and user purpose come first, inside the existing 512-token text profile.
                     let text = format!(
@@ -611,6 +657,40 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovered_equivalent_launches_keep_identity_and_prefer_original_shortcut(){
+        let root=std::env::temp_dir().join(format!("digup-discovery-catalog-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        let c=Catalog::new(root.clone(),Options{enabled:true,..Options::default()},|_|{});
+        c.configure_discovery(["drive:test".to_string()].into_iter().collect(),HashSet::new());
+        let mut discovered=Record::new("discovered:exe:one".into(),"Editor".into(),"drive:test",
+            Target::Executable{path:"C:/Editor/Editor.exe".into(),working_directory:"C:/Editor".into()});
+        discovered.launch_key="same-file-arguments-and-directory".into();
+        let original_id=discovered.id.clone();
+        c.publish_discovery("drive:test",vec![discovered],true);
+        let mut shortcut=Record::new("shortcut:original".into(),"Editor".into(),"userPrograms",Target::Shortcut{path:"C:/Start/Editor.lnk".into()});
+        shortcut.launch_key="same-file-arguments-and-directory".into();
+        c.publish_source("userPrograms",Ok(vec![shortcut]));
+        let hits=c.search("Editor",false);assert_eq!(hits.len(),1);assert_eq!(hits[0].id,original_id);
+        assert!(matches!(c.record(&original_id).unwrap().target,Target::Shortcut{..}));
+        c.configure_discovery(HashSet::new(),HashSet::new());
+        assert_eq!(c.search("Editor",false).len(),1,"Disabling discovery retains the registered shortcut.");
+        let _=std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn hidden_discoveries_are_removed_before_old_semantic_results_can_return(){
+        let root=std::env::temp_dir().join(format!("digup-hidden-discovery-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        let c=Catalog::new(root.clone(),Options{enabled:true,..Options::default()},|_|{});
+        c.configure_discovery(["drive:test".to_string()].into_iter().collect(),HashSet::new());
+        let r=Record::new("discovered:exe:one".into(),"Editor".into(),"drive:test",
+            Target::Executable{path:"C:/Editor.exe".into(),working_directory:"C:/".into()});
+        let id=r.id.clone();c.publish_discovery("drive:test",vec![r],true);
+        c.configure_discovery(["drive:test".to_string()].into_iter().collect(),["exe:one".to_string()].into_iter().collect());
+        assert!(c.search("",false).is_empty());
+        assert!(c.merge_semantic(vec![],&[json!({"id":id,"cosine":0.99})]).is_empty());
+        let _=std::fs::remove_dir_all(root);
+    }
     fn record(name: &str, identity: &str) -> Record {
         Record::new(
             identity.into(),

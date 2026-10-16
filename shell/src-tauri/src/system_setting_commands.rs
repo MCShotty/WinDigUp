@@ -9,7 +9,7 @@ async fn synchronize(shell:&Shell)->Result<String,String> {
     if synced.as_ref().is_none_or(|(epoch,stamp)|*epoch!=shell.search.generation()||stamp!=&revision) {
         let mut request=shell.windows_settings.documents();
         let revision=request["revision"].as_str().unwrap_or_default().to_string();
-        request["op"]=json!("settings_catalog");
+        request["op"]=json!("settings_catalog");request["passive"]=json!(true);
         shell.search.ask(request).await?;
         *synced=Some((shell.search.generation(),revision.clone()));return Ok(revision)
     }

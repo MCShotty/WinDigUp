@@ -28,6 +28,7 @@ impl FileInfo {
     fn GetVolumePathNamesForVolumeNameW(volume:*const u16,paths:*mut u16,length:u32,needed:*mut u32)->i32;
     fn GetVolumeInformationW(root:*const u16,name:*mut u16,name_size:u32,serial:*mut u32,max_component:*mut u32,flags:*mut u32,fs:*mut u16,fs_size:u32)->i32;
     fn GetDriveTypeW(root:*const u16)->u32;
+    fn GetFinalPathNameByHandleW(handle:HandleValue,path:*mut u16,length:u32,flags:u32)->u32;
     fn FindFirstFileNameW(file:*const u16,flags:u32,length:*mut u32,name:*mut u16)->HandleValue;
     fn FindNextFileNameW(handle:HandleValue,length:*mut u32,name:*mut u16)->i32;
     fn FindClose(handle:HandleValue)->i32;
@@ -166,4 +167,21 @@ pub fn metadata(path:&str)->(String,String,String){
         String::new()
     };
     (property("ProductName"),property("CompanyName"),property("FileDescription"))
+}
+
+pub fn canonical_path(path:&str)->Option<String>{
+    let handle=unsafe{CreateFileW(wide(path).as_ptr(),0,7,std::ptr::null(),3,0x02000000|0x00200000,std::ptr::null_mut())};
+    if handle==INVALID{return None}
+    let handle=Handle(handle);let mut info=FileInfo::default();
+    if unsafe{GetFileInformationByHandle(handle.0,&mut info)}==0||info.attrs&0x400!=0{return None}
+    let mut result=vec![0u16;32768];
+    let length=unsafe{GetFinalPathNameByHandleW(handle.0,result.as_mut_ptr(),result.len()as u32,1)}as usize;
+    if length==0||length>=result.len(){return None}
+    Some(String::from_utf16_lossy(&result[..length]))
+}
+pub fn launch_key(executable:&str,arguments:&str,working_directory:&str)->Option<String>{
+    if working_directory.is_empty(){return None}
+    let executable=canonical_path(executable)?;let directory=canonical_path(working_directory)?;
+    use sha2::{Digest,Sha256};
+    Some(format!("{:x}",Sha256::digest(format!("{executable}\0{arguments}\0{directory}").as_bytes())))
 }

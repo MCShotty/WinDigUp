@@ -10,6 +10,8 @@ mod accelerator_probe;
 mod activity;
 mod applications;
 mod discovery;
+mod discovery_manager;
+mod discovery_commands;
 mod system_settings;
 mod system_setting_commands;
 mod application_commands;
@@ -60,6 +62,7 @@ const WINDOW: &str = "main";
 /// What the commands and events share.
 struct Shell {
     applications: Arc<applications::Catalog>,
+    discovery: Arc<discovery_manager::Manager>,
     windows_settings: system_settings::Catalog,
     settings_sync: tokio::sync::Mutex<Option<(u64,String)>>,
     settings_semantic: Mutex<Value>,
@@ -672,6 +675,10 @@ fn main() {
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
+            discovery_commands::discovery_status, discovery_commands::discovery_volumes,
+            discovery_commands::refresh_discovery, discovery_commands::set_discovery_options,
+            discovery_commands::discovery_candidates, discovery_commands::set_discovery_candidate,
+            discovery_commands::install_discovery_component,
             system_setting_commands::search_windows_settings, system_setting_commands::open_windows_setting,
             system_setting_commands::set_windows_settings_options, system_setting_commands::windows_settings_status,
             system_setting_commands::cancel_windows_settings_search,
@@ -749,12 +756,16 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
     let application_root = options.index_folder().unwrap_or_else(std::env::temp_dir).join("applications");
-    let applications = applications::Catalog::new(application_root, settings.applications.clone(), {
+    let applications = applications::Catalog::new(application_root.clone(), settings.applications.clone(), {
         let app = handle.clone();
         move |info| { let _ = app.emit("applications", info); }
     });
+    let discovery=discovery_manager::Manager::new(application_root,settings.discovery.clone(),applications.clone(),{
+        let app=handle.clone();move|state|{let _=app.emit("discovery",state);}
+    });
     let shell = Arc::new(Shell {
         applications,
+        discovery,
         windows_settings: system_settings::Catalog::new(settings.windows_settings.clone()),
         settings_sync: tokio::sync::Mutex::new(None),
         settings_semantic: Mutex::new(json!({"state":"preparing","encoder":"stopped"})),
@@ -799,6 +810,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         "backend":shell.settings.lock().unwrap().acceleration.backend,"folders":shell.folders(),"index":shell.index_folder()}));
     application_commands::start(&handle, &shell);
     system_setting_commands::start(&handle, &shell);
+    shell.discovery.start();
     discover_initial_accelerator(&handle, &shell);
     if shell.settings.lock().unwrap().delete_code_index {
         delete_code_index(&shell);
@@ -1003,6 +1015,7 @@ fn delete_code_index(shell: &Arc<Shell>) {
 
 fn stop_helpers(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>();
+    shell.discovery.stop();
     shell.quitting.store(true, Ordering::SeqCst);
     shell.model.stop();
     shell.index.stop();
@@ -1276,6 +1289,9 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     json!({
         "applications": shell.applications.info(),
         "applicationSemantic": shell.app_semantic.lock().unwrap().clone(),
+        "windowsSettings":shell.windows_settings.info(),
+        "windowsSettingsSemantic":shell.settings_semantic.lock().unwrap().clone(),
+        "discovery":shell.discovery.info(),
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,
@@ -1372,6 +1388,8 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             "estimating":shell.estimating.load(Ordering::SeqCst),"state":shell.snapshot(),
             "indexHelper":shell.index.snapshot(),"searchHelper":shell.search.snapshot(),
             "applications":shell.applications.info(),"applicationSemantic":shell.app_semantic.lock().unwrap().clone(),
+            "windowsSettings":shell.windows_settings.info(),"windowsSettingsSemantic":shell.settings_semantic.lock().unwrap().clone(),
+            "discovery":shell.discovery.info(),
             "searchTimings":shell.diagnostics.search_timings(),
             "recent":shell.diagnostics.recent()});
         let mut text = serde_json::to_string_pretty(&report).unwrap_or_default();
@@ -1413,6 +1431,7 @@ fn storage(shell: &Shell) -> Value {
         "indexBytes": size("index.sqlite"),
         "codeBytes": size("code.sqlite"),
         "applicationsBytes": size("applications.sqlite"),
+        "windowsSettingsBytes":size("windows-settings.sqlite"),
         "models": models.map(|folder| folder.display().to_string()),
     })
 }
