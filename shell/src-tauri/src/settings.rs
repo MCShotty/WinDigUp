@@ -10,6 +10,8 @@ use std::path::Path;
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub applications: crate::applications::Options,
+    pub windows_settings: crate::system_settings::Options,
+    pub discovery: crate::discovery::Options,
     pub acceleration: crate::acceleration::Acceleration,
     /// The folders searched and kept indexed.
     pub folders: Vec<String>,

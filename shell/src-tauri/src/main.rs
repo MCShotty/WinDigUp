@@ -10,6 +10,8 @@ mod accelerator_probe;
 mod activity;
 mod applications;
 mod discovery;
+mod system_settings;
+mod system_setting_commands;
 mod application_commands;
 mod clipboard;
 mod diagnostics;
@@ -58,6 +60,9 @@ const WINDOW: &str = "main";
 /// What the commands and events share.
 struct Shell {
     applications: Arc<applications::Catalog>,
+    windows_settings: system_settings::Catalog,
+    settings_sync: tokio::sync::Mutex<Option<(u64,String)>>,
+    settings_semantic: Mutex<Value>,
     app_sync: tokio::sync::Mutex<Option<(u64, String)>>,
     app_semantic: Mutex<Value>,
     app_foreground: AtomicUsize,
@@ -320,6 +325,7 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     };
     json!({
         "applicationsSupported": applications::Catalog::supported(),
+        "windowsSettings": shell.windows_settings.info(),
         "offered": offered.iter().map(|folder| folder.display().to_string()).collect::<Vec<_>>(),
         "chosen": shell.folders(),
         "skipped": shell.settings.lock().unwrap().skipped.clone(),
@@ -537,6 +543,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "search": search.map(|(query, kind)| json!({"query": query, "kind": kind})),
         "hasCode": !shell.code_folders().is_empty(),
         "applications":shell.applications.info(),
+        "windowsSettings":shell.windows_settings.info(),
         "debugQuery": shell.options.debug_window,
         "debugSettings": shell.options.debug_settings,
         "debugCopy": shell.options.debug_copy,
@@ -665,6 +672,9 @@ fn main() {
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
+            system_setting_commands::search_windows_settings, system_setting_commands::open_windows_setting,
+            system_setting_commands::set_windows_settings_options, system_setting_commands::windows_settings_status,
+            system_setting_commands::cancel_windows_settings_search,
             search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps, indexing_diagnostics
         ])
         .build(tauri::generate_context!())
@@ -745,6 +755,9 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     });
     let shell = Arc::new(Shell {
         applications,
+        windows_settings: system_settings::Catalog::new(settings.windows_settings.clone()),
+        settings_sync: tokio::sync::Mutex::new(None),
+        settings_semantic: Mutex::new(json!({"state":"preparing","encoder":"stopped"})),
         app_sync: tokio::sync::Mutex::new(None),
         app_semantic: Mutex::new(json!({"state":"preparing","total":0,"embedded":0})),
         app_foreground: AtomicUsize::new(0),
@@ -785,6 +798,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     shell.diagnostics.record("shell", json!({"event":"startup","build":env!("DIGUP_BUILD"),
         "backend":shell.settings.lock().unwrap().acceleration.backend,"folders":shell.folders(),"index":shell.index_folder()}));
     application_commands::start(&handle, &shell);
+    system_setting_commands::start(&handle, &shell);
     discover_initial_accelerator(&handle, &shell);
     if shell.settings.lock().unwrap().delete_code_index {
         delete_code_index(&shell);
@@ -1973,6 +1987,11 @@ fn search_event(app: &AppHandle, event: Value) {
         let updated = state.clone();
         drop(state);
         let _ = app.emit("applications-progress", updated);
+        let mut settings_state=shell.settings_semantic.lock().unwrap();
+        settings_state["encoder"]=event["state"].clone();
+        settings_state["state"]=json!(if event["state"]=="unavailable"{"unavailable"}else{"preparing"});
+        if event["state"]=="unavailable"{settings_state["message"]=event["error"].clone();}
+        let _=app.emit("windows-settings-progress",settings_state.clone());
     }
     if cfg!(debug_assertions) {
         println!("search: {event}");
