@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ -x Vendor/ffmpeg/bin/ffmpeg.exe ]] || { echo "no Vendor/ffmpeg/bin/ffmpeg.exe: run scripts/build-ffmpeg.sh in MSYS2" >&2; exit 1; }
-TAURI_CLI=2.12.2
+tauri_runner="$PWD/scripts/tauri-cli.sh"
 
 test -f Vendor/llama/lib/ggml-cuda.dll || { echo "CUDA backend missing: run the pinned CUDA/Vulkan build first" >&2; exit 1; }
 python=python3
@@ -58,6 +58,6 @@ python3 -c '' 2> /dev/null || python=python
 rm -rf shell/src-tauri/target/release/bundle/nsis
 # The helper folder goes in as the installer's resources here only: Tauri checks resources on every build.
 resources='{"helper/":"helper/","THIRD-PARTY-NOTICES.txt":"THIRD-PARTY-NOTICES.txt"}'
-(cd shell/src-tauri && npx --yes "@tauri-apps/cli@$TAURI_CLI" build --bundles nsis \
+(cd shell/src-tauri && bash "$tauri_runner" build --bundles nsis \
   --config "{\"bundle\":{\"resources\":$resources$signing}}")
 ls -la shell/src-tauri/target/release/bundle/nsis/
