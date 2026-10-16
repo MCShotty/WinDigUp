@@ -8,13 +8,14 @@ pub struct Diagnostics {
     runtime: Mutex<Value>,
     writer: Mutex<()>,
     significant: Mutex<VecDeque<Value>>,
+    searches: Mutex<VecDeque<Value>>,
 }
 
 pub fn now() -> f64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64() }
 
 impl Diagnostics {
     pub fn new(directory: &Path) -> Self {
-        Self { path: directory.join("indexing.jsonl"), recent: Mutex::default(), runtime: Mutex::new(json!({})), writer: Mutex::new(()), significant: Mutex::default() }
+        Self { path: directory.join("indexing.jsonl"), recent: Mutex::default(), runtime: Mutex::new(json!({})), writer: Mutex::new(()), significant: Mutex::default(), searches: Mutex::default() }
     }
 
     pub fn record(&self, source: &str, event: Value) {
@@ -30,10 +31,14 @@ impl Diagnostics {
                 runtime["applicationState"] = state;
             }
             if source == "search" && event["event"] == "encoder" {
-                let message = if event["state"] == "ready" && event["inference_verified"] != true {
+                let message = if matches!(event["state"].as_str(),Some("ready" | "starting")) && event["inference_verified"] != true {
                     runtime["encoder"]["message"].clone()
                 } else { event["error"].clone() };
                 runtime["encoder"] = json!({"state":event["state"],"updatedAt":time,"message":message});
+            }
+            if source == "search" && event["event"] == "search_index" {
+                important=event["state"]=="unavailable";
+                runtime["searchIndex"]=event.clone();
             }
             let verified = event["execution_policy"] == "accelerator-only"
                 && event["device"].as_str().is_some_and(|device| !device.is_empty())
@@ -42,7 +47,7 @@ impl Diagnostics {
                     || (source == "search" && event["event"] == "encoder" && event["state"] == "ready" && event["inference_verified"] == true));
             if verified {
                 runtime["verified"] = json!({"device":event["device"],"executionPolicy":"accelerator-only","at":time,"source":source});
-                for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"] {
+                for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity", "model", "revision", "runtime", "dtype", "dim"] {
                     if let Some(value) = event.get(key) { runtime["verified"][key] = value.clone(); }
                 }
             }
@@ -75,6 +80,31 @@ impl Diagnostics {
     /// In-memory evidence survives ring-buffer eviction; no logs or helper requests.
     pub fn runtime(&self) -> Value { self.runtime.lock().unwrap().clone() }
 
+    /// Strictly bounded numeric evidence. Never retain a query, path, hit, or frontend-provided metadata.
+    pub fn record_search(&self, view: &str, sample: &Value) -> Result<(), String> {
+        let phase = sample["phase"].as_str().unwrap_or_default();
+        if !["app_names","app_purpose","file_words","file_meaning"].contains(&phase) {
+            return Err("Unknown search timing phase".into());
+        }
+        if sample["total"].as_f64().is_none_or(|value| !value.is_finite() || value < 0.0 || value > 86_400_000.0) {
+            return Err("Missing or invalid total search duration".into());
+        }
+        let mut clean = json!({"schemaVersion":1,"capturedAt":now(),"view":view,"phase":phase,
+            "timingOrigin":"ui_input",
+            "generation":sample["generation"].as_u64().unwrap_or(0),"requestId":sample["requestId"].as_u64().unwrap_or(0)});
+        for key in ["total", "roundtrip", "debounce", "render", "queue", "helper_total", "helper_startup", "model_load", "encode", "search", "scoring", "keywords", "metadata", "vector_load", "retrieval_queue", "transport"] {
+            if let Some(value) = sample[key].as_f64().filter(|v| v.is_finite() && *v >= 0.0 && *v <= 86_400_000.0) { clean[key] = json!(value); }
+        }
+        clean["cacheHit"] = json!(sample["cacheHit"] == true);
+        clean["semantic"] = json!(sample["semantic"] == true);
+        let mut history = self.searches.lock().unwrap();
+        if history.len() == 200 { history.pop_front(); }
+        history.push_back(clean.clone());
+        self.runtime.lock().unwrap()["lastSearch"] = clean;
+        Ok(())
+    }
+    pub fn search_timings(&self) -> Value { json!(self.searches.lock().unwrap().iter().cloned().collect::<Vec<_>>()) }
+
     pub fn significant(&self) -> Value {
         json!(self.significant.lock().unwrap().iter().rev().cloned().collect::<Vec<_>>())
     }
@@ -96,6 +126,20 @@ pub fn tail(path: &Path, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn search_timing_history_is_bounded_numeric_and_in_memory() {
+        let dir=std::env::temp_dir().join("digup-search-timings-absent");
+        let d=Diagnostics::new(&dir);
+        for n in 0..250 {
+            d.record_search("window",&json!({"phase":"file_words","generation":n,"total":12.5,
+                "encode":-1,"metadata":3,"q":"private query","path":"C:/private.txt"})).unwrap();
+        }
+        let samples=d.search_timings();assert_eq!(samples.as_array().unwrap().len(),200);
+        assert!(samples[0].get("q").is_none());assert!(samples[0].get("path").is_none());assert!(samples[0].get("encode").is_none());
+        assert_eq!(d.runtime()["lastSearch"]["total"],12.5);
+        assert!(d.record_search("window",&json!({"phase":"unknown"})).is_err());
+        assert!(!dir.join("indexing.jsonl").exists());
+    }
     #[test]
     fn bounds_reports_and_keeps_worker_errors() {
         let dir = std::env::temp_dir().join(format!("digup-diagnostics-{}", std::process::id()));

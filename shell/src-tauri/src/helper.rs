@@ -120,6 +120,7 @@ pub struct SearchService {
     generation: Arc<AtomicU64>,
     on_event: EventSink,
     failure: Arc<Mutex<Option<String>>>,
+    sessions: Arc<Mutex<HashMap<String, (u64, std::time::Instant)>>>,
 }
 
 struct Searching {
@@ -153,6 +154,21 @@ fn cuda_failure(log: Option<&std::path::Path>, offset: u64) -> String {
 }
 
 impl SearchService {
+    /// Native lexical app matching can supersede pending purpose work without contacting the helper.
+    pub fn advance_session(&self, session:&str, generation:u64) {
+        let mut sessions=self.sessions.lock().unwrap();
+        if !sessions.contains_key(session) && sessions.len()>=64 {
+            if let Some(oldest)=sessions.iter().min_by_key(|(_,(_,at))|*at).map(|(key,_)|key.clone()) { sessions.remove(&oldest); }
+        }
+        let entry=sessions.entry(session.to_string()).or_insert((generation,std::time::Instant::now()));
+        entry.0=entry.0.max(generation);entry.1=std::time::Instant::now();
+    }
+    fn current_request(&self, request:&Value) -> bool {
+        match (request["session"].as_str(),request["generation"].as_u64()) {
+            (Some(session),Some(generation))=>self.sessions.lock().unwrap().get(session).is_some_and(|(newest,_)|*newest==generation),
+            _=>true,
+        }
+    }
     pub fn snapshot(&self) -> Value {
         match self.running.try_lock() {
             Ok(running) => match running.as_ref() {
@@ -175,6 +191,7 @@ impl SearchService {
             generation: Arc::new(AtomicU64::new(0)),
             on_event: Arc::new(on_event),
             failure: Arc::default(),
+            sessions: Arc::default(),
         }
     }
 
@@ -203,16 +220,22 @@ impl SearchService {
 
     /// Sends a request and waits for its reply.
     pub async fn ask(&self, mut request: Value) -> Result<Value, String> {
+        if let (Some(session),Some(generation))=(request["session"].as_str(),request["generation"].as_u64()) { self.advance_session(session,generation); }
+        if !self.current_request(&request) { return Ok(json!({"status":"superseded","generation":request["generation"]})); }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         request["id"] = json!(id);
         let service = self.clone();
         // A large catalog can fill a busy helper's pipe. Never block Tauri's async executor on its writer/mutex.
+        let sent = std::time::Instant::now();
         let reply = tauri::async_runtime::spawn_blocking(move || service.send(id, &request))
             .await
             .map_err(|error| error.to_string())??;
-        let reply = reply
+        let transport = sent.elapsed().as_secs_f64() * 1000.0;
+        let mut reply = reply
             .await
             .map_err(|_| self.failure.lock().unwrap().clone().unwrap_or_else(|| "DigUp's helper stopped".into()))?;
+        if !reply["ms"].is_object() { reply["ms"] = json!({}); }
+        reply["ms"]["transport"] = json!(transport);
         match reply.get("ok") {
             Some(Value::Bool(false)) => Err(reply["error"]
                 .as_str()
@@ -223,6 +246,9 @@ impl SearchService {
     }
 
     fn send(&self, id: u64, request: &Value) -> Result<oneshot::Receiver<Value>, String> {
+        if !self.current_request(request) {
+            let (sender,receiver)=oneshot::channel();let _=sender.send(json!({"status":"superseded","generation":request["generation"]}));return Ok(receiver);
+        }
         let mut running = self.running.lock().unwrap();
         if let Some(searching) = running.as_mut() {
             let state = searching.child.try_wait();
@@ -275,6 +301,7 @@ impl SearchService {
         let launch = self.launch.lock().unwrap().clone();
         let cuda = launch.env.iter().any(|(key,value)|key == "DIGUP_ACCELERATOR" && value == "nvidia-cuda");
         let log_offset = launch.log.as_ref().and_then(|path|std::fs::metadata(path).ok()).map(|file|file.len()).unwrap_or(0);
+        let spawned_at = std::time::Instant::now();
         let (child, stdin, stdout) = launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
         self.generation.store(number, Ordering::SeqCst);
@@ -284,13 +311,22 @@ impl SearchService {
             (pending.clone(), self.on_event.clone(), self.running.clone());
         let failure = self.failure.clone();
         std::thread::spawn(move || {
+            let mut startup = None;
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                let Ok(mut message) = serde_json::from_str::<Value>(&line) else {
                     continue;
                 };
+                if message["event"] == "ready" {
+                    let elapsed=spawned_at.elapsed().as_secs_f64()*1000.0;startup=Some(elapsed);
+                    message["ms"]=json!({"helper_startup":elapsed});
+                }
                 match message.get("id").and_then(Value::as_u64) {
                     Some(id) => {
+                        if let Some(elapsed)=startup.take() {
+                            if !message["ms"].is_object(){message["ms"]=json!({});}
+                            message["ms"]["helper_startup"]=json!(elapsed);
+                        }
                         if let Some(sender) = replies.lock().unwrap().remove(&id) {
                             let _ = sender.send(message);
                         }
@@ -370,6 +406,14 @@ struct Indexing {
 }
 
 impl IndexService {
+    /// A renewable two-second lease. The reader releases it automatically even if its caller disappears.
+    pub fn foreground(&self) {
+        if let Ok(mut slot) = self.running.try_lock() {
+            if let Some(worker) = slot.as_mut() {
+                let _ = writeln!(worker.stdin, "foreground").and_then(|_| worker.stdin.flush());
+            }
+        }
+    }
     pub fn snapshot(&self) -> Value {
         match self.running.try_lock() {
             Ok(running) => match running.as_ref() {

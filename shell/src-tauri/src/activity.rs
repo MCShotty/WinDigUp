@@ -42,7 +42,8 @@ pub fn snapshot(input: Input) -> Value {
         && semantic["device"].as_str().is_some_and(|s| !s.is_empty());
     let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"] ,
         "backend":semantic["backend"],"device_id":semantic["device_id"],"driver_version":semantic["driver_version"],
-        "runtime_version":semantic["runtime_version"],"precision_profile":semantic["precision_profile"],"build_identity":semantic["build_identity"]}) }
+        "runtime_version":semantic["runtime_version"],"precision_profile":semantic["precision_profile"],"build_identity":semantic["build_identity"],
+        "model":semantic["model"],"revision":semantic["revision"],"runtime":semantic["runtime"],"dtype":semantic["dtype"],"dim":semantic["dim"]}) }
         else { runtime["verified"].clone() };
     let encoder = if helpers["search"]["running"] == false { "stopped" }
         else { runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown") };
@@ -60,6 +61,7 @@ pub fn snapshot(input: Input) -> Value {
         else { &runtime["encoder"]["message"] };
     json!({
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
+        "search":{"schemaVersion":1,"last":runtime["lastSearch"],"index":runtime["searchIndex"]},
         "files":{"schemaVersion":1,"phase":phase,"line":state["line"],
             "searchable":state["searchable"],"knownFiles":state["files"],"pending":state["pending"],"unfinished":state["unfinished"],
             "done":done,"total":total,"entriesChecked":scan["visited"],"candidates":scan["candidates"],

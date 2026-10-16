@@ -106,6 +106,11 @@ mod tests {
         assert_eq!(migrated.folders,vec!["C:/Users/Zoë/Documents"]); assert!(migrated.index_hours_on);
         assert_eq!(migrated.applications.overrides["app:one"].aliases,vec!["写真"]);
         assert!(migrated.applications.overrides["app:one"].hidden);
+        assert_eq!(migrated.applications.mixed_search,crate::applications::MixedSearch::Smart);
+        let mut changed=migrated.clone();changed.applications.mixed_search=crate::applications::MixedSearch::AppsOnly;
+        changed.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).applications.mixed_search,crate::applications::MixedSearch::AppsOnly);
+        assert_eq!(Settings::load(&path).applications.overrides["app:one"].aliases,vec!["写真"]);
         let once=std::fs::read(&path).unwrap();
         let again=Settings::load(&path); assert_eq!(again.acceleration.version,2);
         assert_eq!(std::fs::read(&path).unwrap(),once);
