@@ -89,7 +89,7 @@ impl Manager {
             let mut cache:Option<Cache>=None;let mut inventory:Vec<Package>=vec![];
             let mut last_inventory=Instant::now();
             let mut applied=String::new();let mut checked=0u64;let mut errors=BTreeMap::<String,String>::new();
-            let mut inventory_error:Option<String>=None;
+            let mut inventory_error:Option<String>=None;let mut clear_failed=false;let mut cleared=false;
             let mut work=HashSet::new();let mut disabled_epoch=0u64;
             let(tx,rx)=std::sync::mpsc::sync_channel::<(Package,bool,u64)>(4);
             let jobs=Arc::new(Mutex::new(rx));
@@ -123,10 +123,13 @@ impl Manager {
                 }
                 let clear=manager.clear.swap(false,Ordering::SeqCst);
                 if clear{
-                    disabled_epoch+=1;work.clear();inventory.clear();checked=0;errors.clear();inventory_error=None;
-                    if let Some(db)=&cache{let _=db.clear();}
-                    manager.apps.enrich(BTreeMap::new());applied.clear();
+                    clear_failed=false;cleared=false;disabled_epoch+=1;work.clear();inventory.clear();checked=0;errors.clear();inventory_error=None;
+                    if let Some(db)=&cache{if let Err(error)=db.clear(){
+                        clear_failed=true;manager.update(json!({"version":1,"state":"unavailable","message":format!("Saved descriptions could not be cleared: {error}. Close other readers and try Turn off and clear again."),"enriched":0}));continue;
+                    }}
+                    cleared=true;manager.apps.enrich(BTreeMap::new());applied.clear();
                 }
+                if clear_failed{continue}
                 while let Ok((package,result,epoch))=done_rx.try_recv(){
                     work.remove(&Cache::key(&package));
                     if epoch!=disabled_epoch{continue}
@@ -175,7 +178,7 @@ impl Manager {
                 }
                 let requested=manager.wake.swap(false,Ordering::SeqCst);
                 if !options.enabled{
-                    manager.update(json!({"version":1,"state":"disabled","cachedDescriptionsAvailable":true,"enriched":manager.apps.enriched_count(),
+                    manager.update(json!({"version":1,"state":"disabled","cachedDescriptionsAvailable":true,"cleared":cleared,"enriched":manager.apps.enriched_count(),
                         "productsTotal":inventory.len(),"productsChecked":checked,"failedProducts":errors.len(),"message":inventory_error.clone().or_else(||errors.values().next().cloned())}));
                     continue;
                 }

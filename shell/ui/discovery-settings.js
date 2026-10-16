@@ -6,7 +6,7 @@ const DiscoverySettings = {
   start(){
     if(this.started)return;this.started=true;
     for(const [event,key] of [["discovery","discovery"],["app-enrichment","enrichment"],["windows-settings","windowsSettings"],["windows-settings-progress","windowsSettingsSemantic"]])
-      tauri.event.listen(event,({payload})=>{info[key]=payload;this.render();});
+      tauri.event.listen(event,({payload})=>{info[key]=payload;if(key==="enrichment"&&payload.progress?.cleared)this.text("source-message","Saved descriptions cleared. Your aliases and purpose notes are kept.");this.render();});
     for(const id of ["drive-enabled","drive-paused"])this.el(id).onchange=()=>this.edit();
     this.el("drive-save").onclick=()=>this.save();
     this.el("drive-revert").onclick=()=>{this.dirty=false;this.draft=null;this.render();};
@@ -90,7 +90,7 @@ const DiscoverySettings = {
   },
   async action(command,args,key){
     if(this.busy)return;this.busy=true;this.render();this.text("source-message",command==="install_discovery_component"?"Windows will request administrator permission. Directory fallback is available without installation.":"Working…");
-    try{info[key]=await invoke(command,args);this.text("source-message",command==="clear_app_descriptions"?"Online fetching disabled and saved descriptions cleared. Your aliases and purpose notes are kept.":"Done.");}
+    try{info[key]=await invoke(command,args);this.text("source-message",command==="clear_app_descriptions"?"Online fetching disabled. Clearing saved descriptions…":"Done.");}
     catch(error){this.text("source-message",error?.message||String(error));}
     finally{this.busy=false;this.render();}
   },

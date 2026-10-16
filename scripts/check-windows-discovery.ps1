@@ -119,7 +119,8 @@ Write-Output `$out;[Console]::Error.WriteLine(`$err);exit `$p.ExitCode
  Stop-Process -Id $launched -ErrorAction SilentlyContinue;$launched=$null;Remove-Item $recordPath -Force
  }
  }
- Write-Output 'PASS: real installed NTFS service, Unicode records, rename identity, hard links, standard-user permissions, service update, portable app launch and detached lifetime; no model'
+ if($ComponentOnly){Write-Output 'PASS: real NTFS service, Unicode records, rename identity, hard links, standard-user permissions and component update; no model; installed UI launch is a separate check'}
+ else{Write-Output 'PASS: installed NTFS service and directory fallback, standard-user permissions, portable app launch and detached lifetime; no model'}
 } finally {
  if ($app -and !$app.HasExited) { Stop-Process -Id $app.Id -ErrorAction SilentlyContinue }
  if ($launched) { Stop-Process -Id $launched -ErrorAction SilentlyContinue }
