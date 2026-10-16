@@ -182,6 +182,7 @@ impl Manager {
                         "productsTotal":inventory.len(),"productsChecked":checked,"failedProducts":errors.len(),"message":inventory_error.clone().or_else(||errors.values().next().cloned())}));
                     continue;
                 }
+                cleared=false;
                 if !manager.quiet()||!manager.apps.enabled(){continue}
                 if last_inventory.elapsed()>Duration::from_secs(86400)||requested{
                     manager.update(json!({"version":1,"state":"inventory","enriched":manager.apps.enriched_count(),"productsTotal":null}));
