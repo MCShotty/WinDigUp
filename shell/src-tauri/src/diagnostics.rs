@@ -20,7 +20,7 @@ impl Diagnostics {
 
     pub fn record(&self, source: &str, event: Value) {
         let time = now();
-        let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress" | "inference_activity"));
+        let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress" | "inference_activity" | "panel_timing"));
         if event["event"] == "file" && matches!(event["state"].as_str(), Some("failed" | "error")) { important = true; }
         {
             let mut runtime = self.runtime.lock().unwrap();
@@ -231,5 +231,27 @@ mod tests {
         d.record("index",json!({"event":"file","state":"failed","path":"broken.pdf","note":"cannot decode PDF"}));
         for n in 0..120 {d.record("index",json!({"event":"file","state":"done","path":format!("ok-{n}.txt")}));}
         assert_eq!(d.significant()[0]["event"]["note"],"cannot decode PDF");
+    }
+}
+
+#[cfg(test)]
+mod panel_timing_tests {
+    use super::*;
+    #[test]
+    fn opening_metrics_do_not_displace_errors_from_activity() {
+        let root = std::env::temp_dir().join(format!("digup-panel-metrics-{}-{}",
+            std::process::id(), now().to_bits()));
+        std::fs::create_dir_all(&root).unwrap();
+        let diagnostics = Diagnostics::new(&root);
+        diagnostics.record("index", json!({"event":"error","message":"Fixture indexing failure"}));
+        for request in 0..200 {
+            diagnostics.record("panel", json!({"event":"panel_timing","requestId":request,"showToFocusMs":12.5}));
+        }
+        let significant = diagnostics.significant();
+        assert_eq!(significant.as_array().unwrap().len(), 1);
+        assert_eq!(significant[0]["event"]["message"], "Fixture indexing failure");
+        assert_eq!(diagnostics.recent().as_array().unwrap().len(), 100);
+        assert_eq!(diagnostics.recent()[99]["event"]["showToFocusMs"], 12.5);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

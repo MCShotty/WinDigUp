@@ -496,6 +496,7 @@ fn reveal(app: AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn hide_panel(app: AppHandle) {
+    app.state::<Arc<Shell>>().panel_shown.lock().unwrap().take();
     if let Some(panel) = panel_window(&app) {
         let _ = panel.emit("panel-hidden", ());
         let _ = panel.hide();
@@ -547,12 +548,18 @@ fn refresh_panel_appearance(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn panel_ready(shell: State<'_, Arc<Shell>>, request_id: usize) {
-    let mut shown = shell.panel_shown.lock().unwrap();
-    if shown.as_ref().is_some_and(|(id, _)| *id == request_id) {
-        let (_, started) = shown.take().unwrap();
-        shell.diagnostics.record("panel", json!({"event":"focused","requestId":request_id,
-            "showToFocusMs":started.elapsed().as_secs_f64()*1000.0}));
+async fn panel_ready(shell: State<'_, Arc<Shell>>, request_id: usize) {
+    let sample = {
+        let mut shown = shell.panel_shown.lock().unwrap();
+        if shown.as_ref().is_some_and(|(id, _)| *id == request_id) {
+            let (_, started) = shown.take().unwrap();
+            Some(json!({"event":"panel_timing","requestId":request_id,
+                "showToFocusMs":started.elapsed().as_secs_f64()*1000.0}))
+        } else { None }
+    };
+    if let Some(sample) = sample {
+        let shell = Arc::clone(&shell);
+        let _ = tauri::async_runtime::spawn_blocking(move || shell.diagnostics.record("panel", sample)).await;
     }
 }
 

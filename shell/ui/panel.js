@@ -698,7 +698,7 @@ tauri.event.listen("panel-shown", ({payload}) => {
   $query.select();
   invoke("panel_config").then(reply => { acceptConfig(reply); scheduleFit(); }).catch(() => {});
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (payload?.requestId && document.activeElement === $query)
+    if (payload?.requestId && !document.hidden && document.hasFocus() && document.activeElement === $query)
       invoke("panel_ready", {requestId: payload.requestId}).catch(() => {});
   }));
   if($query.value.trim()&&!applicationSearch.active)queryChanged();

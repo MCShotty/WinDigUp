@@ -68,7 +68,8 @@ narrow windows and large display scaling have dedicated checks. Native screen-re
 mixed-monitor interaction still require installed Windows validation.
 
 panel_ready acknowledges an opening receipt after the query is focused and a render frame is reached.
-The native process records show-to-focus duration using its own monotonic clock. It never subtracts
+The native process records show-to-focus duration using its own monotonic clock. Log writes run off
+the UI command path, and these samples stay out of the Activity event timeline. It never subtracts
 clocks from different processes and does not record query text in this metric. Diagnostic history
 is bounded by the existing diagnostics owner.
 
