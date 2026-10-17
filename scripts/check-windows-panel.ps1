@@ -45,9 +45,15 @@ public static class DigUpPanelProbe {
     }
 }
 '@
+$fixture = Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe'
+$fixtureName = '000 DigUp Panel Fixture ' + [Guid]::NewGuid().ToString('N')
+$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) ($fixtureName + '.lnk')
 $work = Join-Path $env:RUNNER_TEMP ('DigUp Panel ' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $work | Out-Null
 try {
+    $creationArgs = '--create-shortcut "' + $shortcut + '" "' + (Join-Path $work 'unused-launch-record.json') + '" "' + $work + '"'
+    $creation = Start-Process -FilePath $fixture -ArgumentList $creationArgs -Wait -PassThru
+    if ($creation.ExitCode -ne 0) { throw 'Could not register the disposable panel fixture shortcut' }
     foreach ($material in @('automatic','solid')) {
         $settings = Join-Path $work ($material + '.json')
         $configuration = @{setUp=$true;updateChecksOff=$true;appearance='dark';panelMaterial=$material;
@@ -57,7 +63,7 @@ try {
         $stdout = Join-Path $work ($material + '-ui.json')
         $stderr = Join-Path $work ($material + '-error.txt')
         $arguments = '--settings "' + $settings + '" --index "' + (Join-Path $work ($material+'-index')) +
-            '" --debug-query "apps:" --debug-show --debug-quit'
+            '" --debug-query "apps: ' + $fixtureName + '" --debug-show --debug-quit'
         $process = Start-Process -FilePath $InstalledApp -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
         try {
             $deadline = [DateTime]::UtcNow.AddSeconds(60)
@@ -73,7 +79,7 @@ try {
             $reports = @(Get-Content $stdout | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} })
             $report = $reports | Where-Object { $_.panel -and $_.phase -eq 'applications' } | Select-Object -Last 1
             if (-not $report) { throw 'Installed panel did not render app results' }
-            if (@($report.applications).Count -eq 0) { throw 'Installed panel catalog is empty' }
+            if (-not ($report.applications | Where-Object { $_.name -eq $fixtureName })) { throw 'Installed panel did not discover its real fixture shortcut' }
             if ($report.panel.fieldHeight -ne 62 -or $report.panel.height -le 64 -or $report.panel.height -gt 640) {
                 throw 'Installed panel did not use bounded progressive geometry'
             }
@@ -90,5 +96,6 @@ try {
         }
     }
 } finally {
+    Remove-Item $shortcut -Force -ErrorAction SilentlyContinue
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
