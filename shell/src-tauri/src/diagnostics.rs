@@ -36,11 +36,12 @@ impl Diagnostics {
                         if let Some(oldest)=oldest{runtime["inferenceJobs"].as_object_mut().unwrap().remove(&oldest);}
                     }
                     runtime["inferenceJobs"][&key]=row;
-                    if value["phase"]=="limited"{runtime["inferenceCapacity"]=value.clone();}
+                    if value["phase"]=="limited"{runtime["inferenceCapacity"]=value.clone();runtime["inferenceCapacity"]["source"]=json!(source);}
                 }
             }
             if event["fatal"]==true || matches!(event["event"].as_str(),Some("exit"|"stopped"|"ended")) ||
                 event["event"]=="encoder" && matches!(event["state"].as_str(),Some("stopped"|"unavailable")){
+                if runtime["inferenceCapacity"]["source"]==source{runtime["inferenceCapacity"]=Value::Null;}
                 if let Some(jobs)=runtime["inferenceJobs"].as_object_mut(){
                     for value in jobs.values_mut().filter(|v|v["source"]==source){value["phase"]=json!("stopped");value["activeJobs"]=Value::Null;}
                 }

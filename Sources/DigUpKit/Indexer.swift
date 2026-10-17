@@ -245,32 +245,34 @@ public final class Indexer {
             let computed=try item.result.wait()
             guard !skip(item.job) else{return}
             let changed=item.job.files.contains{file in
-                guard let attrs=try? FileManager.default.attributesOfItem(atPath:file.path),
-                    let size=(attrs[.size] as? NSNumber)?.int64Value,
-                    let date=attrs[.modificationDate] as? Date else{return true}
-                return size != file.size || abs(date.timeIntervalSince1970-file.mtime)>0.001
+                guard let current=FileSystem.info(of:file.path),current.isRegular else{return true}
+                return current.size != file.size || abs(current.mtime-file.mtime)>0.001 ||
+                    file.inode != 0 && current.inode != 0 && (current.inode != file.inode || current.device != file.device)
             }
-            let results:[(String,String?)]
-            if changed {
-                for file in item.job.files{try store.requeue(file.id)}
-                results=item.job.files.map{_ in ("pending","source_changed")}
-            }else{
-                replay=computed
-                defer{replay=nil}
-                results=try store.db.transaction {
-                    var stale=false
-                    for file in item.job.files {
-                        var matches=false
-                        try store.db.query("SELECT path,size,mtime,inode,device FROM files WHERE id=?",[.int(file.id)]){row in
-                            matches=row.text(0)==file.path && row.int(1)==file.size &&
-                                abs(row.double(2)-file.mtime)<0.001 &&
-                                UInt64(bitPattern:row.int(3))==file.inode && UInt64(bitPattern:row.int(4))==file.device
-                        }
-                        if !matches{stale=true}
-                    }
-                    if stale{return item.job.files.map{_ in ("pending","source_changed")}}
-                    return try autoreleasepool{try commit(item.prepared)}
+            replay=computed
+            defer{replay=nil}
+            let results:[(String,String?)]=try store.db.transaction {
+                if let computed{
+                    let expected="\(computed.info.vectorSource) | \(options.fingerprint)"
+                    let actual=try store.meta("fingerprint") ?? ""
+                    if actual != expected{throw IndexerError.fingerprintMismatch(index:actual,now:expected)}
                 }
+                var stale=false
+                for file in item.job.files {
+                    var matches=false
+                    try store.db.query("SELECT path,size,mtime,inode,device FROM files WHERE id=?",[.int(file.id)]){row in
+                        matches=row.text(0)==file.path && row.int(1)==file.size &&
+                            abs(row.double(2)-file.mtime)<0.001 &&
+                            UInt64(bitPattern:row.int(3))==file.inode && UInt64(bitPattern:row.int(4))==file.device
+                    }
+                    if !matches{stale=true}
+                }
+                if stale{return item.job.files.map{_ in ("pending","source_changed")}}
+                if changed{
+                    for file in item.job.files{try store.requeue(file.id)}
+                    return item.job.files.map{_ in ("pending","source_changed")}
+                }
+                return try autoreleasepool{try commit(item.prepared)}
             }
             let seconds=ProcessInfo.processInfo.systemUptime-item.started
             if item.modelWasRunning{measure(item.prepared,seconds:seconds)}

@@ -13,6 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Exercise native Windows admission and crash cleanup
+        shell: pwsh
+        run: |
+          cl.exe /nologo /W4 /std:c17 /I Sources/CGPUAdmission/include tests/native/admission-windows.c Sources/CGPUAdmission/lease.c "/Fe:$env:RUNNER_TEMP/admission-windows.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/admission-windows.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Record reference machine and storage fixture
         shell: pwsh
         run: |

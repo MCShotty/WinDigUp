@@ -102,8 +102,8 @@ public final class ApplicationStore {
                     INSERT INTO applications(id,name,text,hash,revision) VALUES(?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET name=excluded.name,text=excluded.text,hash=excluded.hash,
                         revision=excluded.revision,vector=CASE WHEN applications.hash=excluded.hash THEN applications.vector ELSE NULL END,
-                        lease_owner=CASE WHEN applications.hash=excluded.hash AND applications.revision=excluded.revision THEN applications.lease_owner ELSE NULL END,
-                        lease_until=CASE WHEN applications.hash=excluded.hash AND applications.revision=excluded.revision THEN applications.lease_until ELSE 0 END
+                        lease_owner=CASE WHEN applications.hash=excluded.hash THEN applications.lease_owner ELSE NULL END,
+                        lease_until=CASE WHEN applications.hash=excluded.hash THEN applications.lease_until ELSE 0 END
                     """, [.text(document.id), .text(document.name), .text(document.text), .text(document.hash), .text(revision)])
             }
             try db.run("DELETE FROM applications WHERE revision != ?", [.text(revision)])
@@ -131,7 +131,7 @@ public final class ApplicationStore {
         guard !owner.isEmpty,owner.count<=128 else{throw Database.Failure(message:"Invalid application preparation owner")}
         return try db.transaction {
             var document:ApplicationDocument?
-            try db.query("SELECT id,name,text,hash FROM applications WHERE vector IS NULL AND lease_until<=? ORDER BY id LIMIT 1",[.int(now)]){row in
+            try db.query("SELECT id,name,text,hash FROM applications WHERE vector IS NULL AND (lease_until<=? OR lease_until>?) ORDER BY id LIMIT 1",[.int(now),.int(now+180)]){row in
                 document=ApplicationDocument(id:row.text(0)!,name:row.text(1)!,text:row.text(2)!,hash:row.text(3)!)
             }
             guard let document,let fingerprint=self.fingerprint else{return nil}
@@ -146,7 +146,7 @@ public final class ApplicationStore {
     }
     public func save(_ vector:[Float],claim:Claim)throws {
         try db.transaction {
-            guard revision==claim.revision,fingerprint==claim.fingerprint else{return}
+            guard fingerprint==claim.fingerprint else{return}
             var owner:String?
             try db.query("SELECT lease_owner FROM applications WHERE id=? AND hash=?",
                 [.text(claim.document.id),.text(claim.document.hash)]){owner=$0.text(0)}

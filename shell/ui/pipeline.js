@@ -128,7 +128,7 @@ window.PipelineUI = (() => {
       const running = jobs.filter(job => job.phase === "running");
       const waiting = jobs.filter(job => job.phase === "waiting");
       const configured = inference.configured?.jobs || 3;
-      const limit = inference.capacity?.effectiveLimit || configured;
+      const limit = configured;
       text(this.state, jobs.length ? running.length + " running · " + waiting.length + " waiting" : "Worker activity has not been reported.");
       text(this.detail, "Up to " + limit + " concurrent GPU jobs. Foreground search receives the next available slot.");
       this.jobs.replaceChildren();
@@ -139,7 +139,7 @@ window.PipelineUI = (() => {
         this.jobs.append(row);
       }
       this.capacity.hidden = !inference.capacity?.reason;
-      text(this.capacity, (inference.capacity?.reason || "").replace(/^(?:worker error:\s*)?capacity_limited:\s*/i,""));
+      text(this.capacity, (inference.capacity?.backgroundWorkers ? "Background preparation: " + inference.capacity.backgroundWorkers + " workers. " : "") + (inference.capacity?.reason || "").replace(/^(?:worker error:\s*)?capacity_limited:\s*/i,""));
     }
   }
   function summary(discovery = {}) {

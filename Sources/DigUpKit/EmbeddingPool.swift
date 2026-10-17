@@ -35,7 +35,8 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
         changed.lock();defer{changed.unlock()}
         var activity=(slots.first?.model as? any InferenceReporting)?.inferenceActivity
         activity?.residentWorkers=slots.count
-        activity?.effectiveLimit=limit
+        activity?.effectiveLimit=GPUAdmission.configuredMaximum
+        activity?.backgroundWorkers=limit
         activity?.reason=capacityReason
         return activity
     }
@@ -67,9 +68,9 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
                     if String(describing:error).contains("capacity_limited:") {
                         limit=max(1,slots.count+creating)
                         capacityReason=String(describing:error)
-                        var activity=InferenceActivity(configuredLimit:GPUAdmission.configuredMaximum,effectiveLimit:limit,
+                        var activity=InferenceActivity(configuredLimit:GPUAdmission.configuredMaximum,effectiveLimit:GPUAdmission.configuredMaximum,
                             activeJobs:nil,phase:"limited",profile:"multimodal2048")
-                        activity.residentWorkers=slots.count;activity.reason=capacityReason
+                        activity.residentWorkers=slots.count;activity.backgroundWorkers=limit;activity.reason=capacityReason
                         let callback=onCapacity
                         changed.broadcast();changed.unlock()
                         callback?(activity)

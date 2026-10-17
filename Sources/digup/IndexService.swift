@@ -341,7 +341,7 @@ final class IndexService: @unchecked Sendable {
                 case "stop": stopRequested = true
                 case "backfill on": backfillAllowed = true
                 case "backfill off": backfillAllowed = false
-                case "foreground": foregroundUntil = ProcessInfo.processInfo.systemUptime + 2
+                case "foreground": foregroundUntil = ProcessInfo.processInfo.systemUptime + 1
                 default: break
                 }
             }

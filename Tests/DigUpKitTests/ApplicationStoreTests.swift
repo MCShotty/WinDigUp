@@ -83,7 +83,7 @@ struct ApplicationStoreTests {
         try first.prepare(fingerprint:"gpu")
         let claim=try #require(try first.claimPending(owner:"first",now:100))
         #expect(try second.claimPending(owner:"second",now:101)==nil)
-        try first.synchronize([item],revision:"two")
+        try first.synchronize([document("editor",text:"Changed purpose",hash:"b")],revision:"two")
         try first.save(vector(0),claim:claim)
         #expect(try first.counts().embedded==0)
         let current=try #require(try second.claimPending(owner:"second",now:102))
@@ -96,6 +96,20 @@ struct ApplicationStoreTests {
         #expect(try first.counts().embedded==0)
         try second.save(vector(0),claim:replacement)
         #expect(try first.counts().embedded==1)
+    }
+
+    @Test func presentationRevisionsRetainAnInFlightDocumentVector()throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:root)}
+        let store=try ApplicationStore(directory:root)
+        let item=document("editor")
+        try store.synchronize([item],revision:"before-icon-change")
+        try store.prepare(fingerprint:"gpu")
+        let claim=try #require(try store.claimPending(owner:"worker"))
+        try store.synchronize([item],revision:"after-icon-change")
+        try store.save(vector(0),claim:claim)
+        #expect(try store.counts().embedded==1)
+        #expect(try store.pending()==nil)
     }
 
 }

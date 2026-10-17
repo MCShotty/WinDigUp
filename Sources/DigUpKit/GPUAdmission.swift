@@ -7,6 +7,7 @@ public struct InferenceActivity: Codable, Sendable {
     public var effectiveLimit: Int
     public var activeJobs: Int?
     public var residentWorkers: Int?
+    public var backgroundWorkers: Int?
     public var phase: String
     public var profile: String
     public var queueMs: Double = 0
