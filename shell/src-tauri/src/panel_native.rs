@@ -24,21 +24,13 @@ pub fn apply(window: &WebviewWindow, appearance: &Appearance, preference: &Panel
     #[cfg(windows)]
     {
         status.reason = if *preference == PanelMaterial::Solid { "Solid panel selected.".into() }
-            else { windows::material_restriction().unwrap_or_default() };
-        if status.reason.is_empty() { status.material = "acrylic".into(); }
-        if previous != Some(&status) && status.material == "acrylic" {
-            let tint = if dark { (28, 31, 29, 128) } else { (246, 248, 245, 128) };
-            if let Err(error) = windows::apply_acrylic(window, tint) {
-                status.material = "solid".into();
-                status.reason = format!("Windows transparency is unavailable: {error}");
-                windows::clear_acrylic(window);
-            }
-        } else if previous != Some(&status) {
-            windows::clear_acrylic(window);
+            else { windows::material_restriction().unwrap_or_else(||
+                "Windows native transparency cannot follow this panel's rounded shape. Using Solid.".into()) };
+        if previous.map(|value| value.material.as_str()) != Some("solid") {
+            let _ = window_vibrancy::clear_acrylic(window);
+            let _ = window_vibrancy::clear_blur(window);
         }
-        if !windows::shape(window, true) && status.material == "acrylic" {
-            windows::clear_acrylic(window);
-            status.material = "solid".into();
+        if !windows::shape(window, true) {
             status.reason = "Windows rounded clipping is unavailable; using a solid panel.".into();
         }
     }
@@ -69,59 +61,12 @@ mod windows {
     use windows_sys::Win32::{
         Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
         Graphics::Dwm::DwmIsCompositionEnabled,
-        System::{
-            LibraryLoader::{GetModuleHandleW, GetProcAddress},
-            Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
-        },
+        System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
         UI::{
             Accessibility::{HIGHCONTRASTW, HCF_HIGHCONTRASTON},
             WindowsAndMessaging::{GetSystemMetrics, SystemParametersInfoW, SM_REMOTESESSION, SPI_GETHIGHCONTRAST},
         },
     };
-
-    // Accent-policy ABI follows window-vibrancy 0.8.1 (Tauri Programme, MIT/Apache-2.0).
-    #[repr(C)]
-    struct AccentPolicy { state: u32, flags: u32, color: u32, animation: u32 }
-    #[repr(C)]
-    struct CompositionAttribute { attribute: u32, data: *mut c_void, bytes: usize }
-
-    fn accent(window: &WebviewWindow, state: u32, color: (u8, u8, u8, u8)) -> Result<(), String> {
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-        let library: Vec<u16> = "user32.dll\0".encode_utf16().collect();
-        unsafe {
-            let module = GetModuleHandleW(library.as_ptr());
-            if module.is_null() { return Err("Windows window effects are unavailable.".into()) }
-            let procedure = GetProcAddress(module, b"SetWindowCompositionAttribute\0".as_ptr())
-                .ok_or_else(|| "Windows window effects are unavailable.".to_string())?;
-            type SetAccent = unsafe extern "system" fn(*mut c_void, *mut CompositionAttribute) -> i32;
-            let set: SetAccent = std::mem::transmute(procedure);
-            let mut policy = AccentPolicy {
-                state, flags: 0,
-                color: u32::from(color.0) | u32::from(color.1) << 8
-                    | u32::from(color.2) << 16 | u32::from(color.3) << 24,
-                animation: 0,
-            };
-            let mut data = CompositionAttribute {
-                attribute: 0x13, data: &mut policy as *mut _ as *mut c_void,
-                bytes: std::mem::size_of::<AccentPolicy>(),
-            };
-            if set(hwnd.0, &mut data) == 0 {
-                return Err("Windows could not apply the requested panel effect.".into());
-            }
-        }
-        Ok(())
-    }
-
-    pub fn apply_acrylic(window: &WebviewWindow, color: (u8, u8, u8, u8)) -> Result<(), String> {
-        // Windows 11's system backdrop paints outside a custom capsule region.
-        let _ = window_vibrancy::clear_acrylic(window);
-        accent(window, 4, color)
-    }
-
-    pub fn clear_acrylic(window: &WebviewWindow) {
-        let _ = window_vibrancy::clear_acrylic(window);
-        let _ = accent(window, 0, (0, 0, 0, 0));
-    }
 
     pub fn material_restriction() -> Option<String> {
         unsafe {

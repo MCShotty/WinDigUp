@@ -39,13 +39,13 @@ It is saved through the existing isolated atomic settings path. It does not chan
 accelerator settings, annotations, folder or drive choices.
 
 On Windows, the native service checks contrast mode, transparency, composition and Remote Desktop
-before enabling accent-policy Acrylic and checking the native API result. Windows 11's whole-window
-system backdrop paints beyond the capsule region, so this panel does not request it. Clearing the
-effect disables both the system backdrop and the accent policy. A failed request keeps the page solid
-and provides a readable reason. There is no CSS claim that native blur succeeded.
+before reporting native material availability. Both whole-window Acrylic paths painted beyond the
+custom capsule region in the native Windows pixel regression. The shaped panel therefore uses a
+Solid fallback and reports why Automatic could not enable transparency. Both system and accent
+backdrops are cleared. There is no CSS claim that native blur succeeded.
 
 A rounded native window region excludes the invisible corners. Region ownership follows Win32:
-Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates use a reentrancy guard and cache only successful API submissions. Windows omits the native shadow/frame inset, uses a transparent native/WebView background, and reapplies clipping after a material change. Acrylic overlays leave more of the native material visible; the field focus edge stays one pixel.
+Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates use a reentrancy guard and cache only successful API submissions. Windows omits the native shadow/frame inset, uses a transparent native/WebView background, and reapplies clipping after a material change. The field focus edge stays one pixel.
 
 Automatic follows OS restrictions each time the panel opens. Explicit appearance changes update native window themes and refresh
 material on the main thread. Material/status events are separate from model and indexing progress.
