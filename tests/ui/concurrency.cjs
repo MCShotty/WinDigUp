@@ -8,7 +8,7 @@ const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";
   page.on("pageerror",error=>errors.push(error.message));await setup(page);
   await page.addInitScript(()=>{
    const old=window.__TAURI__.core.invoke,now=Date.now()/1000;
-   window.drives={version:2,supported:true,running:true,options:{enabled:true,volumes:["a","b","c"],included:[],hidden:[]},
+   window.drives={version:2,supported:true,running:true,options:{revision:2,enabled:true,volumes:["a","b","c"],included:[],hidden:[]},
     progress:{phase:"enumerating",records:443831,candidates:107857,total:null},
     volumes:[{id:"a",paths:["C:\\"],name:"Local SSD",filesystem:"NTFS",available:true,topology:{known:true,disks:[0],media:"ssd"}},
      {id:"b",paths:["D:\\"],name:"Data partition",filesystem:"NTFS",available:true,topology:{known:true,disks:[0],media:"ssd"}},
@@ -61,6 +61,8 @@ const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";
   assert.equal(await page.evaluate(()=>window.driveRow===document.querySelector('[data-volume-id="a"]')),true);
   assert.equal(await page.locator('#drive-progress-list [data-volume-id="a"] details').getAttribute("open"),"");
   assert.equal(await page.locator("#drive-volumes input").nth(1).isChecked(),false);
+  await page.evaluate(()=>{const stale=structuredClone(drives);stale.options.revision=1;stale.options.enabled=false;emit("discovery",stale);});
+  assert.equal(await page.locator("#drive-enabled").isChecked(),true);
   await page.locator("#drive-revert").click();
   assert.equal(await page.locator("#drive-volumes input").nth(1).isChecked(),true);
   await page.locator("#drive-volumes input").nth(1).uncheck();await page.locator("#drive-save").click();
@@ -78,7 +80,9 @@ const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";
   await page.evaluate(()=>settingsPending());await page.waitForFunction(()=>!document.querySelector("#win-settings-ordinary").disabled);
   await page.locator("#descriptions-refresh").click();await page.locator("#descriptions-clear").click();
   await page.locator("#drive-filter").fill("slow");await page.waitForTimeout(150);
-  await page.locator("#drive-filter").fill("fast");await page.waitForTimeout(600);
+  await page.locator("#drive-filter").fill("fast");
+  assert.equal(await page.locator("#drive-candidates button").first().isDisabled(),true);
+  await page.waitForTimeout(600);
   assert.equal(await page.locator("#drive-candidates strong").innerText(),"fast");
   await page.locator("#drive-candidates button").first().focus();
   await page.evaluate(()=>{window.candidateRow=document.querySelector(".source-candidate");emit("discovery",structuredClone(drives));});
@@ -114,18 +118,38 @@ const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";
    label.style.cssText="position:fixed;bottom:8px;left:8px;z-index:9999;padding:4px 8px;background:#fbfbfb;color:#1d1d1f;border:1px solid #aaa;font:12px sans-serif";
    document.body.append(label);
   });
+  await page.emulateMedia({colorScheme:"dark"});await page.evaluate(()=>AppearanceUI.apply("light"));
+  const checkContrast=async()=>page.evaluate(()=>{
+   const rgba=value=>(value.match(/[\d.]+/g)||[]).map(Number);
+   const over=(front,back)=>front.slice(0,3).map((value,index)=>value*(front[3]??1)+back[index]*(1-(front[3]??1)));
+   const luminance=values=>values.map(value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4;}).reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
+   const failures=[];
+   for(const element of document.querySelectorAll(".pipeline-drive h4,.pipeline-drive p,.pipeline-drive summary,.pipeline-timings dt,.pipeline-timings dd,.pipeline-jobs dt,.pipeline-jobs dd,.pipeline-inference-state,.app-row .app-description")){
+    if(!element.getClientRects().length||!element.textContent.trim())continue;
+    const ancestors=[];for(let parent=element;parent;parent=parent.parentElement)ancestors.unshift(parent);
+    let background=[255,255,255];for(const parent of ancestors)background=over(rgba(getComputedStyle(parent).backgroundColor),background);
+    const style=getComputedStyle(element),color=over(rgba(style.color),background);
+    const lum=[luminance(color),luminance(background)].sort((a,b)=>b-a),ratio=(lum[0]+.05)/(lum[1]+.05);
+    const large=parseFloat(style.fontSize)>=24||parseFloat(style.fontSize)>=18.66&&Number(style.fontWeight)>=700;
+    if(ratio<(large?3:4.5))failures.push({text:element.textContent.slice(0,80),ratio});
+   }
+   return failures;
+  });
+  assert.deepEqual(await checkContrast(),[]);
   const output=process.env.DIGUP_ACTIVITY_SCREENSHOTS;
   if(output)fs.mkdirSync(output,{recursive:true});
   if(output)await page.screenshot({path:output+"/concurrency-activity.png",fullPage:true});
   if(process.env.DIGUP_CONCURRENCY_SCREENSHOT_LOG)console.log("CONCURRENCY_SCREENSHOT_BASE64="+(await page.screenshot({type:"jpeg",quality:55})).toString("base64"));
   await page.emulateMedia({colorScheme:"dark"});await page.evaluate(()=>AppearanceUI.apply("dark"));
   if(output)await page.screenshot({path:output+"/concurrency-dark.png",fullPage:true});
+  assert.deepEqual(await checkContrast(),[]);
+  if(process.env.DIGUP_CONCURRENCY_SCREENSHOT_LOG)console.log("CONCURRENCY_DARK_SCREENSHOT_BASE64="+(await page.screenshot({type:"jpeg",quality:55})).toString("base64"));
   for(const width of [1040,800,540]){
    await page.setViewportSize({width,height:760});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    if(output)await page.screenshot({path:output+"/concurrency-"+width+".png",fullPage:true});
   }
   assert.deepEqual(errors,[]);
-  console.log("PASS: per-drive progress and measurements, unknown counts, stable expanded rows, independent source actions, drafts, stale candidates, GPU cap, appearance, source navigation and window scaling. Native boundary mocked.");
+  console.log("PASS: per-drive progress and measurements, unknown counts, stable expanded rows, independent source actions, drafts, stale candidates, GPU cap, appearance, text contrast, source navigation and window scaling. Native boundary mocked.");
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exit(1);});

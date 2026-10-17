@@ -10,7 +10,7 @@ const DiscoverySettings = {
     this.driveList=new PipelineUI.DriveList(this.el("drive-progress-list"));
     for(const [event,key]of [["discovery","discovery"],["app-enrichment","enrichment"],["windows-settings","windowsSettings"],["windows-settings-progress","windowsSettingsSemantic"]]){
       tauri.event.listen(event,({payload})=>{
-        info[key]=payload;
+        this.accept(key,payload);
         if(key==="enrichment"&&payload.progress?.cleared)this.message("enrichment","Saved descriptions cleared. Your aliases and purpose notes are kept.");
         this.render();
         if(key==="discovery"&&payload.progress?.phase==="watching"&&!this.el("apps").hidden){
@@ -23,7 +23,7 @@ const DiscoverySettings = {
     this.el("drive-revert").onclick=()=>{this.dirty=false;this.draft=null;this.render();};
     this.el("drive-refresh").onclick=()=>this.action("discovery","refresh_discovery",{full:true},"discovery","Drive refresh scheduled.");
     this.el("drive-install").onclick=()=>this.action("discovery","install_discovery_component",{},"discovery","Fast discovery installed. Drive refresh scheduled.");
-    this.el("drive-filter").oninput=()=>{clearTimeout(this.timer);this.timer=setTimeout(()=>this.candidates(),120);};
+    this.el("drive-filter").oninput=()=>{this.generation++;this.currentResults=false;this.renderCandidates();clearTimeout(this.timer);this.timer=setTimeout(()=>this.candidates(),120);};
     this.el("drive-visibility").onchange=()=>this.candidates();
     this.el("drive-more").onclick=()=>this.candidates(true);
     this.el("drive-retry-list").onclick=()=>this.candidates();
@@ -32,6 +32,11 @@ const DiscoverySettings = {
     for(const id of ["descriptions-enabled","descriptions-publishers"])this.el(id).onchange=()=>this.enrichmentOptions();
     this.el("descriptions-refresh").onclick=()=>this.action("enrichment","refresh_app_descriptions",{},"enrichment","Description refresh scheduled.");
     this.el("descriptions-clear").onclick=()=>this.action("enrichment","clear_app_descriptions",{},"enrichment","Online fetching disabled. Clearing saved descriptions.");
+  },
+  accept(key,payload){
+    if(key==="discovery"&&Number.isFinite(payload?.options?.revision)&&Number.isFinite(info.discovery?.options?.revision)&&
+      payload.options.revision<info.discovery.options.revision)return false;
+    info[key]=payload;return true;
   },
   message(source,value){
     this.messages.set(source,value);
@@ -117,7 +122,7 @@ const DiscoverySettings = {
     try{
       const reply=await invoke(command,args);
       if(this.pending.get(source)!==token)return false;
-      info[key]=reply;ok=true;this.message(source,success||"Options saved.");
+      this.accept(key,reply);ok=true;this.message(source,success||"Options saved.");
     }catch(error){this.message(source,error?.message||String(error));}
     finally{
       if(this.pending.get(source)===token){this.pending.delete(source);this.providerDrafts.delete(source);this.render();}
@@ -196,7 +201,7 @@ const DiscoverySettings = {
     if(this.candidatePending.has(id)||!this.currentResults)return;
     this.candidatePending.add(id);this.renderCandidates();
     try{
-      info.discovery=await invoke("set_discovery_candidate",{candidateId:id,action});
+      this.accept("discovery",await invoke("set_discovery_candidate",{candidateId:id,action}));
       this.message("discovery",action==="include"?"Application included.":"Review choice saved.");
       this.render();await this.candidates();
     }catch(error){this.message("discovery",error?.message||String(error));}
