@@ -681,7 +681,7 @@ fn main() {
             enrichment_commands::set_app_enrichment_options, enrichment_commands::refresh_app_descriptions,
             enrichment_commands::clear_app_descriptions, enrichment_commands::open_app_description_source,
             discovery_commands::discovery_status, discovery_commands::discovery_volumes, discovery_commands::refresh_discovery_volumes,
-            discovery_commands::refresh_discovery, discovery_commands::set_discovery_options,
+            discovery_commands::refresh_discovery, discovery_commands::set_discovery_options, discovery_commands::set_drive_choices,
             discovery_commands::discovery_candidates, discovery_commands::set_discovery_candidate,
             discovery_commands::install_discovery_component,
             system_setting_commands::search_windows_settings, system_setting_commands::open_windows_setting,

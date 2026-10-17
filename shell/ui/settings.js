@@ -49,7 +49,8 @@ function showTab(name) {
 }
 
 for (const button of document.querySelectorAll("#tabs button")) button.onclick = () => showTab(button.dataset.tab);
-$("open-drives").onclick = () => showTab("drives");
+$("open-drives").onclick = $("folders-drives").onclick = () => showTab("drives");
+$("drive-file-settings").onclick = () => showTab("folders");
 
 // MARK: General
 

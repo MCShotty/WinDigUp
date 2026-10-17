@@ -26,6 +26,23 @@ pub fn set_discovery_options(shell:State<'_,Arc<Shell>>,mut options:Options)->Re
     shell.discovery.configure(options);Ok(shell.discovery.info())
 }
 #[tauri::command]
+pub fn set_drive_choices(app:AppHandle,shell:State<'_,Arc<Shell>>,mut options:Options,
+    file_choices:Vec<crate::discovery::FileChoice>)->Result<Value,String>{
+    options.validate()?;
+    if !shell.options.roots.is_empty(){return Err("This developer run uses explicit indexing folders.".into())}
+    let inventory=shell.discovery.info();
+    let volumes=inventory["volumes"].as_array().ok_or("Refresh the drive list before saving.")?;
+    let mut current=shell.settings.lock().unwrap();let mut next=current.clone();
+    options.included=current.discovery.included.clone();options.hidden=current.discovery.hidden.clone();
+    options.revision=current.discovery.revision.checked_add(1).ok_or("Discovery settings revision overflowed.")?;
+    let changed=crate::discovery::apply_file_choices(&mut next.folders,volumes,&file_choices)?;
+    next.discovery=options.clone();
+    next.save(&shell.settings_path).map_err(|e|e.to_string())?;*current=next;drop(current);
+    shell.discovery.configure(options);
+    if changed{shell.prune.store(true,std::sync::atomic::Ordering::SeqCst);crate::apply_folders(&app);}
+    let mut reply=shell.discovery.info();reply["folders"]=json!(shell.folders());Ok(reply)
+}
+#[tauri::command]
 pub async fn discovery_candidates(shell:State<'_,Arc<Shell>>,q:Option<String>,classification:Option<String>,
     offset:Option<usize>,limit:Option<usize>,generation:Option<u64>)->Result<Value,String>{
     let q=q.unwrap_or_default();if q.chars().count()>4096{return Err("Candidate query is too long.".into())}
