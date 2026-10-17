@@ -48,7 +48,7 @@ Windows owns a region accepted by SetWindowRgn; rejected regions are released. S
 cached before API submission to prevent repeated resize/region notifications from feeding back.
 The native shadow still belongs to the desktop compositor.
 
-Automatic follows OS restrictions each time the panel opens. Explicit appearance changes refresh
+Automatic follows OS restrictions each time the panel opens. Explicit appearance changes update native window themes and refresh
 material on the main thread. Material/status events are separate from model and indexing progress.
 Other desktops retain a usable solid surface and their existing hotkey/Wayland behaviour.
 

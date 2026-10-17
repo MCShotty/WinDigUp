@@ -52,13 +52,13 @@ let browser;
           return {hits,total:hits.length,generation:args.generation,catalog:{supported:true,enabled:true,revision:"bench"},
             semantic:{state:"ready",encoder:"ready"}};
         }
-        if (command === "ask" && args.request.op === "search" && ["notes","many","images","nothing"].includes(args.request.q)) {
+        if (command === "ask" && args.request.op === "search" && ["notes","many","images","nothing","weaker"].includes(args.request.q)) {
           window.calls.push({command,args});
           if (args.request.meaning && window.blockPurpose) await new Promise(resolve => window.releaseQueries.push(resolve));
           if (window.searchDelay) await new Promise(resolve => setTimeout(resolve,window.searchDelay));
-          const count = args.request.q === "nothing" ? 0 : args.request.q === "notes" ? 3 : 28;
+          const count = args.request.q === "nothing" ? 0 : args.request.q === "notes" ? 3 : args.request.q === "weaker" ? 2 : 28;
           return {hits:Array.from({length:count},(_,i)=>file(i,args.request.q === "images" ? "image" : "doc")),
-            strong:count,meaning:args.request.meaning,generation:args.request.generation};
+            strong:args.request.q === "weaker" ? 0 : count,meaning:args.request.meaning,generation:args.request.generation};
         }
         if (command === "ask" && args.request.op === "text") {
           window.calls.push({command,args}); return {text:"Synthetic preview text with Unicode: 写真 العربية."};
@@ -126,6 +126,11 @@ let browser;
     await page.getByRole("button",{name:"Open full search",exact:true}).click();
     assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.command==="open_window").at(-1).args.selected),
       "file:C:/Documents/Synthetic note 1.txt");
+    await page.fill("#query","weaker"); await page.waitForSelector("#list .weaker");
+    assert.match(await page.locator("#keys").textContent(),/Show weaker matches/);
+    await page.press("#query","Enter"); await page.waitForFunction(()=>document.querySelectorAll("#list .row").length===2);
+    assert.match(await page.locator("#keys").textContent(),/Hide weaker matches/);
+    await page.press("#query","Enter"); assert.equal(await page.locator("#list .row").count(),0);
     await page.fill("#query","many");
     await page.waitForFunction(()=>document.querySelectorAll("#list .row").length===18);
     await page.waitForTimeout(80);

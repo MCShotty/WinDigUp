@@ -1111,11 +1111,28 @@ fn quit(app: &AppHandle) {
 
 // MARK: Windows
 
+fn native_theme(app: &AppHandle) -> Option<tauri::Theme> {
+    let shell = app.state::<Arc<Shell>>();
+    let appearance = shell.settings.lock().unwrap().appearance.clone();
+    match appearance {
+        settings::Appearance::System => None,
+        settings::Appearance::Light => Some(tauri::Theme::Light),
+        settings::Appearance::Dark => Some(tauri::Theme::Dark),
+    }
+}
+
+fn apply_native_appearance(app: &AppHandle) {
+    let theme = native_theme(app);
+    for window in app.webview_windows().values() { let _ = window.set_theme(theme.clone()); }
+    refresh_panel_appearance(app);
+}
+
 /// The panel's window, hidden: fitted to the panel, or filling the screen with the panel centered in it.
 fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
     let (label, page) = if centered { (CENTERED_PANEL, "index.html?fills") } else { (PANEL, "index.html") };
     let panel = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title("DigUp")
+        .theme(native_theme(app))
         .inner_size(PANEL_WIDTH, FIELD_HEIGHT)
         .decorations(false)
         .transparent(true)
@@ -1232,6 +1249,7 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
     let hidden = shell.options.debug_window.is_some() && !shell.options.debug_show;
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("window.html".into()))
         .title("DigUp")
+        .theme(native_theme(app))
         .min_inner_size(820.0, 520.0)
         .visible(false);
     // Where it was left, at the size it had, while that's still on a screen; else sized to this screen, centered.
@@ -1332,6 +1350,7 @@ fn show_setup(app: &AppHandle) -> tauri::Result<()> {
     let hidden = app.state::<Arc<Shell>>().options.debug_setup;
     WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("setup.html".into()))
         .title("Set Up DigUp")
+        .theme(native_theme(app))
         .inner_size(720.0, 600.0)
         .resizable(false)
         .maximizable(false)
@@ -1358,6 +1377,7 @@ fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
     let url = tab.map(|tab| format!("settings.html?tab={tab}")).unwrap_or_else(|| "settings.html".into());
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("DigUp Settings")
+        .theme(native_theme(app))
         .inner_size(660.0, 620.0)
         .resizable(false)
         .maximizable(false)
@@ -1785,7 +1805,7 @@ fn set_appearance(app: AppHandle, shell: State<'_, Arc<Shell>>, appearance: sett
     *current = next; drop(current);
     let value = appearance_value(&shell);
     let _ = app.emit("appearance", &value);
-    later(&app, refresh_panel_appearance);
+    later(&app, apply_native_appearance);
     Ok(value)
 }
 

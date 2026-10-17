@@ -190,6 +190,7 @@ function move(step) {
 }
 
 function toggleWeaker() {
+  state.navigated = true; state.chosen = null;
   state.showWeaker = !state.showWeaker;
   state.selection = WEAKER;
   render();
@@ -575,7 +576,7 @@ function renderFooter() {
   $activity.hidden = !(state.error || state.caveat || state.activityBadge || state.phase === "wordsOnly");
   $activity.classList.toggle("has-problem", Boolean(state.error || state.phase === "wordsOnly"));
   $activity.title = state.error || state.caveat || state.activityLine || "Open Activity and diagnostics";
-  $keys.textContent = isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
+  $keys.textContent = state.selection === WEAKER ? (state.showWeaker ? "↩ Hide weaker matches" : "↩ Show weaker matches") : isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
 }
 
 // MARK: The big preview (Space, as Quick Look on the Mac)
