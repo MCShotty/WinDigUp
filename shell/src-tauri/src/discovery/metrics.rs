@@ -13,7 +13,7 @@ pub struct Stage {
     samples: VecDeque<f64>,
 }
 impl Stage {
-    fn record(&mut self, elapsed: Duration, units: u64) {
+    pub fn record(&mut self, elapsed: Duration, units: u64) {
         let ms = elapsed.as_secs_f64() * 1000.0;
         self.operations += 1;
         self.units += units;

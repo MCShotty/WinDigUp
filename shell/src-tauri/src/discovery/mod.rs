@@ -1,6 +1,7 @@
 //! Executable inventory is separate from the accepted, embeddable application catalog.
 pub mod ntfs;
 pub mod metrics;
+pub mod scheduler;
 #[cfg(test)]mod benchmark;
 pub mod db;
 pub mod store;
