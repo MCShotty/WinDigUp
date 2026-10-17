@@ -14,8 +14,7 @@ public enum IndexerError: Error, CustomStringConvertible {
 
 /// Keeps the index in step with the chosen folders, then extracts and embeds whatever is pending.
 ///
-/// Model work goes to an `Embedder` (made on first use, freed by `closeWorker`). Extraction (ImageIO, Vision, PDFKit,
-/// AVFoundation) runs on a second thread one batch ahead, so reading files and embedding them overlap (see `run`).
+/// Extraction runs one batch ahead. Prepared inference may overlap; only the index owner commits results.
 public final class Indexer {
     public struct SyncSummary: Sendable {
         public var added = 0, changed = 0, moved = 0, removed = 0, unchanged = 0
@@ -220,9 +219,7 @@ public final class Indexer {
     /// Runs `jobs` in order until `shouldStop` (asked between jobs), passing each one's results to `committed` (with
     /// its place in `jobs`). Jobs that `skip` turns down when their turn comes are left out.
     ///
-    /// Two stages overlap: while the model embeds one job, the next one is read and decoded on another thread
-    /// (images scaled, screenshots OCR'd, PDF pages rendered, audio and video decoded). OCR alone is ~0.24 s per Retina
-    /// screenshot, about as long as embedding it.
+    /// Extract ahead, infer within the worker limit, then commit in original order after checking source identity.
     private func process(_ jobs: [Job], shouldStop: () -> Bool,
                          committed: (Int, Job, [(String, String?)], Double) -> Void,
                          skip: (Job) -> Bool = { _ in false }) throws {
@@ -583,7 +580,7 @@ public final class Indexer {
         return prepared
     }
 
-    // MARK: Commit (the indexing thread: the model and the database)
+    // Commit owns the database; its embedder replays prepared results.
 
     private func commit(_ prepared: Prepared) throws -> [(String, String?)] {
         let batch = prepared.batch

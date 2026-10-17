@@ -15,12 +15,8 @@ import WinSDK
 ///   stdout: {"event": "missing" | "pruned" | "sync" | "file" | "rest" | "summary" | "waiting" | "idle" | "error" |
 ///            "exit", ...}; events about the code index say "code": true
 ///
-/// The loop: sync, index what the sync just queued (if it's a few files: new files go first, on any power source),
-/// then the backfill if allowed; then the code index the same way (`--code-root`: its own sync, asked for with
-/// "sync code"; its folders are crawled with the first sync, so their counts show at once); then the rest of long
-/// files (`Indexer.finishLongFiles`) under the same rules. Between batches it yields to stop and to "backfill off" at
-/// once, and to a new sync once indexing has had about as long as the last sync took (`yieldAt`). When it's done it
-/// keeps a warm worker for `linger` seconds (screenshots come in bursts), then exits.
+/// New file/code demand uses bounded turns before optional backfill and long-file completion.
+/// Sync, stop, schedules, and foreground holds are checked between complete inference batches.
 ///
 /// Before the model has downloaded it only syncs (file names are searchable at once), says it's "waiting", and exits.
 /// Folders that aren't there (an unplugged drive) or can't be read are skipped, and what was indexed from them stays.
@@ -119,8 +115,7 @@ final class IndexService: @unchecked Sendable {
             if lock.withLock({ () -> Bool in defer { syncRequested = false }; return syncRequested }) {
                 sync(main, into: &newFiles)
             }
-            // The code folders are crawled with the first sync, so their counts show from the start (a big first pass
-            // of the main index takes hours); their files are read once the main index has nothing waiting, below.
+            // Count code folders immediately; bounded turns keep new code from waiting behind the file backlog.
             if !codeCounted, let code {
                 codeCounted = true
                 if lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
@@ -147,8 +142,7 @@ final class IndexService: @unchecked Sendable {
                 guard run(main, only: nil) else { break }
                 if lock.withLock({ syncRequested }) { continue }
             }
-            // The code index once the main one has nothing waiting: its own sync (code changes come in a while after
-            // they settle), what it just queued at once, the rest under the backfill's rules.
+            // New code bypasses optional backfill; each turn returns to sync and foreground checks.
             if let code {
                 if lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
                     sync(code, into: &newCode)
@@ -185,8 +179,7 @@ final class IndexService: @unchecked Sendable {
         model.close()
     }
 
-    /// New files a run stopped before (a sync or stop came first): kept for the next round. Done: anything still
-    /// pending joins the backfill.
+    /// Keep unfinished new demand across bounded turns, independent of optional backfill.
     private func left(_ part: Part, of files: Set<Int64>) -> Set<Int64> {
         Set((try? part.store.pending(limit:nil,only:files).map(\.id)) ?? [])
     }
@@ -376,8 +369,7 @@ final class IndexService: @unchecked Sendable {
     }
 }
 
-/// One model for both indexes, started when the first file needs it and closed when the helper is done. The indexers
-/// get it as an `Embedder` whose `close` leaves it be, since the other may be using it.
+/// Both indexes share one lazy provider, which can own a GPU worker pool. Only the service closes it.
 final class SharedEmbedder: @unchecked Sendable {
     var beforeInference: (() -> Void)?
     private let make: () throws -> any Embedder
