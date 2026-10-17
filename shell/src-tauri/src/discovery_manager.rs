@@ -145,7 +145,7 @@ impl Manager {
         if let Ok(pipe)=discovery::ipc::Pipe::connect(cancel.clone()){
             if pipe.send(&json!({"version":1,"op":"topology","volumes":options.volumes})).is_ok(){
                 if let Ok(reply)=pipe.receive(){
-                    if reply["version"]==1&&reply["kind"]=="topology"{
+                    if reply["version"]==1&&reply["kind"]=="topology"&&reply["schedulerVersion"]==1{
                         if let Some(rows)=reply["volumes"].as_array(){
                             let mut volumes=self.volumes.write().unwrap();
                             for row in rows.iter().take(64){
@@ -156,7 +156,7 @@ impl Manager {
                                     topology.disks.sort_unstable();topology.disks.dedup();
                                     if topology.disks.is_empty(){topology.known=false;}
                                     if let Some(volume)=volumes.iter_mut().find(|value|value["id"]==id){
-                                        volume["topology"]=serde_json::to_value(topology).unwrap();
+                                        volume["topology"]=serde_json::to_value(topology).unwrap();volume["ntfsSchedulerReady"]=json!(true);
                                     }
                                 }
                             }
@@ -176,7 +176,7 @@ impl Manager {
                 self.source_errors.write().unwrap().insert(selected.clone(),message.clone());failures.push(message.clone());
                 self.update(json!({"version":2,"phase":"unavailable","volume":selected,"message":message,"total":null}));continue
             };
-            if volume["filesystem"]!="NTFS"&&!requested&&!full&&!self.fallback_due(selected){continue}
+            if (volume["filesystem"]!="NTFS"||volume["ntfsSchedulerReady"]!=true)&&!requested&&!full&&!self.fallback_due(selected){continue}
             let topology=serde_json::from_value(volume["topology"].clone()).unwrap_or_default();
             let ticket=gate.request(Resource{volume:selected.clone(),topology});
             self.update(json!({"version":2,"phase":"waiting","volume":selected,"records":null,"candidates":null,
@@ -292,7 +292,7 @@ impl Manager {
     #[cfg(windows)]
     fn stream_volume(self:&Arc<Self>,id:&str,volume:&Value,full:bool,known:&str,cancel:Arc<AtomicBool>,
         events:&std::sync::mpsc::SyncSender<ScanEvent>)->Result<Value,String>{
-        if volume["filesystem"]=="NTFS"{
+        if volume["filesystem"]=="NTFS"&&volume["ntfsSchedulerReady"]==true{
             let result=(||{
                 let pipe=discovery::ipc::Pipe::connect(cancel.clone())?;
                 pipe.send(&json!({"version":1,"op":"scan","volume":id,"full":full,"knownRevision":known}))?;

@@ -229,9 +229,9 @@ fn connection(pipe:&Pipe,shared:&Shared,root:&Path)->Result<(),String>{
                 return Err("Select valid discovery volumes.".into())
             }
             let rows:Vec<_>=ids.iter().map(|id|json!({"id":id,"topology":volume::topology(id.as_str().unwrap())})).collect();
-            return pipe.send(&json!({"version":1,"kind":"topology","volumes":rows}))
+            return pipe.send(&json!({"version":1,"kind":"topology","schedulerVersion":1,"volumes":rows}))
         },
-        Some("status")=>return pipe.send(&json!({"version":1,"kind":"status","service":"ready","protocol":1})),
+        Some("status")=>return pipe.send(&json!({"version":1,"kind":"status","service":"ready","protocol":1,"diskSchedulerVersion":1})),
         Some("scan")=>{},
         _=>return Err("Unsupported discovery operation.".into()),
     }

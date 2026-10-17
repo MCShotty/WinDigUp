@@ -255,7 +255,7 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
         return pool
     }
     #endif
-    let callback:(@Sendable (InferenceActivity)->Void)? = CommandLine.arguments.dropFirst().first=="worker" ? {emitInference($0)} : nil
+    let callback:(@Sendable (InferenceActivity)->Void)? = CommandLine.arguments.dropFirst().first=="worker" ? { @Sendable activity in emitInference(activity) } : nil
     let model=try LlamaEmbedder(models:try LlamaModels.locate(),textOnly:textOnly,log:log,onActivity:callback)
     if CommandLine.arguments.dropFirst().first=="worker" {
         model.onInferenceActivity={activity in emitInference(activity)}

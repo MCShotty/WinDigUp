@@ -39,3 +39,10 @@
 @media (pointer:coarse) {
   .source-candidate button, .activity-view button, .activity-report button { min-height:44px; }
 }
+
+.activity-view button:focus-visible, .activity-report button:focus-visible,
+.pipeline-drive-details summary:focus-visible, .source-candidate button:focus-visible,
+.source-section > summary:focus-visible {
+  outline:2px solid var(--leaf-text,var(--moss)); outline-offset:3px;
+}
+.gpu-jobs-control select, #appearance { min-height:44px; }
