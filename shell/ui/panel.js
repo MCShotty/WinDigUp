@@ -146,7 +146,8 @@ const settingsSearch=new WindowsSettingsSearch((statusOnly=false)=>{
 function resultLayout() {
   return MixedResults.compose({
     text: state.text, mode: state.isApps ? "apps" : state.isSettings ? "settings" : state.isCode || !Apps.supported ? "files" : "all",
-    files: state.groups.flatMap(group => group.rows), apps: applicationSearch.active ? applicationSearch.hits : [],
+    files: [...state.groups.flatMap(group => group.rows),
+      ...state.weaker.filter(hit => !state.isApps && !state.isSettings && !state.isCode && MixedResults.tier(hit, state.text) <= 1)], apps: applicationSearch.active ? applicationSearch.hits : [],
     settings: settingsSearch.visible(), preference: Apps.mixedSearch, includeEmptyFiles: state.weaker.length > 0,
   });
 }
@@ -154,12 +155,17 @@ function rowIDs() {
   const layout = resultLayout(), ids = layout.best.map(resultKey);
   for (const section of layout.sections) {
     ids.push(...section.hits.map(resultKey));
-    if (section.source === "files" && state.weaker.length) {
+    if (section.source === "files" && weakerFiles(layout).length) {
       ids.push(WEAKER);
-      if (state.showWeaker) ids.push(...state.weaker.map(resultKey));
+      if (state.showWeaker) ids.push(...weakerFiles(layout).map(resultKey));
     }
   }
   return ids;
+}
+
+function weakerFiles(layout = resultLayout()) {
+  const shown = new Set(layout.rows.map(resultKey));
+  return state.weaker.filter(hit => !shown.has(resultKey(hit)));
 }
 
 function selectedHit() {
@@ -237,7 +243,7 @@ function render() {
 }
 
 function renderList() {
-  const scroll = $list.scrollTop, layout = resultLayout();
+  const scroll = $list.scrollTop, layout = resultLayout(), weaker = weakerFiles(layout);
   $list.replaceChildren();
   $list.hidden = !layout.rows.length && !state.weaker.length;
   if ($list.hidden) return;
@@ -259,13 +265,13 @@ function renderList() {
         const more = element("button", "app-more", "Show all matching files");
         more.onclick = () => openInWindow(); node.append(more);
       }
-      if (state.weaker.length) {
+      if (weaker.length) {
         const fold = element("div", "weaker" + (state.showWeaker ? " open" : "") + (state.selection === WEAKER ? " selected" : ""));
         fold.setAttribute("role", "option"); fold.setAttribute("aria-selected", String(state.selection === WEAKER));
         fold.innerHTML = ICONS.chevron;
-        fold.append(state.showWeaker ? "Weaker matches" : state.weaker.length + " weaker matches");
+        fold.append(state.showWeaker ? "Weaker matches" : weaker.length + " weaker matches");
         fold.onclick = toggleWeaker; node.append(fold);
-        if (state.showWeaker) for (const hit of state.weaker) node.append(row(hit));
+        if (state.showWeaker) for (const hit of weaker) node.append(row(hit));
       }
     }
   }

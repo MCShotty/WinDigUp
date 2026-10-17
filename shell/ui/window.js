@@ -70,7 +70,11 @@ function closeActivity() {
 function providerChanged(statusOnly = false) {
   state.counts.apps = applicationSearch.total;
   state.counts.settings = settingsSearch.total;
-  if (statusOnly) { renderStatus(); return; }
+  if (statusOnly) {
+    const label = $content.querySelector(".app-purpose-state");
+    if (label) label.textContent = applicationSearch.purposeLabel();
+    renderStatus(); return;
+  }
   const shown = rows();
   if (shown.length) state.hasResults = true;
   if (!state.navigated) state.selection = shown.length ? resultKey(shown[0]) : null;
@@ -90,7 +94,7 @@ function resultLayout() {
   const mode = Apps.parse(state.query, state.filter).mode;
   return MixedResults.compose({
     text: state.text, mode: mode === "all" && !Apps.supported ? "files" : mode,
-    files: state.ranked, apps: applicationSearch.active ? applicationSearch.hits : [],
+    files: [...state.ranked, ...state.weaker.filter(hit => mode === "all" && MixedResults.tier(hit, state.text) <= 1)], apps: applicationSearch.active ? applicationSearch.hits : [],
     settings: settingsSearch.visible(), preference: Apps.mixedSearch, includeEmptyFiles: state.weaker.length > 0,
   });
 }
@@ -241,9 +245,14 @@ function rows() {
   const layout = resultLayout(), shown = [...layout.best];
   for (const section of layout.sections) {
     shown.push(...section.hits);
-    if (section.source === "files" && state.showWeaker) shown.push(...state.weaker);
+    if (section.source === "files" && state.showWeaker) shown.push(...weakerFiles(layout));
   }
   return shown;
+}
+
+function weakerFiles(layout = resultLayout()) {
+  const shown = new Set(layout.rows.map(resultKey));
+  return state.weaker.filter(hit => !shown.has(resultKey(hit)));
 }
 
 function selectedHit() {
@@ -313,7 +322,7 @@ function renderContent() {
     for (const section of layout.sections) {
       if (section.source === "apps") $content.append(applicationGroup(section.hits));
       else if (section.source === "settings") $content.append(windowsSettingsGroup(section.hits, settingsSearch.visible().length));
-      else if (section.hits.length || state.weaker.length) {
+      else if (section.hits.length || weakerFiles(layout).length) {
         const files = element("section", "file-results-group");
         files.setAttribute("aria-label", "Files");
         if (layout.best.length || applicationSearch.hits.length || settingsSearch.visible().length)
@@ -332,7 +341,7 @@ function renderContent() {
     else if (state.fileError) $content.append(fileSearchFailure());
     else if (!state.lexicalReady && !state.ranked.length && !layout.rows.length)
       $content.append(centered(element("div", "spinner")));
-    else if (!state.ranked.length && !state.weaker.length && !layout.rows.length) $content.append(nothingFound());
+    else if (!state.ranked.length && !weakerFiles(layout).length && !layout.rows.length) $content.append(nothingFound());
   }
   $content.scrollTop = scroll;
   if (focused.isConnected) focused.focus({preventScroll: true});
@@ -386,9 +395,10 @@ function applicationGroup(hits=applicationSearch.hits,title="Apps",shownCount=re
 function grid(hits = state.ranked) {
   const box = element("div");
   box.append(cells(hits, "grid"));
-  if (state.weaker.length) {
+  const weaker = weakerFiles();
+  if (weaker.length) {
     box.append(weakerToggle());
-    if (state.showWeaker) box.append(cells(state.weaker, "grid weaker-results"));
+    if (state.showWeaker) box.append(cells(weaker, "grid weaker-results"));
   }
   return box;
 }
@@ -500,7 +510,7 @@ function folderLine(text, tag = "div") {
 }
 
 function weakerToggle() {
-  const count = state.weaker.length;
+  const count = weakerFiles().length;
   const toggle = element("button", "weaker-toggle" + (state.showWeaker ? " open" : ""));
   toggle.innerHTML = ICONS.chevron;
   toggle.append(state.showWeaker ? "Weaker matches" : `${count} weaker ${count === 1 ? "match" : "matches"}`);
@@ -619,6 +629,19 @@ function move(step) {
 }
 
 /// The grid's columns right now (↑ ↓ move by a row); a list has one.
+function moveVertical(direction) {
+  const shown = rows(), index = shown.findIndex(hit => resultKey(hit) === state.selection);
+  const current = $content.querySelector('[data-result-key="' + CSS.escape(state.selection || "") + '"]');
+  const grid = current?.closest(".grid");
+  if (!grid) { move(direction); return; }
+  const cells = [...grid.querySelectorAll("[data-result-key]")], at = cells.indexOf(current), next = at + direction * columns();
+  if (next >= 0 && next < cells.length) select(cells[next].dataset.resultKey);
+  else {
+    const boundary = direction < 0 ? index - at - 1 : index + cells.length - at;
+    if (shown[boundary]) select(resultKey(shown[boundary]));
+  }
+}
+
 function columns() {
   if (isLauncher(selectedHit()) || $content.querySelector(".best-matches .selected")) return 1;
   const grid = $content.querySelector(".grid");
@@ -1290,7 +1313,7 @@ document.addEventListener("keydown", (event) => {
     case "ArrowUp":
       if (!plain || !rows().length) return;
       event.preventDefault();
-      move(event.key === "ArrowDown" ? columns() : -columns());
+      moveVertical(event.key === "ArrowDown" ? 1 : -1);
       return;
     case "ArrowLeft":
     case "ArrowRight":

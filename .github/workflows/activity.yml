@@ -37,6 +37,9 @@ jobs:
           node tests/ui/search-responsiveness.cjs
           node --check shell/ui/windows-settings.js
           node tests/ui/windows-settings.cjs
+          node --check shell/ui/mixed-results.js
+          node tests/ui/mixed-ordering-contract.cjs
+          DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/mixed-ordering.cjs
           node --check shell/ui/discovery-settings.js
           node tests/ui/discovery-settings.cjs
           node --check shell/ui/pipeline.js

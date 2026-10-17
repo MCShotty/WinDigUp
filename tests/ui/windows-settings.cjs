@@ -84,5 +84,5 @@ let browser;
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_windows_setting").at(-1).args.settingId),"setting:bluetooth");
   assert.match(await page.locator("#keys").textContent(),/Windows settings/);
   assert.deepEqual(errors,[]);
-  await browser.close();console.log("PASS: Windows settings routing, native names, lexical/semantic separation, stale replies, file-first placement, stable file DOM, keyboard opening, dark/scaled views and panel handoff");
+  await browser.close();console.log("PASS: Windows settings routing, native names, lexical/semantic separation, stale replies, shared best-match placement, stable file DOM, keyboard opening, dark/scaled views and panel handoff");
 })().catch(async error=>{console.error(error);if(browser)await browser.close();process.exit(1);});
