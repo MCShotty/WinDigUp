@@ -155,7 +155,7 @@ let browser;
       await page.press("#query", "ArrowDown"); await page.press("#query", "ArrowUp");
       const contrastFailures=await page.evaluate(()=>{
         const rgba=value=>{
-          const numbers=(value.match(/[\\d.]+/g)||[]).map(Number);
+          const numbers=(value.match(/[\d.]+/g)||[]).map(Number);
           if(value.startsWith("color(srgb "))for(let i=0;i<3;i++)numbers[i]*=255;
           return numbers;
         };

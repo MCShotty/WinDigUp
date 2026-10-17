@@ -18,7 +18,8 @@ let browser;
     window.fileFolders = ["C:\\Users\\Test\\Documents"]; window.inventoryBlocked = true; window.inventoryWaiters = []; window.inventoryFailure = false; window.volumeRevision = 0; window.staleInventoryResponse = false;
     window.releaseInventory = () => {window.inventoryBlocked = false; window.inventoryWaiters.splice(0).forEach(resolve => resolve());};
     window.__TAURI__.core.invoke = async (command, args = {}) => {
-      if (command === "settings_info") return {...await old(command, args), discovery: window.drive, folders: window.fileFolders};
+      if (command === "settings_info") {const info=await old(command,args);return {...info,applications:{...info.applications,enabled:false},discovery:window.drive,folders:window.fileFolders};}
+      if (command === "activity_snapshot") return {...await old(command,args),discovery:window.drive};
       if (command === "refresh_discovery_volumes") {
         window.calls.push({command, args});
         if (window.inventoryFailure) throw new Error("Fixture Windows inventory unavailable");
@@ -115,9 +116,17 @@ let browser;
   assert.deepEqual(await page.evaluate(() => window.fileFolders), ["C:\\Users\\Test\\Documents"], "Removing a drive erased selected subfolders");
   await page.getByRole("tab", {name: "Apps", exact: true}).click();
   await page.locator("#open-drives").click(); assert.equal(await page.locator("#drives").isVisible(), true);
+  await page.locator("#drive-file-settings").click(); assert.equal(await page.locator("#folders").isVisible(),true);
+  await page.locator("#folders-drives").click(); assert.equal(await page.locator("#drives").isVisible(),true);
+  await page.getByRole("tab",{name:"Activity",exact:true}).click();
+  await page.locator('[data-key="drive-settings"]').click(); assert.equal(await page.locator("#drives").isVisible(),true);
+  await page.evaluate(()=>{const label=document.createElement("div");label.textContent="UI fixture · Synthetic drive inventory";
+    label.style.cssText="position:fixed;bottom:2px;right:4px;font:12px Segoe UI;color:var(--text);background:var(--surface);z-index:100";document.body.append(label);});
   for (const [theme, width] of [["light", 1100], ["dark", 760], ["light", 520]]) {
     await page.emulateMedia({colorScheme: theme}); await page.setViewportSize({width, height: 900});
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    if (process.env.DIGUP_ORDER_SCREENSHOT_LOG && theme==="light" && width===1100)
+      console.log("DRIVE_SCREENSHOT_BASE64="+(await page.screenshot({type:"jpeg",quality:60})).toString("base64"));
     if (process.env.DIGUP_ACTIVITY_SCREENSHOTS) {
       fs.mkdirSync(process.env.DIGUP_ACTIVITY_SCREENSHOTS, {recursive: true});
       await page.screenshot({path: process.env.DIGUP_ACTIVITY_SCREENSHOTS + "/drive-picker-" + theme + "-" + width + ".png", fullPage: true});
