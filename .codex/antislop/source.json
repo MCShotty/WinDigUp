@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/miqdadbadjuber/anti-slop",
+  "release": "v3.2.21",
+  "commit": "77e1920ad5e540816ccec3b2142128d95ef12bcb",
+  "installation": "Codex project skills; cli/lib/install.mjs",
+  "files": [
+    {
+      "source": "skills/antislop-code/SKILL.md",
+      "installed": ".codex/skills/antislop-code/SKILL.md",
+      "gitBlobSha1": "3d5efdbcc7b491f2c22578e1b8d1199f98d94b9a"
+    },
+    {
+      "source": "skills/antislop-copywriting/SKILL.md",
+      "installed": ".codex/skills/antislop-copywriting/SKILL.md",
+      "gitBlobSha1": "9020bba21099e2dbbc64f6e40d481e4e82e5cd06"
+    },
+    {
+      "source": "skills/antislop-human/SKILL.md",
+      "installed": ".codex/skills/antislop-human/SKILL.md",
+      "gitBlobSha1": "273bbf90491e37016e3890d648dd2e17468be0ca"
+    },
+    {
+      "source": "skills/antislop-human/contrast-check.py",
+      "installed": ".codex/skills/antislop-human/contrast-check.py",
+      "gitBlobSha1": "63287d6b974c381fda3cb474281508f3753482b2"
+    },
+    {
+      "source": "skills/antislop-human/contrast-mcp.py",
+      "installed": ".codex/skills/antislop-human/contrast-mcp.py",
+      "gitBlobSha1": "54206a74ca826283ee76325b6ec8256b163e1ec7"
+    },
+    {
+      "source": "skills/antislop-layoutmobile/SKILL.md",
+      "installed": ".codex/skills/antislop-layoutmobile/SKILL.md",
+      "gitBlobSha1": "6aeaaaf2ab24a14a0faab0a787e46a745fff5c95"
+    },
+    {
+      "source": "skills/antislop-ui/SKILL.md",
+      "installed": ".codex/skills/antislop-ui/SKILL.md",
+      "gitBlobSha1": "b263e8a4df7456d23183a183710c7c71ad393ee0"
+    },
+    {
+      "source": "skills/antislop/SKILL.md",
+      "installed": ".codex/skills/antislop/SKILL.md",
+      "gitBlobSha1": "dce85417355cc61b9d6a6e3d9f2714eec9f5c0d0"
+    },
+    {
+      "source": "skills/antislop/VERSION",
+      "installed": ".codex/skills/antislop/VERSION",
+      "gitBlobSha1": "66870d92b11008522344af46df77b7dfcacb69eb"
+    },
+    {
+      "source": "LICENSE",
+      "installed": ".codex/antislop/LICENSE",
+      "gitBlobSha1": "5fdb95f1efdbd865b9e8958d6ec5f20a06bcb951"
+    }
+  ]
+}
