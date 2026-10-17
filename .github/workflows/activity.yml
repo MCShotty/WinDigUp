@@ -80,7 +80,7 @@ jobs:
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
       - name: Build the real native shell without model libraries
-        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bin digup-shell
+        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
       - name: Build the disposable Shell shortcut fixture
         shell: pwsh
         run: |
@@ -93,6 +93,9 @@ jobs:
         run: |
           $missing = Join-Path $env:RUNNER_TEMP ('missing-helper-' + [Guid]::NewGuid().ToString('N') + '.exe')
           scripts/check-windows-panel.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Helper $missing
+      - name: Real WebView2 portable-app discovery and launch (no inference)
+        shell: pwsh
+        run: scripts/check-windows-discovery.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Component "$PWD/shell/src-tauri/target/debug/digup-discovery.exe"
       - name: Compile portable search-vector conversion for Windows x64
         run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"
 
