@@ -12,7 +12,7 @@ import Foundation
 /// Audio past 30 s is dropped, as in the reference.
 ///
 /// One thread at a time; `close()` frees the model (about 1 GB, or 0.25 GB text-only).
-public final class LlamaEmbedder: Embedder {
+public final class LlamaEmbedder: Embedder, InferenceReporting {
     public static let budgets = [70, 140, 280, 560, 1120]
 
     /// Which vectors this pipeline makes (the model files, llama.cpp, the resizing here, the prompts). It changes only
@@ -35,6 +35,12 @@ public final class LlamaEmbedder: Embedder {
     }
 
     public private(set) var info: WorkerInfo
+    private var admission: GPUAdmission?
+    private var residency: GPULease?
+    private var warming = true
+    private var operationDepth = 0
+    public var inferenceActivity: InferenceActivity? { admission?.activity }
+    public var onInferenceActivity: (@Sendable (InferenceActivity) -> Void)? { didSet { admission?.onActivity = onInferenceActivity } }
     private var model: OpaquePointer?
     private var context: OpaquePointer?
     private var media: OpaquePointer?
@@ -45,6 +51,7 @@ public final class LlamaEmbedder: Embedder {
     private let maxTokens: Int
     private static let maxSequences = 16
     private var sequences: Int32 = 0  // in `batch`
+    private var batchIsQuery = false
     private var tokens = 0            // in `batch`
     private var position: llama_pos = 0
 
@@ -62,6 +69,30 @@ public final class LlamaEmbedder: Embedder {
         let device = try Self.selectDevice(acceleration)
         let deviceInfo = Self.describe(device)
         let deviceName = String(cString: ggml_backend_dev_description(device))
+        let coordinated = acceleration == .vulkan || acceleration == .amdVulkan || acceleration == .nvidiaCUDA
+        let stable = deviceInfo.map { $0.stableID.isEmpty ? $0.id : $0.stableID } ?? "unknown"
+        let gate = coordinated ? try GPUAdmission(identity: acceleration.registry + "|" + stable) : nil
+        self.admission = gate
+        let startup = try gate?.request(profile: textOnly ? "text512" : "multimodal2048",
+            foreground: textOnly && ProcessInfo.processInfo.environment["DIGUP_INFERENCE_PRIORITY"] == "foreground")
+        defer { startup?.finish() }
+        let loading = try gate?.loading()
+        defer { loading?.release() }
+        if let gate {
+            let (resident, others) = try gate.resident()
+            self.residency = resident
+            var free = 0, total = 0
+            ggml_backend_dev_memory(device, &free, &total)
+            let files = [models.text] + (textOnly ? [] : models.media.map { [$0] } ?? [])
+            let weights = files.reduce(Int64(0)) { sum, file in
+                sum + ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? 0)
+            }
+            let reserve = max(Int64(512 * 1024 * 1024), weights * 2) + 256 * 1024 * 1024
+            if (total == 0 && others > 0) || total > 0 && Int64(free) < reserve {
+                throw WorkerError.failed((others > 0 ? "capacity_limited: " : "insufficient_vram: ") +
+                    "Not enough verified free GPU memory for another model context. Existing workers stay on the selected GPU.")
+            }
+        }
         guard textOnly || models.media != nil else {
             throw WorkerError.notFound("\(LlamaModels.mediaFile) (images and audio) isn't downloaded yet")
         }
@@ -145,6 +176,7 @@ public final class LlamaEmbedder: Embedder {
             close()
             throw error
         }
+        warming = false
         let seconds = (Date().timeIntervalSince(started) * 100).rounded() / 100
         info = WorkerInfo(model: info.model, revision: info.revision, runtime: info.runtime, dtype: info.dtype,
                           dim: info.dim, textOnly: textOnly, loadSeconds: seconds,
@@ -164,6 +196,7 @@ public final class LlamaEmbedder: Embedder {
         if let context { llama_free(context) }
         if let model { llama_model_free(model) }
         (batch, media, context, model) = (nil, nil, nil, nil)
+        residency?.release(); residency = nil
     }
 
     // MARK: Embedder
@@ -174,6 +207,7 @@ public final class LlamaEmbedder: Embedder {
         for text in texts {
             let tokens = tokenize(text)
             if sequences == Self.maxSequences || self.tokens + tokens.count > maxTokens { vectors += try run() }
+            if sequences == 0 { batchIsQuery = text.hasPrefix(Prompts.query("")) || text.hasPrefix(Prompts.codeQuery("")) }
             begin()
             for token in tokens { try add(token: token) }
         }
@@ -204,6 +238,8 @@ public final class LlamaEmbedder: Embedder {
     // MARK: Media
 
     private func embedMedia(_ path: String, image: Bool, budget: Int) throws -> [Float] {
+        let operation = try beginOperation(foreground: false)
+        defer { operationDepth -= 1; operation?.finish(inputs: 1) }
         let bitmap = try load(path, image: image, budget: budget)
         defer { mtmd_bitmap_free(bitmap) }
         let chunks = mtmd_input_chunks_init()
@@ -337,6 +373,9 @@ public final class LlamaEmbedder: Embedder {
 
     /// Runs the text model over the batch and returns one L2-normalized vector per input, in order.
     private func run() throws -> [[Float]] {
+        let count = Int(sequences)
+        let operation = try beginOperation(foreground: batchIsQuery)
+        defer { operationDepth -= 1; operation?.finish(inputs: count) }
         defer { reset() }
         let status = llama_process(context, LLAMA_PROCESS_TYPE_ENCODE, batch)
         guard status == 0 else { throw WorkerError.failed(LlamaLog.shared.failure("llama_process failed (\(status))")) }
@@ -352,6 +391,13 @@ public final class LlamaEmbedder: Embedder {
             }
             return vector
         }
+    }
+
+    private func beginOperation(foreground: Bool) throws -> GPUAdmission.Operation? {
+        let operation = !warming && operationDepth == 0
+            ? try admission?.request(profile: maxTokens == 512 ? "text512" : "multimodal2048", foreground: foreground) : nil
+        operationDepth += 1
+        return operation
     }
 
     private static func describe(_ device: ggml_backend_dev_t) -> AcceleratorDevice? {

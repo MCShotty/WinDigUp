@@ -84,7 +84,8 @@ let package = Package(
     targets: portableTargets + [
         // The engine: crawler, extractors, index store, the embedder interface and worker client, search. No UI.
         // Platform/ holds what differs by OS (Apple's frameworks on macOS, the C libraries above elsewhere).
-        .target(name: "DigUpKit", dependencies: engineDependencies, linkerSettings: engineLink),
+        .target(name: "CGPUAdmission"),
+        .target(name: "DigUpKit", dependencies: engineDependencies + ["CGPUAdmission"], linkerSettings: engineLink),
         // llama.cpp (scripts/build-llama.sh builds it into Vendor/llama) and EmbeddingGemma 2 on it.
         .systemLibrary(name: "CLlama", path: llamaModule),
         .target(name: "LlamaRuntime", dependencies: ["CLlama", "DigUpKit"], linkerSettings: llamaLink),

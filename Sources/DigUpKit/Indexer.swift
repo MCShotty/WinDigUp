@@ -38,6 +38,7 @@ public final class Indexer {
     let options: IndexOptions
     private let makeEmbedder: () throws -> any Embedder
     private var worker: (any Embedder)?
+    private var replay: ComputedEmbedding?
     private let scratch: URL
 
     /// When set, an index built with another model or other settings is emptied and embedded again (the app: a new
@@ -226,28 +227,122 @@ public final class Indexer {
                          committed: (Int, Job, [(String, String?)], Double) -> Void,
                          skip: (Job) -> Bool = { _ in false }) throws {
         var ahead: PendingBatch?
+        var pending:[InferredJob]=[]
+        func cleanup(_ item:InferredJob) {
+            _ = try? item.result.wait()
+            try? FileManager.default.removeItem(at:item.prepared.folder)
+        }
         defer {
-            // A job prepared for a run that stopped early: throw its files away.
-            if let ahead { try? FileManager.default.removeItem(at: ahead.wait().folder) }
-            if let costsFolder, !measured.tallies.isEmpty {
-                MeasuredCosts.merge(measured, into: costsFolder)
-                measured = MeasuredCosts()
+            if let ahead {try? FileManager.default.removeItem(at:ahead.wait().folder)}
+            for item in pending {cleanup(item)}
+            if let costsFolder,!measured.tallies.isEmpty {
+                MeasuredCosts.merge(measured,into:costsFolder);measured=MeasuredCosts()
             }
         }
-        for (index, job) in jobs.enumerated() {
-            guard !shouldStop() else { break }
-            let started = Date()
-            let prepared = (ahead ?? prepare(job)).wait()
-            ahead = index + 1 < jobs.count ? prepare(jobs[index + 1]) : nil
-            defer { try? FileManager.default.removeItem(at: prepared.folder) }
-            guard !skip(job) else { continue }
-            // The helper's and the CLI's main thread has no run loop to drain what Foundation autoreleases while a job
-            // commits: without a pool per job it all stayed until the process exited (~30 KB a text chunk).
-            let modelWasRunning = worker != nil
-            let results = try autoreleasepool { try commit(prepared) }
-            let seconds = Date().timeIntervalSince(started)
-            if modelWasRunning { measure(prepared, seconds: seconds) }   // else it's seconds of the model starting
-            committed(index, job, results, seconds / Double(job.files.count))
+        func publishFirst()throws {
+            let item=pending.removeFirst()
+            defer{try? FileManager.default.removeItem(at:item.prepared.folder)}
+            let computed=try item.result.wait()
+            guard !skip(item.job) else{return}
+            let changed=item.job.files.contains{file in
+                guard let attrs=try? FileManager.default.attributesOfItem(atPath:file.path),
+                    let size=(attrs[.size] as? NSNumber)?.int64Value,
+                    let date=attrs[.modificationDate] as? Date else{return true}
+                return size != file.size || abs(date.timeIntervalSince1970-file.mtime)>0.001
+            }
+            let results:[(String,String?)]
+            if changed {
+                for file in item.job.files{try store.requeue(file.id)}
+                results=item.job.files.map{_ in ("pending","source_changed")}
+            }else{
+                replay=computed
+                defer{replay=nil}
+                results=try store.db.transaction {
+                    var stale=false
+                    for file in item.job.files {
+                        var matches=false
+                        try store.db.query("SELECT path,size,mtime,inode,device FROM files WHERE id=?",[.int(file.id)]){row in
+                            matches=row.text(0)==file.path && row.int(1)==file.size &&
+                                abs(row.double(2)-file.mtime)<0.001 &&
+                                UInt64(bitPattern:row.int(3))==file.inode && UInt64(bitPattern:row.int(4))==file.device
+                        }
+                        if !matches{stale=true}
+                    }
+                    if stale{return item.job.files.map{_ in ("pending","source_changed")}}
+                    return try autoreleasepool{try commit(item.prepared)}
+                }
+            }
+            let seconds=ProcessInfo.processInfo.systemUptime-item.started
+            if item.modelWasRunning{measure(item.prepared,seconds:seconds)}
+            committed(item.index,item.job,results,seconds/Double(item.job.files.count))
+        }
+        for(index,job)in jobs.enumerated(){
+            guard !shouldStop()else{break}
+            let started=ProcessInfo.processInfo.systemUptime
+            let prepared=(ahead ?? prepare(job)).wait()
+            ahead=index+1<jobs.count ? prepare(jobs[index+1]) : nil
+            guard !skip(job)else{try? FileManager.default.removeItem(at:prepared.folder);continue}
+            let calls=embeddingCalls(prepared)
+            let modelWasRunning=worker != nil
+            let model=try calls.contains(where:{!$0.inputs.isEmpty}) ? fullWorker() : nil
+            let future=InferenceResult()
+            let owner=InferenceOwner(model)
+            if let model {
+                DispatchQueue.global(qos:.utility).async {
+                    do{future.fulfill(.success(try ComputedEmbedding(calls:calls,worker:owner.model!)))}
+                    catch{future.fulfill(.failure(error))}
+                }
+                _ = model
+            }else{future.fulfill(.success(nil))}
+            pending.append(InferredJob(index:index,job:job,prepared:prepared,result:future,
+                started:started,modelWasRunning:modelWasRunning))
+            let width=(worker as? any ParallelEmbedding)?.maximumParallelJobs ?? 1
+            if pending.count>=width{try publishFirst()}
+        }
+        while !pending.isEmpty{try publishFirst()}
+    }
+
+    private struct InferredJob {
+        let index:Int
+        let job:Job
+        let prepared:Prepared
+        let result:InferenceResult
+        let started:Double
+        let modelWasRunning:Bool
+    }
+    private final class InferenceOwner: @unchecked Sendable {
+        let model:(any Embedder)?
+        init(_ model:(any Embedder)?){self.model=model}
+    }
+    private final class InferenceResult: @unchecked Sendable {
+        private let ready=DispatchSemaphore(value:0)
+        private var value:Result<ComputedEmbedding?,any Error>?
+        func fulfill(_ value:Result<ComputedEmbedding?,any Error>){self.value=value;ready.signal()}
+        func wait()throws->ComputedEmbedding?{ready.wait();return try value!.get()}
+    }
+    private func embeddingCalls(_ prepared:Prepared)->[EmbeddingCall] {
+        let file=prepared.batch[0]
+        let title=URL(fileURLWithPath:file.path).deletingPathExtension().lastPathComponent
+        switch prepared.payload {
+        case .nothing:return []
+        case .images(let screenshot,let ready):
+            return [EmbeddingCall(kind:.image,inputs:ready.map(\.image.path),
+                budget:screenshot ? options.screenshotBudget : options.photoBudget)]
+        case .pdf(let pages,_,_,let documentTitle):
+            let title=documentTitle ?? title
+            return [
+                EmbeddingCall(kind:.text,inputs:pages.filter{$0.imagePath==nil && SearchText.hasWords($0.text)}.map{Prompts.document(title:title,text:String($0.text.prefix(4000)))}),
+                EmbeddingCall(kind:.image,inputs:pages.compactMap(\.imagePath),budget:options.pageBudget),
+                EmbeddingCall(kind:.text,inputs:pages.compactMap(\.garbled).map{Prompts.document(title:title,text:String($0.prefix(4000)))})
+            ]
+        case .doc(let chunks,_,_,_):
+            return [EmbeddingCall(kind:.text,inputs:chunks.filter(SearchText.hasWords).map{Prompts.document(title:title,text:$0)})]
+        case .code(let code):
+            return [EmbeddingCall(kind:.text,inputs:code.pieces.filter{SearchText.hasWords($0.text)}.map{Prompts.document(title:code.title,text:$0.text)})]
+        case .audio(let pieces,_):return [EmbeddingCall(kind:.audio,inputs:pieces.map(\.path))]
+        case .video(let frames,let sound,_):
+            return [EmbeddingCall(kind:.image,inputs:frames.map(\.path),budget:options.frameBudget),
+                EmbeddingCall(kind:.audio,inputs:sound.map(\.path))]
         }
     }
 
@@ -311,6 +406,7 @@ public final class Indexer {
     }
 
     private func fullWorker() throws -> any Embedder {
+        if let replay { return replay }
         if let worker { return worker }
         let started = try makeEmbedder()
         let fingerprint = "\(started.info.vectorSource) | \(options.fingerprint)"

@@ -22,6 +22,7 @@ final class SearchService: @unchecked Sendable {
     private var cacheOrder: [String] = []
     private var lastEncodingTimings: [String: Any] = [:]
     private var lastQuery = ProcessInfo.processInfo.systemUptime
+    private let preparationOwner=UUID().uuidString
     private var applicationStore: ApplicationStore?
     private var windowsSettingsStore: ApplicationStore?
     private var settingsReceipt: [String: Any] = ["state": "preparing", "encoder": "stopped"]
@@ -344,14 +345,16 @@ final class SearchService: @unchecked Sendable {
             guard let encoder, encoderState == "ready" else { return try applicationState(db, settings: op.hasPrefix("settings_")) }
             let fp = try applicationFingerprint(encoder, settings: op.hasPrefix("settings_"))
             try db.prepare(fingerprint: fp)
-            if let document = try db.pending() {
+            if let claim = try db.claimPending(owner:preparationOwner) {
+                let document=claim.document
+                defer{try? db.release(claim)}
                 do {
                     guard
                         let vector = try encoder.embedTexts([
                             Prompts.document(title: document.name, text: document.text)
                         ]).first
                     else { throw CLIError("No application vector returned") }
-                    try db.save(vector, for: document, fingerprint: fp)
+                    try db.save(vector,claim:claim)
                     recordInference(encoder)
                 } catch {
                     failEncoder(error)
@@ -764,6 +767,11 @@ final class SearchService: @unchecked Sendable {
                 try WorkerConfig.fromEnvironment()
                 ?? WorkerConfig.helper(URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL)
             if backend != .openvinoNPU { config.arguments += ["--index", baseDirectory.path] }
+            config.environment["DIGUP_INFERENCE_PRIORITY"]="foreground"
+            config.onInferenceActivity={ [self] activity in
+                guard let data=try? JSONEncoder().encode(activity),let fields=try? JSONSerialization.jsonObject(with:data) else{return}
+                write(["event":"inference_activity","activity":fields])
+            }
             config.log = log
             config.qos = .userInitiated
             config.startupTimeout = 180

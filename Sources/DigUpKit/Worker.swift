@@ -99,6 +99,7 @@ public struct WorkerConfig: Sendable {
     /// The worker process's priority: user-initiated for the query encoder (App Nap and efficiency cores can slow
     /// a search from 125 to 650 ms), utility for background indexing.
     public var qos: QualityOfService = .default
+    public var onInferenceActivity: (@Sendable (InferenceActivity) -> Void)?
     public var onStart: (@Sendable (Process) -> Void)?
     public var startupTimeout: TimeInterval?
     public var requestTimeout: TimeInterval?
@@ -188,10 +189,14 @@ public struct Embedding: Sendable {
 /// Talks to a worker process over stdin/stdout, one JSON line each way (the protocol is in
 /// `worker/digup_worker.py`). The model lives in that separate process so its memory goes back to the OS when it
 /// exits.
-public final class EmbeddingWorker: Embedder {
+public final class EmbeddingWorker: Embedder, InferenceReporting {
     public private(set) var info = WorkerInfo(
         model: "", revision: "", runtime: "", dtype: "", dim: Vectors.dimension,
         textOnly: false, loadSeconds: nil)  // until the worker reports in
+    private let activityLock=NSLock()
+    private var lastInference: InferenceActivity?
+    public var inferenceActivity: InferenceActivity? { activityLock.withLock { lastInference } }
+    private let onInferenceActivity: (@Sendable (InferenceActivity) -> Void)?
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
@@ -210,6 +215,8 @@ public final class EmbeddingWorker: Embedder {
     }
 
     private struct Reply: Decodable {
+        let event: String?
+        let activity: InferenceActivity?
         let id: Int?
         let ok: Bool?
         let ready: Bool?
@@ -221,6 +228,7 @@ public final class EmbeddingWorker: Embedder {
     }
 
     public init(_ config: WorkerConfig, textOnly: Bool) throws {
+        onInferenceActivity = config.onInferenceActivity
         requestTimeout = config.requestTimeout
         process.executableURL = config.executable
         process.qualityOfService = config.qos
@@ -337,7 +345,13 @@ public final class EmbeddingWorker: Embedder {
                 guard !line.isEmpty else { continue }
                 let decoder = JSONDecoder()
                 decoder.keyDecodingStrategy = .convertFromSnakeCase
-                return try decoder.decode(Reply.self, from: line)
+                let reply=try decoder.decode(Reply.self, from: line)
+                if reply.event=="inference_activity",let activity=reply.activity {
+                    activityLock.withLock { lastInference=activity }
+                    onInferenceActivity?(activity)
+                    continue
+                }
+                return reply
             }
             let chunk = output.fileHandleForReading.availableData
             guard !chunk.isEmpty else { throw WorkerError.died("exited\(logTail())") }

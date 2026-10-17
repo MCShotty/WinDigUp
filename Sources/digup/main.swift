@@ -69,7 +69,7 @@ struct Arguments {
     var flags: Set<String> = []
     static let valued: Set<String> = ["--index", "--limit", "--kind", "-n", "--zgate", "--word-weight", "--new-limit",
                                       "--linger", "--shot-tokens", "--code-stretch", "--encoder-idle", "--to",
-                                      "--memory-limit", "--time-limit", "--tries", "--when-quiet"]
+                                      "--memory-limit", "--time-limit", "--tries", "--when-quiet", "--worker-log"]
     static let repeated: Set<String> = ["--exclude", "--exclude-ext", "--code-root", "--code-exclude"]
 
     init(_ raw: ArraySlice<String>) throws {
@@ -224,7 +224,39 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
         }
         return worker
     }
-    return try LlamaEmbedder(models: try LlamaModels.locate(), textOnly: textOnly, log: log)
+    #if !os(macOS)
+    let command=CommandLine.arguments.dropFirst().first ?? ""
+    if !textOnly && command != "worker" {
+        let selected=try LlamaEmbedder.verifyDevice()
+        let maximum=selected.stableID.isEmpty ? 1 : GPUAdmission.configuredMaximum
+        let executable=Bundle.main.executableURL ?? URL(fileURLWithPath:CommandLine.arguments[0])
+        let raw=CommandLine.arguments
+        let custom=raw.indices.first(where:{raw[$0]=="--index" && $0+1<raw.count}).map{raw[$0+1]}
+        let base=custom.map{URL(fileURLWithPath:$0)} ?? AppPaths.defaultIndex
+        var config=WorkerConfig.helper(executable)
+        config.arguments += ["--index",base.path]
+        config.environment["DIGUP_GPU"]=selected.stableID.isEmpty ? selected.id : selected.stableID
+        config.log=log
+        config.qos=qos
+        config.startupTimeout=180
+        config.requestTimeout=180
+        if command=="index-service" {
+            config.onInferenceActivity={activity in emitInference(activity)}
+        }
+        let workerConfig=config
+        return try EmbeddingPool(maximum:maximum){
+            var next=workerConfig
+            next.log=log.deletingPathExtension().appendingPathExtension(UUID().uuidString+".log")
+            next.arguments += ["--worker-log",next.log!.path]
+            return try EmbeddingWorker(next,textOnly:false)
+        }
+    }
+    #endif
+    let model=try LlamaEmbedder(models:try LlamaModels.locate(),textOnly:textOnly,log:log)
+    if CommandLine.arguments.dropFirst().first=="worker" {
+        model.onInferenceActivity={activity in emitInference(activity)}
+    }
+    return model
 }
 
 /// `makeEmbedder`'s vector source when it's known without starting it: llama.cpp's always is.

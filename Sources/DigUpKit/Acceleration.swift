@@ -49,6 +49,9 @@ public enum Acceleration: String, Sendable, CaseIterable {
     }
 
     public static func requireInferenceReady(environment: [String: String] = ProcessInfo.processInfo.environment) throws {
+        if let value=environment["DIGUP_GPU_JOBS"],Int(value).map({(0...3).contains($0)}) != true {
+            throw WorkerError.failed("DIGUP_GPU_JOBS must be 0 (automatic), 1, 2, or 3.")
+        }
         if let error = environment["DIGUP_ACCELERATOR_ERROR"], !error.isEmpty { throw WorkerError.failed(error) }
         if environment["DIGUP_ACCELERATOR"] == "nvidia-cuda" {
             if environment["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] != nil {

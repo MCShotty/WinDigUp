@@ -27,3 +27,13 @@ jobs:
           path: |
             reference-machine.json
             discovery-baseline.txt
+
+  inference-contracts:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build and run real admission and pool contracts without model weights
+        run: |
+          clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o
+          swiftc -swift-version 6 -I Sources/CGPUAdmission/include Sources/DigUpKit/GPUAdmission.swift Sources/DigUpKit/EmbeddingPool.swift Sources/DigUpKit/EmbeddingPlan.swift tests/native/inference-contracts.swift /tmp/digup-lease.o -o /tmp/digup-inference-contracts
+          /tmp/digup-inference-contracts

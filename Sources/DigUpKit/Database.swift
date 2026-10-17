@@ -13,6 +13,7 @@ public final class Database {
     }
 
     let handle: OpaquePointer
+    private var transactionDepth=0
 
     public init(path: String, readOnly: Bool = false) throws {
         var db: OpaquePointer?
@@ -62,13 +63,18 @@ public final class Database {
 
     @discardableResult
     public func transaction<T>(_ body: () throws -> T) throws -> T {
-        try execute("BEGIN IMMEDIATE")
+        let depth=transactionDepth
+        let savepoint="digup_transaction_\(depth)"
+        try execute(depth==0 ? "BEGIN IMMEDIATE" : "SAVEPOINT \(savepoint)")
+        transactionDepth+=1
+        defer{transactionDepth-=1}
         do {
-            let result = try body()
-            try execute("COMMIT")
+            let result=try body()
+            try execute(depth==0 ? "COMMIT" : "RELEASE SAVEPOINT \(savepoint)")
             return result
         } catch {
-            try? execute("ROLLBACK")
+            if depth==0 {try? execute("ROLLBACK")}
+            else {try? execute("ROLLBACK TO SAVEPOINT \(savepoint)");try? execute("RELEASE SAVEPOINT \(savepoint)")}
             throw error
         }
     }

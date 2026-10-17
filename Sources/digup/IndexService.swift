@@ -266,7 +266,8 @@ final class IndexService: @unchecked Sendable {
                     stopRequested || (!isNew && !backfillAllowed)
                         || Date() >= yieldAt && (syncRequested || part.code && codeSyncRequested)
                 }
-            }, onEvent: { event in
+            }, onEvent: { [self] event in
+                if event.note=="source_changed" {lock.withLock { if part.code {codeSyncRequested=true}else{syncRequested=true};yieldAt = .distantPast }}
                 emit(["event": "file", "new": isNew, "done": event.done, "total": event.total, "path": event.path,
                       "kind": event.kind.rawValue, "state": event.state, "seconds": event.seconds,
                       "note": event.note ?? "", "code": part.code])
@@ -292,7 +293,8 @@ final class IndexService: @unchecked Sendable {
                     stopRequested || !backfillAllowed
                         || Date() >= yieldAt && (syncRequested || codeSyncRequested && code != nil)
                 }
-            }, onStep: { step in
+            }, onStep: { [self] step in
+                if step.note=="source_changed" {lock.withLock {syncRequested=true;yieldAt = .distantPast}}
                 emit(["event": "rest", "done": step.done, "total": step.total, "files": step.files, "path": step.path,
                       "kind": step.kind.rawValue, "state": step.state, "seconds": step.seconds, "note": step.note ?? ""])
             })
@@ -391,7 +393,9 @@ final class SharedEmbedder: @unchecked Sendable {
         model = nil
     }
 
-    private final class Kept: Embedder {
+    private final class Kept: ParallelEmbedding, InferenceReporting {
+        var maximumParallelJobs: Int { (model as? any ParallelEmbedding)?.maximumParallelJobs ?? 1 }
+        var inferenceActivity: InferenceActivity? { (model as? any InferenceReporting)?.inferenceActivity }
         let model: any Embedder
         let before: (() -> Void)?
         init(_ model: any Embedder, _ before: (() -> Void)?) { self.model = model; self.before = before }
@@ -408,7 +412,12 @@ final class SharedEmbedder: @unchecked Sendable {
 /// One JSON object per line on stdout, written straight to the file descriptor (print() would buffer in a pipe).
 /// The app may be gone by now (it quit while this helper lingered): a closed pipe is an error to ignore here, not the
 /// exception that `write(_:)` raises, which used to crash the helper on its way out.
+private enum ProtocolOutput { static let lock=NSLock() }
+func emitInference(_ activity: InferenceActivity) {
+    guard let data=try? JSONEncoder().encode(activity),let fields=try? JSONSerialization.jsonObject(with:data) else{return}
+    emit(["event":"inference_activity","activity":fields])
+}
 func emit(_ fields: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) else { return }
-    try? FileHandle.standardOutput.write(contentsOf: data + [0x0A])
+    ProtocolOutput.lock.withLock { try? FileHandle.standardOutput.write(contentsOf: data + [0x0A]) }
 }

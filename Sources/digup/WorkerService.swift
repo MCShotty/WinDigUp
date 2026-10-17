@@ -9,7 +9,7 @@ func workerService(_ args: Arguments) -> Int32 {
     let embedder: any Embedder
     do {
         embedder = try makeEmbedder(textOnly: args.flags.contains("--text-only"),
-                                    log: args.indexFolder.appendingPathComponent("worker.log"))
+                                    log: args.values["--worker-log"].map { URL(fileURLWithPath:$0) } ?? args.indexFolder.appendingPathComponent("worker.log"))
     } catch {
         emit(["ready": false, "error": "\(error)"])
         return 1
