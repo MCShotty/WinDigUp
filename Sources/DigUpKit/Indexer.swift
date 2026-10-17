@@ -161,7 +161,7 @@ public final class Indexer {
     @discardableResult
     public func run(limit: Int? = nil, only ids: Set<Int64>? = nil, shouldStop: () -> Bool = { false },
                     onEvent: (Event) -> Void = { _ in }) throws -> [String: Int] {
-        try Self.runScheduled([ScheduleSource(indexer: self, priorityIDs: ids ?? [],
+        try Indexer.runScheduled([ScheduleSource(indexer: self, priorityIDs: ids ?? [],
             includePending: ids == nil, limit: limit)], shouldStop: shouldStop,
             onEvent: { _, _, event in onEvent(event) }).first ?? [:]
     }
@@ -266,7 +266,7 @@ public final class Indexer {
                 current = file
             }
         }
-        try Self.processOwned([self], nextJob: nextJob, shouldStop: shouldStop,
+        try Indexer.processOwned([self], nextJob: nextJob, shouldStop: shouldStop,
             decorate: { queue.decorate(&$0) }, committed: { _, job, results, seconds in
                 let file = job.files[0]
                 let (state, note) = results[0]
@@ -289,11 +289,12 @@ public final class Indexer {
         skip: (Job) -> Bool = { _ in false }) throws {
         let folders = indexers.map { $0.scratch.appendingPathComponent(UUID().uuidString) }
         let options = indexers.map(\.options)
+        // Concrete type references avoid Swift 6.4's dynamic-Self closure-specialization crash.
         let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob,
             source: { String($0.source) }, sizes: { $0.footprint },
             prepare: { index, job in
                 autoreleasepool {
-                    Self.prepare(job, options: job.options ?? options[job.source],
+                    Indexer.prepare(job, options: job.options ?? options[job.source],
                                  into: folders[job.source].appendingPathComponent("batch-\(index)"))
                 }
             }, cleanup: { prepared in
@@ -361,9 +362,9 @@ public final class Indexer {
 
         do {
             while let item = pipeline.nextPrepared(shouldStop: shouldStop, canStartWith: {
-                Self.embeddingCalls($0, options: $0.options).contains(where: { !$0.inputs.isEmpty })
+                Indexer.embeddingCalls($0, options: $0.options).contains(where: { !$0.inputs.isEmpty })
             }, onTick: { progress() }) {
-                if skip(item.input) || !Self.embeddingCalls(item.value, options: item.value.options).contains(where: { !$0.inputs.isEmpty }) {
+                if skip(item.input) || !Indexer.embeddingCalls(item.value, options: item.value.options).contains(where: { !$0.inputs.isEmpty }) {
                     try publish(item, computed: nil, inferenceMs: 0)
                     continue
                 }
@@ -377,7 +378,7 @@ public final class Indexer {
                 let owners = InferenceOwners(models)
                 let width = models.map { ($0 as? any ParallelEmbedding)?.maximumParallelJobs ?? 1 }.min() ?? 1
                 pipeline.startInference(parallelism: width) { prepared in
-                    let calls = Self.embeddingCalls(prepared, options: prepared.options)
+                    let calls = Indexer.embeddingCalls(prepared, options: prepared.options)
                     guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
                     return try ComputedEmbedding(calls: calls, worker: owners.models[prepared.source])
                 }

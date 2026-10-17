@@ -20,8 +20,8 @@ permissions:
 
 concurrency:
   group: packages-${{ github.event.pull_request.number || github.ref }}
-  # Finish the native dependency build; retain only the latest pending installer.
-  cancel-in-progress: false
+  # Build the latest installer; native dependencies are cached independently.
+  cancel-in-progress: true
 
 jobs:
   linux:
