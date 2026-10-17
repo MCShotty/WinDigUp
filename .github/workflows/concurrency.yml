@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: concurrency-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 jobs:
   baseline:
     runs-on: windows-2025
@@ -88,14 +88,35 @@ jobs:
             Vendor/llama.cpp
             Vendor/llama-build
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
-      - name: Reproduce service drain and preparation head-of-line blocking
-        env:
-          DIGUP_INDEX_BASELINE: '1'
-        run: swift test --filter 'ServiceSchedulingTests|ReadyDispatchTests'
+      - name: Continuous service scheduling and ready dispatch regressions
+        run: swift test --filter 'ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests'
       - name: Bounded worker startup and response deadlines
         run: swift test --filter 'WorkerDeadlineTests'
       - name: Storage, prepared inference and long-file contracts with synthetic embedders
         run: swift test --filter 'IndexPipelineTests|IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|LongFilesTests'
+      - name: Compare the actual service with image, document and mixed workloads
+        env:
+          DIGUP_SERVICE_BENCHMARK: '1'
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/digup-service-base"
+          git fetch --no-tags origin 28c3f4b7c3f5f7c6da8c622bce0d35032b585c5b
+          git worktree add --detach "$base" 28c3f4b7c3f5f7c6da8c622bce0d35032b585c5b
+          cp Tests/DigUpServiceTests/ServiceIndexingBenchmark.swift "$base/Tests/DigUpServiceTests/"
+          mkdir -p "$base/Vendor"
+          for name in llama llama.cpp llama-build; do
+            ln -s "$GITHUB_WORKSPACE/Vendor/$name" "$base/Vendor/$name"
+          done
+          /usr/bin/time -l swift test --package-path "$base" --filter ServiceIndexingBenchmark 2>&1 | tee service-before.txt
+          /usr/bin/time -l swift test --filter ServiceIndexingBenchmark 2>&1 | tee service-after.txt
+          python3 scripts/compare-index-service.py service-before.txt service-after.txt > service-comparison.json
+          cat service-comparison.json
+      - name: Queue scale at 100,000 and one million metadata records
+        env:
+          DIGUP_QUEUE_BENCHMARK: '1'
+        run: |
+          set -euo pipefail
+          /usr/bin/time -l swift test --skip-build --filter largeMetadataQueuePagesWithoutMaterializingTheCorpus 2>&1 | tee queue-scale.txt
       - name: Compare actual indexer before and after on this runner
         env:
           DIGUP_PIPELINE_BENCHMARK: '1'
@@ -121,3 +142,7 @@ jobs:
             indexing-before.txt
             indexing-after.txt
             indexing-comparison.json
+            service-before.txt
+            service-after.txt
+            service-comparison.json
+            queue-scale.txt

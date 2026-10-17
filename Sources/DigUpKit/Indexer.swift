@@ -31,6 +31,7 @@ public final class Indexer {
         public let state: String
         public let seconds: Double
         public let note: String?
+        public let fileID: Int64
     }
 
     let store: IndexStore
@@ -144,22 +145,75 @@ public final class Indexer {
     /// Per-file problems are recorded on the file; a dead worker or a settings mismatch stops the run (pending files stay
     /// pending, so the next run resumes). `shouldStop` is asked between batches: pausing, or new files that should go
     /// first.
+    public struct ScheduleSource {
+        public let indexer: Indexer
+        public let priorityIDs: Set<Int64>
+        public let includePending: Bool
+        public let limit: Int?
+        public init(indexer: Indexer, priorityIDs: Set<Int64> = [], includePending: Bool = true, limit: Int? = nil) {
+            self.indexer = indexer
+            self.priorityIDs = priorityIDs
+            self.includePending = includePending
+            self.limit = limit
+        }
+    }
+
     @discardableResult
     public func run(limit: Int? = nil, only ids: Set<Int64>? = nil, shouldStop: () -> Bool = { false },
                     onEvent: (Event) -> Void = { _ in }) throws -> [String: Int] {
-        lastPipeline = nil
-        let queue = try store.pending(limit: limit, only: ids)
-        var states: [String: Int] = [:]
-        var done = 0
-        try process(Self.batches(queue).map { Job(files: $0) }, shouldStop: shouldStop) { _, job, results, seconds in
-            for (offset, file) in job.files.enumerated() {
-                let (state, note) = results[offset]
-                states[state, default: 0] += 1
-                onEvent(Event(done: done + offset + 1, total: queue.count, path: file.path, kind: file.kind,
-                              state: state, seconds: seconds, note: note))
-            }
-            done += job.files.count
+        try Self.runScheduled([ScheduleSource(indexer: self, priorityIDs: ids ?? [],
+            includePending: ids == nil, limit: limit)], shouldStop: shouldStop,
+            onEvent: { _, _, event in onEvent(event) }).first ?? [:]
+    }
+
+    /// One owner pages both indexes; switching ready sources never drains inference.
+    @discardableResult
+    public static func runScheduled(_ sources: [ScheduleSource], shouldStop: () -> Bool = { false },
+        onEvent: (Int, Bool, Event) -> Void = { _, _, _ in },
+        onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
+        onRemaining: (Int, Set<Int64>) -> Void = { _, _ in },
+        onVerified: (WorkerInfo) -> Void = { _ in }) throws -> [[String: Int]] {
+        guard !sources.isEmpty else { return [] }
+        guard Set(sources.map { $0.indexer.store.file.standardizedFileURL.path }).count == sources.count else {
+            throw Database.Failure(message: "Each scheduled index must have one database owner.")
         }
+        var queues: [PendingFileQueue] = []
+        defer { for queue in queues { queue.close() } }
+        for source in sources {
+            source.indexer.lastPipeline = nil
+            queues.append(try source.indexer.store.pendingQueue(priorityIDs: source.priorityIDs,
+                includePending: source.includePending, limit: source.limit))
+        }
+        var lastSource = sources.count - 1
+        var states = Array(repeating: [String: Int](), count: sources.count)
+        var done = Array(repeating: 0, count: sources.count)
+        func nextJob() throws -> Job? {
+            var priorities: [Int: Int] = [:]
+            for index in queues.indices {
+                if let first = try queues[index].peek() { priorities[index] = first.priority }
+            }
+            guard let best = priorities.values.min() else { return nil }
+            let order = (1...sources.count).map { (lastSource + $0) % sources.count }
+            guard let selected = order.first(where: { priorities[$0] == best }),
+                  let batch = try queues[selected].takeBatch() else { return nil }
+            lastSource = selected
+            return Job(files: batch.files, source: selected, priority: batch.priority,
+                       options: sources[selected].indexer.options)
+        }
+        try processOwned(sources.map(\.indexer), nextJob: nextJob, shouldStop: shouldStop,
+            decorate: { snapshot in for queue in queues { queue.decorate(&snapshot) } },
+            onSnapshot: onSnapshot, onVerified: onVerified, committed: { _, job, results, seconds in
+                let source = job.source
+                for (offset, file) in job.files.enumerated() {
+                    let (state, note) = results[offset]
+                    states[source][state, default: 0] += 1
+                    onEvent(source, job.priority == 0, Event(done: done[source] + offset + 1,
+                        total: queues[source].total, path: file.path, kind: file.kind,
+                        state: state, seconds: seconds, note: note, fileID: file.id))
+                }
+                done[source] += job.files.count
+            })
+        for index in queues.indices { onRemaining(index, try queues[index].remainingPriorityIDs()) }
         return states
     }
 
@@ -184,63 +238,99 @@ public final class Indexer {
     public func finishLongFiles(shouldStop: () -> Bool = { false }, onStep: (Step) -> Void = { _ in }) throws
         -> [String: Int] {
         lastPipeline = nil
-        var jobs: [Job] = []
-        for file in try store.unfinished() {
-            let info = try store.info(of: file.id)
-            let size = file.kind == .pdf ? options.pdfStep : options.docStep
-            // Where it stopped (after the last page or chunk stored, should its info not say; nothing stored: the start).
-            var start = try info["read_to"].flatMap(Int.init) ?? store.lastPlace(of: file.id) ?? 0
-            // At least one step, which settles a file whose length was only guessed (documents cut before schema 5).
-            let end = max(info["read_end"].flatMap(Int.init) ?? 0, start + 1)
-            while start < end {
-                jobs.append(Job(files: [file], step: start..<min(start + size, end)))
-                start += size
-            }
-        }
-        // Progress counts pages and chunks: what's read once each job is through.
-        var through: [Int] = []
-        for job in jobs { through.append((through.last ?? 0) + (job.step?.count ?? 0)) }
-        var files = Set(jobs.map { $0.files[0].id }).count
+        let queue = try store.pendingQueue(state: "partial")
+        defer { queue.close() }
+        let total = try queue.longFileUnits()
+        var files = queue.total
         var states: [String: Int] = [:]
-        var finished = Set<Int64>()
-        try process(jobs, shouldStop: shouldStop) { index, job, results, seconds in
-            let file = job.files[0]
-            let (state, note) = results[0]
-            if state != "partial", finished.insert(file.id).inserted {
-                states[state, default: 0] += 1
-                files -= 1
+        var finishedFile: Int64?
+        var current: FileRecord?
+        var next = 0
+        var end = 0
+        var through = 0
+        func nextJob() throws -> Job? {
+            while true {
+                if current?.id == finishedFile { next = end }
+                if let file = current, next < end {
+                    let size = file.kind == .pdf ? options.pdfStep : options.docStep
+                    let range = next..<min(next + size, end)
+                    next = range.upperBound
+                    through += range.count
+                    return Job(files: [file], step: range, options: options, through: through)
+                }
+                guard let entry = try queue.take() else { return nil }
+                let file = entry.file
+                let info = try store.info(of: file.id)
+                next = try info["read_to"].flatMap(Int.init) ?? store.lastPlace(of: file.id) ?? 0
+                end = max(info["read_end"].flatMap(Int.init) ?? 0, next + 1)
+                current = file
             }
-            onStep(Step(done: through[index], total: through.last ?? 0, files: files, path: file.path, kind: file.kind,
-                        state: state, seconds: seconds, note: note))
-        } skip: { job in
-            // Finished sooner than its steps said: a document whose length was guessed, or a file that went unreadable.
-            finished.contains(job.files[0].id)
         }
+        try Self.processOwned([self], nextJob: nextJob, shouldStop: shouldStop,
+            decorate: { queue.decorate(&$0) }, committed: { _, job, results, seconds in
+                let file = job.files[0]
+                let (state, note) = results[0]
+                if state != "partial" {
+                    finishedFile = file.id
+                    states[state, default: 0] += 1
+                    files -= 1
+                }
+                onStep(Step(done: job.through, total: total, files: files, path: file.path, kind: file.kind,
+                            state: state, seconds: seconds, note: note))
+            }, skip: { $0.files[0].id == finishedFile })
         return states
     }
 
-    private func process(_ jobs: [Job], shouldStop: () -> Bool,
-                         committed: (Int, Job, [(String, String?)], Double) -> Void,
-                         skip: (Job) -> Bool = { _ in false }) throws {
-        guard !jobs.isEmpty, !shouldStop() else { lastPipeline = IndexPipelineSnapshot(); return }
-        let options = options
-        let folder = scratch.appendingPathComponent(UUID().uuidString)
-        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(jobs, prepare: { index, job in
-            autoreleasepool {
-                Self.prepare(job, options: options, into: folder.appendingPathComponent("batch-\(index)"))
-            }
-        }, cleanup: { prepared in
-            try? FileManager.default.removeItem(at: prepared.folder)
-        })
+    private static func processOwned(_ indexers: [Indexer], nextJob: @escaping () throws -> Job?,
+        shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
+        onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
+        onVerified: (WorkerInfo) -> Void = { _ in },
+        committed: (Int, Job, [(String, String?)], Double) -> Void,
+        skip: (Job) -> Bool = { _ in false }) throws {
+        let folders = indexers.map { $0.scratch.appendingPathComponent(UUID().uuidString) }
+        let options = indexers.map(\.options)
+        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob,
+            source: { String($0.source) }, sizes: { $0.footprint },
+            prepare: { index, job in
+                autoreleasepool {
+                    Self.prepare(job, options: job.options ?? options[job.source],
+                                 into: folders[job.source].appendingPathComponent("batch-\(index)"))
+                }
+            }, cleanup: { prepared in
+                try? FileManager.default.removeItem(at: prepared.folder)
+            })
         var modelLoadMs = 0.0
+        var notificationMs = 0.0
+        var lastNotification = 0.0
+        var verified = false
+        func snapshot() -> IndexPipelineSnapshot {
+            var value = pipeline.snapshot(modelLoadMs: modelLoadMs)
+            value.notificationMs = notificationMs
+            decorate(&value)
+            return value
+        }
+        func progress(force: Bool = false) {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard force || now - lastNotification >= 1 else { return }
+            lastNotification = now
+            let start = ProcessInfo.processInfo.systemUptime
+            onSnapshot(snapshot())
+            notificationMs += (ProcessInfo.processInfo.systemUptime - start) * 1000
+        }
         defer {
             pipeline.close()
-            lastPipeline = pipeline.snapshot(modelLoadMs: modelLoadMs)
-            try? FileManager.default.removeItem(at: folder)
-            if let costsFolder, !measured.tallies.isEmpty {
-                MeasuredCosts.merge(measured, into: costsFolder)
-                measured = MeasuredCosts()
+            let value = snapshot()
+            for index in indexers.indices {
+                var own = value
+                own.source = String(index)
+                indexers[index].lastPipeline = own
+                try? FileManager.default.removeItem(at: folders[index])
+                if let costsFolder = indexers[index].costsFolder, !indexers[index].measured.tallies.isEmpty {
+                    MeasuredCosts.merge(indexers[index].measured, into: costsFolder)
+                    indexers[index].measured = MeasuredCosts()
+                }
             }
+            progress(force: true)
         }
 
         func publish(_ item: IndexPipeline<Job, Prepared, ComputedEmbedding?>.Item,
@@ -252,34 +342,54 @@ public final class Indexer {
                 pipeline.release(item, commitMs: (ProcessInfo.processInfo.systemUptime - start) * 1000, committed: didCommit)
             }
             guard !skip(item.input) else { return }
+            let owner = indexers[item.input.source]
+            if !verified, let computed, computed.hasVectors, computed.info.executionPolicy == "accelerator-only",
+               let device = computed.info.device, !device.isEmpty {
+                verified = true
+                onVerified(computed.info)
+            }
             let results: [(String, String?)]
-            do { results = try self.publish(item.value, computed: computed) }
-            catch { pipeline.stop(); throw error }
+            do { results = try owner.publish(item.value, computed: computed) }
+            catch { pipeline.fail(error); throw error }
             didCommit = true
             let seconds = (item.preparationMs + inferenceMs) / 1000
-            measure(item.value, seconds: seconds)
+            owner.measure(item.value, seconds: seconds)
+            let notificationStart = ProcessInfo.processInfo.systemUptime
             committed(item.index, item.input, results, seconds / Double(item.input.files.count))
+            notificationMs += (ProcessInfo.processInfo.systemUptime - notificationStart) * 1000
         }
 
-        while let item = pipeline.nextPrepared(shouldStop: shouldStop) {
-            if skip(item.input) || !Self.embeddingCalls(item.value, options: options).contains(where: { !$0.inputs.isEmpty }) {
-                try publish(item, computed: nil, inferenceMs: 0)
-                continue
+        do {
+            while let item = pipeline.nextPrepared(shouldStop: shouldStop, canStartWith: {
+                Self.embeddingCalls($0, options: $0.options).contains(where: { !$0.inputs.isEmpty })
+            }, onTick: { progress() }) {
+                if skip(item.input) || !Self.embeddingCalls(item.value, options: item.value.options).contains(where: { !$0.inputs.isEmpty }) {
+                    try publish(item, computed: nil, inferenceMs: 0)
+                    continue
+                }
+                let start = ProcessInfo.processInfo.systemUptime
+                let models = try indexers.map { try $0.fullWorker() }
+                guard let first = models.first, models.allSatisfy({
+                    $0.info.vectorSource == first.info.vectorSource && $0.info.backend == first.info.backend
+                        && $0.info.deviceId == first.info.deviceId && $0.info.device == first.info.device
+                }) else { throw WorkerError.failed("Scheduled indexes resolved different embedding devices or identities.") }
+                modelLoadMs = (ProcessInfo.processInfo.systemUptime - start) * 1000
+                let owners = InferenceOwners(models)
+                let width = models.map { ($0 as? any ParallelEmbedding)?.maximumParallelJobs ?? 1 }.min() ?? 1
+                pipeline.startInference(parallelism: width) { prepared in
+                    let calls = Self.embeddingCalls(prepared, options: prepared.options)
+                    guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
+                    return try ComputedEmbedding(calls: calls, worker: owners.models[prepared.source])
+                }
+                while let result = pipeline.next(shouldStop: shouldStop, onTick: { progress() }) {
+                    try publish(result.item, computed: result.result.get(), inferenceMs: result.inferenceMs)
+                }
+                break
             }
-            let start = ProcessInfo.processInfo.systemUptime
-            let wasRunning = worker != nil
-            let model = try fullWorker()
-            if !wasRunning { modelLoadMs = (ProcessInfo.processInfo.systemUptime - start) * 1000 }
-            let owner = InferenceOwner(model)
-            pipeline.startInference(parallelism: (model as? any ParallelEmbedding)?.maximumParallelJobs ?? 1) { prepared in
-                let calls = Self.embeddingCalls(prepared, options: options)
-                guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
-                return try ComputedEmbedding(calls: calls, worker: owner.model)
-            }
-            while let result = pipeline.next(shouldStop: shouldStop) {
-                try publish(result.item, computed: result.result.get(), inferenceMs: result.inferenceMs)
-            }
-            break
+            try pipeline.throwIfFailed()
+        } catch {
+            pipeline.fail(error)
+            throw error
         }
     }
 
@@ -314,9 +424,9 @@ public final class Indexer {
         }
     }
 
-    private final class InferenceOwner: @unchecked Sendable {
-        let model: any Embedder
-        init(_ model: any Embedder) { self.model = model }
+    private final class InferenceOwners: @unchecked Sendable {
+        let models: [any Embedder]
+        init(_ models: [any Embedder]) { self.models = models }
     }
 
     private static func embeddingCalls(_ prepared: Prepared, options: IndexOptions) -> [EmbeddingCall] {
@@ -368,6 +478,10 @@ public final class Indexer {
     struct Job: Sendable {
         let files: [FileRecord]
         var step: Range<Int>?
+        var source = 0
+        var priority = 1
+        var options: IndexOptions?
+        var through = 0
     }
 
     /// Images and screenshots go to the model 8 at a time; other files one by one.
@@ -430,6 +544,28 @@ public final class Indexer {
         let folder: URL
         var outcomes: [Int: Outcome] = [:]   // files already settled (skipped or failed while reading)
         var payload = Payload.nothing
+        let source: Int
+        let options: IndexOptions
+
+        var footprint: (memory: Int, scratch: Int) {
+            var memory = 0
+            var paths: [String] = []
+            switch payload {
+            case .nothing: break
+            case .images(_, let images): paths = images.map(\.image.path); memory = images.reduce(0) { $0 + $1.ocr.utf8.count }
+            case .pdf(let pages, _, _, _):
+                memory = pages.reduce(0) { $0 + $1.text.utf8.count + ($1.garbled?.utf8.count ?? 0) }
+                paths = pages.compactMap(\.imagePath)
+            case .doc(let chunks, _, _, _): memory = chunks.reduce(0) { $0 + $1.utf8.count }
+            case .code(let code): memory = code.pieces.reduce(0) { $0 + $1.text.utf8.count }
+            case .audio(let pieces, _): paths = pieces.map(\.path)
+            case .video(let frames, let sound, _): paths = frames.map(\.path) + sound.map(\.path)
+            }
+            let scratch = Set(paths).reduce(0) { total, path in
+                total + ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0)
+            }
+            return (memory + paths.reduce(0) { $0 + $1.utf8.count }, scratch)
+        }
     }
 
     struct Outcome: Sendable {
@@ -474,7 +610,7 @@ public final class Indexer {
 
     static func prepare(_ job: Job, options: IndexOptions, into folder: URL) -> Prepared {
         let batch = job.files
-        var prepared = Prepared(batch: batch, step: job.step, folder: folder)
+        var prepared = Prepared(batch: batch, step: job.step, folder: folder, source: job.source, options: options)
         let url = URL(fileURLWithPath: batch[0].path)
         startReading(batch[0].path, token: folder.path)
         defer { endReading(token: folder.path) }

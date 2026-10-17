@@ -1,0 +1,142 @@
+import Foundation
+
+/// A disposable, connection-owned snapshot. Durable file states change only at publication.
+final class PendingFileQueue {
+    struct Entry {
+        let file: FileRecord
+        let priority: Int
+    }
+    private(set) var total = 0
+    private let store: IndexStore
+    private let table: String
+    private let members: String
+    private let pageSize: Int
+    private let state: String
+    private let scopeSQL: String
+    private let scopeValues: [SQLValue]
+    private var after: Int64 = 0
+    private var buffer: [Entry] = []
+    private var offset = 0
+    private var exhausted = false
+    private var closed = false
+    private(set) var buildMs = 0.0
+    private(set) var fetchMs = 0.0
+    private(set) var pages = 0
+    private(set) var rows = 0
+    private(set) var peakBufferedRecords = 0
+
+    init(store: IndexStore, priorityIDs: Set<Int64>, includePending: Bool, limit: Int?,
+         state: String = "pending", scopeSQL: String, scopeValues: [SQLValue], pageSize: Int = 128) throws {
+        self.store = store
+        self.state = state
+        self.scopeSQL = scopeSQL
+        self.scopeValues = scopeValues
+        self.pageSize = min(256, max(8, pageSize))
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        table = "digup_queue_" + suffix
+        members = "digup_priority_" + suffix
+        let start = ProcessInfo.processInfo.systemUptime
+        do {
+            try store.db.execute("CREATE TEMP TABLE \(members)(file INTEGER PRIMARY KEY); CREATE TEMP TABLE \(table)(ord INTEGER PRIMARY KEY, file INTEGER UNIQUE, priority INTEGER NOT NULL);")
+            try store.db.transaction {
+                for id in priorityIDs {
+                    try store.db.run("INSERT INTO \(members)(file) VALUES(?)", [.int(id)])
+                }
+                let membership = "EXISTS(SELECT 1 FROM \(members) p WHERE p.file=files.id)"
+                try store.db.run("""
+                    INSERT INTO \(table)(file,priority)
+                    SELECT id,CASE WHEN \(membership) THEN 0 ELSE 1 END
+                    FROM files WHERE state=?\(scopeSQL)\(includePending ? "" : " AND \(membership)")
+                    ORDER BY 2,\(FileKind.indexingOrderSQL),mtime DESC,id ASC LIMIT ?
+                    """, [.text(state)] + scopeValues + [.int(Int64(max(-1, limit ?? -1)))])
+            }
+            var count = 0
+            try store.db.query("SELECT COUNT(*) FROM \(table)") { count = Int($0.int(0)) }
+            total = count
+            buildMs = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        } catch {
+            try? store.db.execute("DROP TABLE IF EXISTS \(table); DROP TABLE IF EXISTS \(members);")
+            throw error
+        }
+    }
+
+    func peek() throws -> Entry? {
+        guard !closed else { return nil }
+        if offset == buffer.count {
+            guard !exhausted else { return nil }
+            buffer.removeAll(keepingCapacity: true)
+            offset = 0
+            let start = ProcessInfo.processInfo.systemUptime
+            let columns = IndexStore.fileColumns.split(separator: ",").map { "f." + $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ",")
+            try store.db.query("""
+                SELECT \(columns),q.priority,q.ord FROM \(table) q JOIN files f ON f.id=q.file
+                WHERE q.ord>? AND f.state=? ORDER BY q.ord LIMIT ?
+                """, [.int(after), .text(state), .int(Int64(pageSize))]) {
+                buffer.append(Entry(file: IndexStore.record($0), priority: Int($0.int(8))))
+                after = $0.int(9)
+            }
+            pages += 1
+            rows += buffer.count
+            peakBufferedRecords = max(peakBufferedRecords, buffer.count)
+            fetchMs += (ProcessInfo.processInfo.systemUptime - start) * 1000
+            if buffer.isEmpty { exhausted = true; return nil }
+        }
+        return buffer[offset]
+    }
+
+    func take() throws -> Entry? {
+        guard let entry = try peek() else { return nil }
+        offset += 1
+        return entry
+    }
+
+    func takeBatch() throws -> (files: [FileRecord], priority: Int)? {
+        guard let first = try take() else { return nil }
+        var files = [first.file]
+        if first.file.kind == .image || first.file.kind == .screenshot {
+            while files.count < 8, let next = try peek(),
+                  next.priority == first.priority, next.file.kind == first.file.kind {
+                files.append(next.file)
+                offset += 1
+            }
+        }
+        return (files, first.priority)
+    }
+
+    func longFileUnits() throws -> Int {
+        var count = 0
+        try store.db.query("""
+            SELECT COALESCE(SUM(MAX(1,
+                COALESCE(CAST(json_extract(f.info,'$.read_end') AS INTEGER),0) -
+                COALESCE(CAST(json_extract(f.info,'$.read_to') AS INTEGER),
+                    (SELECT MAX(loc) FROM segments WHERE file=f.id AND kind IN ('page','page_image','chunk')),0)
+            )),0)
+            FROM \(table) q JOIN files f ON f.id=q.file WHERE f.state='partial'
+            """) { count = Int($0.int(0)) }
+        return count
+    }
+
+    func remainingPriorityIDs() throws -> Set<Int64> {
+        var result: Set<Int64> = []
+        try store.db.query("""
+            SELECT f.id FROM files f JOIN \(members) p ON p.file=f.id
+            WHERE f.state=?\(scopeSQL)
+            """, [.text(state)] + scopeValues) { result.insert($0.int(0)) }
+        return result
+    }
+
+    func decorate(_ snapshot: inout IndexPipelineSnapshot) {
+        snapshot.queueBuildMs += buildMs
+        snapshot.queueFetchMs += fetchMs
+        snapshot.queuePages += pages
+        snapshot.queueRows += rows
+        snapshot.peakBufferedRecords += peakBufferedRecords
+    }
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        buffer.removeAll()
+        try? store.db.execute("DROP TABLE IF EXISTS \(table); DROP TABLE IF EXISTS \(members);")
+    }
+}
