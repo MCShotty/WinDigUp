@@ -43,11 +43,13 @@ libc = "0.2"
 # A job object that ends the helpers with the shell, the taskbar's theme for the tray icon, and the local time for set
 # hours (already in Tauri's build on Windows).
 [target.'cfg(windows)'.dependencies]
+window-vibrancy = "=0.8.1"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem", "Win32_System_Variant"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects",
                                               "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_SystemInformation",
-                                              "Win32_UI_Shell", "Win32_System_DataExchange", "Win32_System_Memory"] }
+                                              "Win32_UI_Shell", "Win32_System_DataExchange", "Win32_System_Memory",
+                                              "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
 
 # GNOME's shortcut settings, `--toggle` handed to the running DigUp, and the panel's window on Wayland (all already in
 # Tauri's build on Linux).

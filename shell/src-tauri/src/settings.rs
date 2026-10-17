@@ -10,10 +10,15 @@ use std::path::Path;
 #[serde(rename_all="snake_case")]
 pub enum Appearance { #[default] System, Light, Dark }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelMaterial { #[default] Automatic, Solid }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub appearance: Appearance,
+    pub panel_material: PanelMaterial,
     pub applications: crate::applications::Options,
     pub windows_settings: crate::system_settings::Options,
     pub discovery: crate::discovery::Options,
@@ -146,5 +151,32 @@ mod tests {
         assert!(!saved.enrichment.publisher_pages&&!saved.windows_settings.semantic_enabled&&!saved.windows_settings.ordinary_searches);
         assert_eq!(saved.applications.overrides["app:fixture"].purpose,"My work");
         assert_eq!(saved.discovery.volumes,vec![volume]);let _=std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod panel_preferences_tests {
+    use super::*;
+    #[test]
+    fn panel_defaults_and_isolated_save_preserve_other_preferences() {
+        let root = std::env::temp_dir().join(format!("digup-panel-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let path = root.join("isolated.json");
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "folders":["C:/Users/Zoë/Documents"], "indexHoursOn":true, "appearance":"dark",
+            "applications":{"overrides":{"app:fixture":{"aliases":["写真"],"purpose":"Edit photos","hidden":true}}}
+        })).unwrap();
+        assert_eq!(settings.panel_material, PanelMaterial::Automatic);
+        settings.panel_material = PanelMaterial::Solid;
+        settings.save(&path).unwrap();
+        let saved = Settings::load(&path);
+        assert_eq!(saved.panel_material, PanelMaterial::Solid);
+        assert_eq!(saved.appearance, Appearance::Dark);
+        assert_eq!(saved.folders, settings.folders);
+        assert!(saved.index_hours_on);
+        assert_eq!(saved.applications.overrides["app:fixture"].aliases, ["写真"]);
+        assert!(saved.applications.overrides["app:fixture"].hidden);
+        assert!(!root.join("settings.json").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

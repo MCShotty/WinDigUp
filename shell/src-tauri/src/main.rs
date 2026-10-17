@@ -27,6 +27,8 @@ mod hours;
 mod moments;
 mod options;
 mod settings;
+mod panel_geometry;
+mod panel_native;
 mod status;
 mod tray_icon;
 mod updates;
@@ -53,11 +55,11 @@ use tauri_plugin_opener::OpenerExt;
 use watcher::FolderWatcher;
 use application_commands::{search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps};
 
-const PANEL_WIDTH: f64 = 780.0;
+const PANEL_WIDTH: f64 = panel_geometry::WIDTH;
 /// The panel's window, under one name or the other: made anew when the person turns centering on or off.
 const PANEL: &str = "panel";
 const CENTERED_PANEL: &str = "panel-centered";
-const FIELD_HEIGHT: f64 = 56.0;
+const FIELD_HEIGHT: f64 = panel_geometry::FIELD_HEIGHT;
 /// The window's label.
 const WINDOW: &str = "main";
 
@@ -111,7 +113,10 @@ struct Shell {
     /// The window's size inside its frame, as its page last reported it (GTK's own counts its title bar and shadow).
     window_inner: Mutex<Option<(f64, f64)>>,
     /// A search the panel hands the window (its query, and the kind of results to show): taken when the window opens.
-    window_search: Mutex<Option<(String, Option<String>)>>,
+    window_search: Mutex<Option<(String, Option<String>, Option<String>)>>,
+    panel_material: Mutex<panel_native::MaterialStatus>,
+    panel_request: AtomicUsize,
+    panel_shown: Mutex<Option<(usize, Instant)>>,
     /// Debug runs with setup: the panel's query waits until the first index is in.
     debug_query_sent: AtomicBool,
     /// Quit was chosen: no helper starts again (an index event arriving meanwhile would start the search service).
@@ -499,9 +504,55 @@ fn hide_panel(app: AppHandle) {
 
 /// The panel grows to show results and shrinks back to its field.
 #[tauri::command]
-fn panel_height(app: AppHandle, height: f64) {
-    if let Some(panel) = panel_window(&app) {
-        let _ = panel.set_size(LogicalSize::new(PANEL_WIDTH, height.clamp(FIELD_HEIGHT, 640.0)));
+fn panel_height(app: AppHandle, height: f64) -> Result<Value, String> {
+    let panel = panel_window(&app).ok_or("The search panel is unavailable")?;
+    let frame = panel_frame(&panel, None, height)?;
+    apply_panel_frame(&panel, frame)?;
+    Ok(json!({"maxHeight":frame.max_height,"width":frame.width,"height":frame.height,"nativeSized":true}))
+}
+
+fn panel_frame(panel: &tauri::WebviewWindow, monitor: Option<tauri::Monitor>, height: f64) -> Result<panel_geometry::Frame, String> {
+    let monitor = monitor.or_else(|| panel.current_monitor().ok().flatten())
+        .or_else(|| panel.primary_monitor().ok().flatten()).ok_or("No display is available")?;
+    let work = monitor.work_area();
+    Ok(panel_geometry::frame(panel_geometry::WorkArea {
+        x: work.position.x as f64, y: work.position.y as f64,
+        width: work.size.width as f64, height: work.size.height as f64,
+    }, monitor.scale_factor(), height))
+}
+
+fn apply_panel_frame(panel: &tauri::WebviewWindow, frame: panel_geometry::Frame) -> Result<(), String> {
+    panel.set_size(LogicalSize::new(frame.width, frame.height)).map_err(|error| error.to_string())?;
+    panel.set_position(PhysicalPosition::new(frame.x, frame.y)).map_err(|error| error.to_string())?;
+    panel_native::shape(panel);
+    Ok(())
+}
+
+#[tauri::command]
+fn panel_config(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    let panel = panel_window(&app).ok_or("The search panel is unavailable")?;
+    let frame = panel_frame(&panel, None, FIELD_HEIGHT)?;
+    Ok(json!({"schemaVersion":1,"width":frame.width,"fieldHeight":FIELD_HEIGHT,
+        "maxHeight":frame.max_height,"nativeSized":true,"material":*shell.panel_material.lock().unwrap()}))
+}
+
+fn refresh_panel_appearance(app: &AppHandle) {
+    let Some(panel) = panel_window(app) else { return };
+    let shell = app.state::<Arc<Shell>>();
+    let settings = shell.settings.lock().unwrap().clone();
+    let previous = shell.panel_material.lock().unwrap().clone();
+    let status = panel_native::apply(&panel, &settings.appearance, &settings.panel_material, Some(&previous));
+    *shell.panel_material.lock().unwrap() = status.clone();
+    let _ = app.emit("panel-appearance", &status);
+}
+
+#[tauri::command]
+fn panel_ready(shell: State<'_, Arc<Shell>>, request_id: usize) {
+    let mut shown = shell.panel_shown.lock().unwrap();
+    if shown.as_ref().is_some_and(|(id, _)| *id == request_id) {
+        let (_, started) = shown.take().unwrap();
+        shell.diagnostics.record("panel", json!({"event":"focused","requestId":request_id,
+            "showToFocusMs":started.elapsed().as_secs_f64()*1000.0}));
     }
 }
 
@@ -546,7 +597,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "folders": shell.folders(),
         "hotkey": (shell.shortcut != Method::ByHand).then(|| shell.hotkey_text()),
         "state": shell.snapshot(),
-        "search": search.map(|(query, kind)| json!({"query": query, "kind": kind})),
+        "search": search.map(|(query, kind, selected)| json!({"query": query, "kind": kind, "selected":selected})),
         "hasCode": !shell.code_folders().is_empty(),
         "applications":shell.applications.info(),
         "windowsSettings":shell.windows_settings.info(),
@@ -565,9 +616,10 @@ fn app_state(shell: State<'_, Arc<Shell>>) -> Value {
 
 /// The panel's search in the window, for a bigger look (Ctrl+O, "Show all…"); `kind` limits it to one group.
 #[tauri::command]
-fn open_window(app: AppHandle, shell: State<'_, Arc<Shell>>, query: String, kind: Option<String>) {
+fn open_window(app: AppHandle, shell: State<'_, Arc<Shell>>, query: String, kind: Option<String>, selected: Option<String>) {
     hide_panel(app.clone());
-    *shell.window_search.lock().unwrap() = Some((query, kind));
+    let selected = selected.filter(|key| key.len() <= 4096 && ["file:", "app:", "setting:"].iter().any(|prefix| key.starts_with(prefix)));
+    *shell.window_search.lock().unwrap() = Some((query, kind, selected));
     later(&app, |app| {
         let _ = show_window(app);
     });
@@ -673,7 +725,7 @@ fn main() {
         .setup(move |app| setup(app, options))
         .invoke_handler(tauri::generate_handler![
             ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
-            panel_area, settings_info, set_open_at_login, set_center_panel, debug_query, debug_report, window_info,
+            panel_area, panel_config, panel_ready, appearance, set_appearance, set_panel_material, settings_info, set_open_at_login, set_center_panel, debug_query, debug_report, window_info,
             app_state, activity_snapshot, record_search_timing, search_session, application_commands::cancel_app_search, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
@@ -818,6 +870,9 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         watchdog_stops: Mutex::default(),
         window_inner: Mutex::new(None),
         window_search: Mutex::new(None),
+        panel_material: Mutex::default(),
+        panel_request: AtomicUsize::new(0),
+        panel_shown: Mutex::new(None),
         debug_query_sent: AtomicBool::new(false),
         quitting: AtomicBool::new(false),
         measuring: AtomicBool::new(false),
@@ -1080,13 +1135,24 @@ fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
         wayland::track(&panel);
     }
     *app.state::<Arc<Shell>>().panel_label.lock().unwrap() = label;
+    panel_native::shape(&panel);
+    refresh_panel_appearance(app);
     let app = app.clone();
     panel.on_window_event(move |event| {
         // Like Spotlight: it steps away when you click elsewhere.
-        if let WindowEvent::Focused(false) = event {
-            if !app.state::<Arc<Shell>>().options.debug_show {
-                hide_panel(app.clone());
+        match event {
+            WindowEvent::Focused(false) if !app.state::<Arc<Shell>>().options.debug_show => hide_panel(app.clone()),
+            WindowEvent::Resized(_) => {
+                if let Some(panel) = panel_window(&app) { panel_native::shape(&panel); }
             }
+            WindowEvent::ThemeChanged(_) => refresh_panel_appearance(&app),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(panel) = panel_window(&app) {
+                    panel_native::shape(&panel);
+                    let _ = panel.emit("panel-geometry", ());
+                }
+            }
+            _ => {}
         }
     });
     Ok(())
@@ -1115,32 +1181,28 @@ fn remake_panel(app: &AppHandle) {
 }
 
 fn show_panel(app: &AppHandle) {
-    app.state::<Arc<Shell>>().applications.refresh_if_stale();
-    if !app.state::<Arc<Shell>>().is_set_up() {
-        later(app, |app| {
-            let _ = show_setup(app);
-        });
+    let started = Instant::now();
+    let shell = app.state::<Arc<Shell>>();
+    shell.applications.refresh_if_stale();
+    if !shell.is_set_up() {
+        later(app, |app| { let _ = show_setup(app); });
         return;
     }
     let Some(panel) = panel_window(app) else { return };
-    // On the screen with the pointer, centered, a fifth of the way down: the page puts it there in a window that fills
-    // the screen (GTK keeps the window maximized while it's hidden). Elsewhere on Wayland the desktop places it.
     if panel.label() == CENTERED_PANEL {
         let _ = panel.maximize();
-    } else if let Ok(pointer) = app.cursor_position() {
-        if let Ok(Some(screen)) = app.monitor_from_point(pointer.x, pointer.y) {
-            let width = (PANEL_WIDTH * screen.scale_factor()) as i32;
-            let x = screen.position().x + (screen.size().width as i32 - width) / 2;
-            let y = screen.position().y + (screen.size().height as f64 * 0.2) as i32;
-            let _ = panel.set_position(PhysicalPosition::new(x, y));
-        }
+    } else {
+        let monitor = app.cursor_position().ok().and_then(|point| app.monitor_from_point(point.x, point.y).ok().flatten());
+        let height = panel.inner_size().ok().and_then(|size| panel.scale_factor().ok().map(|scale| size.height as f64 / scale)).unwrap_or(FIELD_HEIGHT);
+        if let Ok(frame) = panel_frame(&panel, monitor, height) { let _ = apply_panel_frame(&panel, frame); }
     }
+    refresh_panel_appearance(app);
+    let request_id = shell.panel_request.fetch_add(1, Ordering::Relaxed) + 1;
+    *shell.panel_shown.lock().unwrap() = Some((request_id, started));
     let _ = panel.show();
     let _ = panel.set_focus();
-    let _ = panel.emit("panel-shown", ());
-    if cfg!(debug_assertions) {
-        println!("panel: shown");
-    }
+    let _ = panel.emit("panel-shown", json!({"requestId":request_id}));
+    if cfg!(debug_assertions) { println!("panel: shown"); }
 }
 
 fn toggle_panel(app: &AppHandle) {
@@ -1158,8 +1220,8 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
     let shell = app.state::<Arc<Shell>>().inner().clone();
     shell.applications.refresh_if_stale();
     if let Some(window) = app.get_webview_window(WINDOW) {
-        if let Some((query, kind)) = shell.window_search.lock().unwrap().take() {
-            let _ = window.emit("window-search", json!({"query": query, "kind": kind}));
+        if let Some((query, kind, selected)) = shell.window_search.lock().unwrap().take() {
+            let _ = window.emit("window-search", json!({"query": query, "kind": kind, "selected":selected}));
         }
         let _ = window.unminimize();
         let _ = window.show();
@@ -1285,7 +1347,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
-    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "storage"));
+    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "drives" | "storage"));
     if let Some(window) = app.get_webview_window("settings") {
         if let Some(tab) = tab { let _ = window.emit("settings-tab", tab); }
         let _ = window.show();
@@ -1320,6 +1382,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,
         "appearance":settings.appearance,
+        "panelMaterial":settings.panel_material,
         "centered": shell.settings.lock().unwrap().center_panel,
         // Windows' tray reports clicks (Linux's open the menu, a Mac's too).
         "canChooseTrayClick": cfg!(windows),
@@ -1705,18 +1768,36 @@ fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
     });
 }
 
-#[tauri::command]
-fn appearance(shell:State<'_,Arc<Shell>>)->Value {
-    json!({"schemaVersion":1,"appearance":shell.settings.lock().unwrap().appearance})
+fn appearance_value(shell: &Shell) -> Value {
+    let settings = shell.settings.lock().unwrap();
+    json!({"schemaVersion":2,"appearance":settings.appearance,"panelMaterial":settings.panel_material,
+        "panel":*shell.panel_material.lock().unwrap()})
 }
+
 #[tauri::command]
-fn set_appearance(app:AppHandle,shell:State<'_,Arc<Shell>>,appearance:settings::Appearance)->Result<Value,String>{
-    let mut current=shell.settings.lock().unwrap();let mut next=current.clone();
-    next.appearance=appearance;next.save(&shell.settings_path).map_err(|e|e.to_string())?;
-    *current=next;
-    let value=json!({"schemaVersion":1,"appearance":current.appearance});
-    drop(current);
-    let _=app.emit("appearance",&value);
+fn appearance(shell: State<'_, Arc<Shell>>) -> Value { appearance_value(&shell) }
+
+#[tauri::command]
+fn set_appearance(app: AppHandle, shell: State<'_, Arc<Shell>>, appearance: settings::Appearance) -> Result<Value, String> {
+    let mut current = shell.settings.lock().unwrap();
+    let mut next = current.clone(); next.appearance = appearance;
+    next.save(&shell.settings_path).map_err(|error| error.to_string())?;
+    *current = next; drop(current);
+    let value = appearance_value(&shell);
+    let _ = app.emit("appearance", &value);
+    later(&app, refresh_panel_appearance);
+    Ok(value)
+}
+
+#[tauri::command]
+fn set_panel_material(app: AppHandle, shell: State<'_, Arc<Shell>>, material: settings::PanelMaterial) -> Result<Value, String> {
+    let mut current = shell.settings.lock().unwrap();
+    let mut next = current.clone(); next.panel_material = material;
+    next.save(&shell.settings_path).map_err(|error| error.to_string())?;
+    *current = next; drop(current);
+    let value = appearance_value(&shell);
+    let _ = app.emit("appearance", &value);
+    later(&app, refresh_panel_appearance);
     Ok(value)
 }
 

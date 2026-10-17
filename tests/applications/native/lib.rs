@@ -320,3 +320,6 @@ mod tests {
 
 #[path = "../../../shell/src-tauri/src/options.rs"]
 pub mod options;
+
+#[path = "../../../shell/src-tauri/src/panel_geometry.rs"]
+pub mod panel_geometry;

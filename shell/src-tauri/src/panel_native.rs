@@ -1,0 +1,112 @@
+//! Native material and rounded hit regions for the compact launcher.
+use crate::settings::{Appearance, PanelMaterial};
+use serde::Serialize;
+use tauri::WebviewWindow;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialStatus {
+    pub supported: bool,
+    pub material: String,
+    pub dark: bool,
+    pub reason: String,
+}
+
+pub fn apply(window: &WebviewWindow, appearance: &Appearance, preference: &PanelMaterial,
+             previous: Option<&MaterialStatus>) -> MaterialStatus {
+    let dark = match appearance {
+        Appearance::Light => false,
+        Appearance::Dark => true,
+        Appearance::System => matches!(window.theme(), Ok(tauri::Theme::Dark)),
+    };
+    let mut status = MaterialStatus { supported: cfg!(windows), material: "solid".into(), dark, reason: String::new() };
+    #[cfg(windows)]
+    {
+        status.reason = if *preference == PanelMaterial::Solid { "Solid panel selected.".into() }
+            else { windows::material_restriction().unwrap_or_default() };
+        if status.reason.is_empty() { status.material = "acrylic".into(); }
+        if previous == Some(&status) { return status; }
+        if status.material == "acrylic" {
+            let tint = if dark { (28, 31, 29, 220) } else { (246, 248, 245, 220) };
+            if let Err(error) = window_vibrancy::apply_acrylic(window, Some(tint)) {
+                status.material = "solid".into();
+                status.reason = format!("Windows transparency is unavailable: {error}");
+                let _ = window_vibrancy::clear_acrylic(window);
+            }
+        } else {
+            let _ = window_vibrancy::clear_acrylic(window);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (preference, previous);
+        status.reason = "Native panel transparency is unavailable on this desktop.".into();
+    }
+    status
+}
+
+pub fn shape(window: &WebviewWindow) {
+    #[cfg(windows)]
+    windows::shape(window);
+    #[cfg(not(windows))]
+    let _ = window;
+}
+
+#[cfg(windows)]
+mod windows {
+    use super::*;
+    use std::ffi::c_void;
+    use windows_sys::Win32::{
+        Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
+        Graphics::Dwm::DwmIsCompositionEnabled,
+        System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
+        UI::WindowsAndMessaging::{
+            GetSystemMetrics, SystemParametersInfoW, HIGHCONTRASTW, HCF_HIGHCONTRASTON,
+            SM_REMOTESESSION, SPI_GETHIGHCONTRAST,
+        },
+    };
+
+    pub fn material_restriction() -> Option<String> {
+        unsafe {
+            let mut contrast: HIGHCONTRASTW = std::mem::zeroed();
+            contrast.cbSize = std::mem::size_of::<HIGHCONTRASTW>() as u32;
+            if SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize,
+                &mut contrast as *mut _ as *mut c_void, 0) == 0 {
+                return Some("Windows contrast settings could not be read.".into());
+            }
+            if contrast.dwFlags & HCF_HIGHCONTRASTON != 0 {
+                return Some("Windows contrast mode uses a solid panel.".into());
+            }
+            if GetSystemMetrics(SM_REMOTESESSION) != 0 {
+                return Some("Remote Desktop uses a solid panel.".into());
+            }
+            let mut composition = 0;
+            if DwmIsCompositionEnabled(&mut composition) < 0 || composition == 0 {
+                return Some("Windows desktop composition is unavailable.".into());
+            }
+            let key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0".encode_utf16().collect();
+            let name: Vec<u16> = "EnableTransparency\0".encode_utf16().collect();
+            let mut enabled = 0u32;
+            let mut size = std::mem::size_of::<u32>() as u32;
+            let read = RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_DWORD,
+                std::ptr::null_mut(), &mut enabled as *mut _ as *mut c_void, &mut size);
+            if read != 0 || enabled == 0 {
+                return Some("Windows transparency effects are off or unavailable.".into());
+            }
+        }
+        None
+    }
+
+    pub fn shape(window: &WebviewWindow) {
+        let (Ok(hwnd), Ok(size), Ok(scale)) = (window.hwnd(), window.inner_size(), window.scale_factor()) else { return };
+        let radius = if size.height as f64 / scale <= crate::panel_geometry::FIELD_HEIGHT + 1.0 { 32.0 } else { 22.0 };
+        let diameter = (radius * 2.0 * scale).round() as i32;
+        unsafe {
+            let region = CreateRoundRectRgn(0, 0, size.width as i32 + 1, size.height as i32 + 1, diameter, diameter);
+            if !region.is_null() && SetWindowRgn(hwnd.0, region, 1) == 0 {
+                // SetWindowRgn owns a successful region; only release a rejected one.
+                DeleteObject(region);
+            }
+        }
+    }
+}

@@ -832,6 +832,7 @@ dependencies = [
  "unicode-casefold",
  "unicode-normalization",
  "url",
+ "window-vibrancy",
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "yaml-rust2",
