@@ -92,8 +92,10 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
                 let bytes=(attributes?[.size] as? NSNumber)?.int64Value ?? 0
                 weights+=bytes
             }
-            let reserve = max(Int64(512 * 1024 * 1024), weights * 2) + 256 * 1024 * 1024
-                + (!textOnly && !queryResident ? 1024 * 1024 * 1024 : 0)
+            let minimum:Int64=536_870_912
+            var reserve:Int64=max(minimum,weights*2)
+            reserve+=268_435_456
+            if !textOnly && !queryResident{reserve+=1_073_741_824}
             if ((total == 0 || free == 0) && others > 0) || total > 0 && free > 0 && Int64(free) < reserve {
                 throw WorkerError.failed((others > 0 ? "capacity_limited: " : "insufficient_vram: ") +
                     "Not enough verified free GPU memory for another model context. Existing workers stay on the selected GPU.")
