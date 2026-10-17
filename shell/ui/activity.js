@@ -38,7 +38,7 @@ window.ActivityUI = (() => {
     if (!listeners.size || refreshTimer) return;
     refreshTimer = setTimeout(() => { refreshTimer = null; refresh(); }, 400);
   }
-  for (const event of ["state", "applications", "applications-progress", "model", "speed", "helper"]) {
+  for (const event of ["state", "applications", "applications-progress", "windows-settings", "windows-settings-progress", "discovery", "app-enrichment", "model", "speed", "helper"]) {
     window.__TAURI__.event.listen(event, schedule);
   }
   function subscribe(callback) {
@@ -134,6 +134,9 @@ window.ActivityUI = (() => {
       inference.verified?.backend ? `Verified backend: ${inference.verified.backend}; precision: ${inference.verified.precision_profile || "reported in runtime details"}` : "",
       inference.verified?.build_identity ? `Native build: ${inference.verified.build_identity}` : "",
       inference.verified?.runtime_version ? `CUDA runtime API: ${inference.verified.runtime_version}; driver API: ${inference.verified.driver_version || "unknown"}` : "",
+      snapshot.windowsSettings?.catalog ? `Windows settings: ${number(snapshot.windowsSettings.catalog.count)} destinations; ${snapshot.windowsSettings.purpose?.state||"names ready"}` : "",
+      snapshot.discovery?.supported ? `Drive discovery: ${snapshot.discovery.progress?.phase||"unknown"}; ${number(snapshot.discovery.progress?.records)} records; ${number(snapshot.discovery.progress?.candidates)} candidates; ${number(snapshot.discovery.progress?.accepted)} accepted` : "",
+      snapshot.enrichment ? `Online descriptions: ${snapshot.enrichment.options?.enabled?"on":"off"}; ${number(snapshot.enrichment.progress?.enriched)} apps enhanced; ${snapshot.enrichment.progress?.message||""}` : "",
       `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`,
       snapshot.search?.last ? `Last search (${snapshot.search.last.phase}): ${Math.round(snapshot.search.last.total||0)} ms input to render; ${searchBreakdown(snapshot.search.last)}` : ""].filter(Boolean).join("\n");
   }
@@ -174,6 +177,9 @@ window.ActivityUI = (() => {
           <section class="activity-section" data-key="apps-section"><h3>Applications</h3><dl>
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
+          <section class="activity-section" data-key="discovery-section" hidden><h3>Additional search sources</h3>
+            <p data-key="settings-status"></p><p data-key="drive-status"></p><p data-key="description-status"></p>
+            <p data-key="discovery-note" class="activity-muted"></p></section>
           <section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
             <p data-key="runtime" class="activity-muted" hidden></p>
@@ -183,6 +189,10 @@ window.ActivityUI = (() => {
           <h3>Provider health</h3><dl class="activity-health"><div><dt>File indexing</dt><dd data-key="health-files"></dd></div>
             <div><dt>App discovery</dt><dd data-key="health-catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="health-purpose"></dd></div>
             <div><dt>Query encoder</dt><dd data-key="health-inference"></dd></div></dl>
+          <dl class="activity-health" data-key="discovery-health" hidden>
+            <div><dt>Windows settings</dt><dd data-key="health-settings"></dd></div>
+            <div><dt>Drive discovery</dt><dd data-key="health-drives"></dd></div>
+            <div><dt>Online descriptions</dt><dd data-key="health-descriptions"></dd></div></dl>
           <p data-key="health-detail" class="activity-error"></p>
           <div class="activity-actions activity-recovery"><button data-key="retry" type="button">Index now</button>
             <button data-key="refresh-apps" type="button">Refresh apps</button><button data-key="prepare" type="button">Prepare purpose matching</button>
@@ -321,16 +331,25 @@ window.ActivityUI = (() => {
         receipt.precision_profile, receipt.build_identity ? `Build ${receipt.build_identity.slice(0, 12)}` : ""].filter(Boolean).join(" · ");
       put("runtime", runtime); this.get("runtime").hidden = !runtime;
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
+      const drive=snapshot.discovery||{},dp=drive.progress||{},enrichment=snapshot.enrichment||{},ep=enrichment.progress||{},settings=snapshot.windowsSettings||{};
+      const settingsStatus=settings.catalog?.enabled ? `${number(settings.catalog.count)} Windows destinations · ${settings.purpose?.message||settings.purpose?.state||"Names ready"}` : "Windows settings search off";
+      const driveStatus=!drive.options?.enabled?"Drive discovery off":`${dp.phase||"Waiting"}${dp.records!=null?` · ${number(dp.records)} records checked`:""}${dp.candidates!=null?` · ${number(dp.candidates)} executable candidates`:""}${dp.accepted!=null?` · ${number(dp.accepted)} accepted`:""}`;
+      const descriptionStatus=`${enrichment.options?.enabled?(ep.state||"Waiting"):"Online descriptions off"}${ep.enriched!=null?` · ${number(ep.enriched)} apps enhanced`:""}`;
+      this.get("discovery-section").hidden=this.get("discovery-health").hidden=!drive.supported;
+      put("settings-status",settingsStatus);put("drive-status",driveStatus);put("description-status",descriptionStatus);
+      put("health-settings",settingsStatus);put("health-drives",driveStatus);put("health-descriptions",descriptionStatus);
+      put("discovery-note",[dp.message,ep.message,settings.purpose?.message,dp.mode==="directory"?"Using directory fallback. Fast NTFS discovery is optional in Apps settings.":""].filter(Boolean).join(" · "));
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
       put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),
-        ...(f.unreadable || []).map(path=>`Folder unreadable: ${shortPath(path)}`), ...sourceErrors, purpose.message, inference.error].filter(Boolean).join("\n"));
+        ...(f.unreadable || []).map(path=>`Folder unreadable: ${shortPath(path)}`), ...sourceErrors, purpose.message, inference.error, dp.message, ep.message, settings.purpose?.message].filter(Boolean).join("\n"));
       this.get("retry").disabled = Boolean(this.busy) || !f.canIndexNow;
       this.get("refresh-apps").disabled = Boolean(this.busy) || !catalog.enabled || Boolean(catalog.refreshing);
       this.get("refresh-apps").hidden = catalog.supported === false;
       this.get("prepare").disabled = Boolean(this.busy) || !catalog.enabled || !catalog.semanticEnabled || inference.model?.state !== "ready" || complete;
       this.get("prepare").hidden = catalog.supported === false;
       this.renderEvents(snapshot.events || []);
-      if (this.lastPhase !== f.phase) { this.lastPhase=f.phase; put("announcement", title); }
+      const phaseSignature=JSON.stringify([f.phase,drive.supported?dp.phase:null,drive.supported?ep.state:null]);
+      if(this.lastPhase!==phaseSignature){this.lastPhase=phaseSignature;put("announcement",title+(drive.supported?` · Drive discovery ${dp.phase||"off"} · Online descriptions ${ep.state||"off"}`:""));}
     }
     renderEvents(events) {
       const key = JSON.stringify(events); if (key === this.eventsKey) return; this.eventsKey = key;

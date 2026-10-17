@@ -15,7 +15,7 @@ impl<'a> Foreground<'a> {
         *shell.app_last_query.lock().unwrap() = Instant::now();
         Self(shell)
     }
-    fn passive(shell: &'a Shell) -> Self {
+    pub(crate) fn passive(shell: &'a Shell) -> Self {
         shell.app_foreground.fetch_add(1, Ordering::SeqCst);
         Self(shell)
     }
@@ -40,6 +40,7 @@ async fn synchronize(shell: &Shell) -> Result<String, String> {
             .unwrap_or_default()
             .to_string();
         documents["op"] = json!("apps_catalog");
+        documents["passive"]=json!(true);
         shell.search.ask(documents).await?;
         *synced = Some((shell.search.generation(), revision.clone()));
         return Ok(revision);
@@ -170,9 +171,9 @@ pub async fn launch_app(
 ) -> Result<Value, AppError> {
     let catalog = shell.applications.clone();
     let id = app_id.clone();
-    tauri::async_runtime::spawn_blocking(move || catalog.launch(&id))
-        .await
-        .map_err(|e| AppError::new("launch_failed", &app_id, e.to_string()))??;
+    let result=tauri::async_runtime::spawn_blocking(move || catalog.launch(&id))
+        .await.map_err(|e| AppError::new("launch_failed", &app_id, e.to_string()))?;
+    if let Err(error)=result{shell.discovery.schedule(false);return Err(error)}
     crate::hide_panel(app);
     Ok(json!({"accepted":true,"appId":app_id}))
 }
@@ -197,6 +198,7 @@ pub async fn app_icon(
 #[tauri::command]
 pub fn refresh_apps(shell: State<'_, Arc<Shell>>) -> Value {
     shell.applications.refresh();
+    shell.discovery.schedule(false);
     shell.applications.info()
 }
 
@@ -239,6 +241,7 @@ pub fn set_app_options(
         settings.applications.clone()
     };
     shell.applications.configure(options);
+    if !enabled { shell.discovery.stop(); }
     Ok(shell.applications.info())
 }
 #[tauri::command]
@@ -285,7 +288,7 @@ pub fn start(app: &AppHandle, shell: &Arc<Shell>) {
             }
             if renewed.elapsed() >= Duration::from_millis(500)
                 && (shell.app_foreground.load(Ordering::SeqCst) != 0 || shell.app_last_query.lock().unwrap().elapsed() < Duration::from_secs(1)) {
-                shell.index.foreground(); renewed = Instant::now();
+                shell.index.foreground(); shell.discovery.foreground(); shell.enrichment.foreground(); renewed = Instant::now();
             }
             if !crate::applications::Catalog::supported() { continue; }
             if !shell.applications.semantic_enabled()

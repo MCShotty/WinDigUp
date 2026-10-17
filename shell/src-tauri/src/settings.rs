@@ -10,6 +10,9 @@ use std::path::Path;
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub applications: crate::applications::Options,
+    pub windows_settings: crate::system_settings::Options,
+    pub discovery: crate::discovery::Options,
+    pub enrichment: crate::applications::enrichment::Options,
     pub acceleration: crate::acceleration::Acceleration,
     /// The folders searched and kept indexed.
     pub folders: Vec<String>,
@@ -118,5 +121,25 @@ mod tests {
         std::fs::write(&path,b"{broken").unwrap(); let _=Settings::load(&path);
         assert_eq!(std::fs::read(&path).unwrap(),b"{broken");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]mod discovery_preferences_tests{
+    use super::*;
+    #[test]fn optional_sources_roundtrip_without_changing_existing_preferences(){
+        let root=std::env::temp_dir().join(format!("digup-sources-{}-{}",std::process::id(),crate::applications::digest(&format!("{:?}",std::time::SystemTime::now()))));
+        std::fs::create_dir_all(&root).unwrap();let file=root.join("custom-settings.json");
+        let volume=r"\\?\Volume{12345678-1234-abcd-9876-1234567890ab}\";
+        let input=serde_json::json!({"folders":["C:\\Documents"],"setUp":true,"skipTypes":["tmp"],"indexHoursOn":true,
+            "applications":{"enabled":true,"overrides":{"app:fixture":{"aliases":["Editor"],"purpose":"My work","hidden":true}}},
+            "discovery":{"enabled":true,"volumes":[volume],"paused":true,"included":[format!("exe:{}","1".repeat(64))]},
+            "windowsSettings":{"enabled":true,"semanticEnabled":false,"ordinarySearches":false},
+            "enrichment":{"enabled":true,"publisherPages":false}});
+        let settings:Settings=serde_json::from_value(input).unwrap();settings.discovery.validate().unwrap();settings.save(&file).unwrap();
+        let saved=Settings::load(&file);assert_eq!(saved.folders,settings.folders);assert_eq!(saved.skip_types,settings.skip_types);
+        assert!(saved.index_hours_on&&saved.set_up&&saved.discovery.paused&&saved.enrichment.enabled);
+        assert!(!saved.enrichment.publisher_pages&&!saved.windows_settings.semantic_enabled&&!saved.windows_settings.ordinary_searches);
+        assert_eq!(saved.applications.overrides["app:fixture"].purpose,"My work");
+        assert_eq!(saved.discovery.volumes,vec![volume]);let _=std::fs::remove_dir_all(root);
     }
 }

@@ -30,6 +30,7 @@ const state = {
   text: "",              // what was searched (without "code:")
   isCode: false,
   isApps: false,
+  isSettings: false,
   strong: [],
   weaker: [],
   groups: [],
@@ -45,7 +46,7 @@ const state = {
 let debugPending = false;
 const applicationSearch = new ApplicationSearch((statusOnly=false) => {
   const ids = rowIDs();
-  if (!state.navigated) state.selection = !state.isApps&&!state.lexicalReady&&!state.error?null:ids[0]??null;
+  if (!state.navigated) state.selection = !state.isApps && !state.isSettings&&!state.lexicalReady&&!state.error?null:ids[0]??null;
   else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
   if(statusOnly){renderFooter();return;}
   render();
@@ -70,11 +71,14 @@ function queryChanged() {
   const mode = Apps.parse(typed);
   const code = mode.code;
   const text = mode.text;
-  if((mode.mode==="apps"||!typed||(code&&!text))&&state.filesStarted){state.filesStarted=false;ask({op:"cancel",generation}).catch(()=>{});}
+  if((mode.mode==="apps"||mode.mode==="settings"||!typed||(code&&!text))&&state.filesStarted){state.filesStarted=false;ask({op:"cancel",generation}).catch(()=>{});}
   state.isCode = code;
   state.isApps = mode.mode === "apps";
+  state.isSettings=mode.mode==="settings";
   applicationSearch.limit=state.isApps?6:3;
   applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps),mode.mode);
+  settingsSearch.begin(text,mode.settings&&(Boolean(typed)||state.isSettings),mode.mode);
+  if(state.isSettings){show({hits:[],strong:0},text,"settings");return;}
   if (state.isApps) {
     show({ hits: [], strong: 0 }, text, "applications");
     return;
@@ -140,6 +144,12 @@ function failed(error) {
   render();
 }
 
+const settingsSearch=new WindowsSettingsSearch((statusOnly=false)=>{
+  const ids=rowIDs();
+  if(!state.navigated)state.selection=(!state.isSettings&&!state.lexicalReady&&!state.error)?null:ids[0]??null;
+  else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
+  if(statusOnly)renderFooter();else render();
+});
 function appPlacement(){return Apps.placement(applicationSearch.hits,state.fileWords||[],{appsOnly:state.isApps,text:state.text,
   lexicalReady:state.lexicalReady,categoryQuery:state.categoryQuery,exactFilenameKnown:state.exactFilenameKnown,exactFilename:state.exactFilename});}
 function rowIDs() {
@@ -150,6 +160,7 @@ function rowIDs() {
     ...(state.weaker.length ? [WEAKER] : []),
     ...(state.showWeaker ? state.weaker.map(resultKey) : []),
     ...app.after.map(resultKey),
+    ...settingsSearch.visible().map(resultKey),
   ];
 }
 
@@ -157,7 +168,7 @@ function selectedHit() {
   const current=rawSelectedHit();
   return current&&state.navigated&&state.chosen&&resultKey(state.chosen)===state.selection?state.chosen:current;
 }
-function rawSelectedHit(){return [...applicationSearch.hits,...state.strong,...state.weaker].find(hit=>resultKey(hit)===state.selection)??null;}
+function rawSelectedHit(){return [...applicationSearch.hits,...settingsSearch.visible(),...state.strong,...state.weaker].find(hit=>resultKey(hit)===state.selection)??null;}
 
 function move(step) {
   const ids = rowIDs();
@@ -183,7 +194,7 @@ function openSelected() {
 
 function revealSelected() {
   const hit = selectedHit();
-  if (isApp(hit)) { if (hit.shortcut) invoke("reveal", { path: hit.shortcut }).catch(failed); return; }
+  if (isLauncher(hit)) { if (hit.shortcut) invoke("reveal", { path: hit.shortcut }).catch(failed); return; }
   if (hit) invoke("reveal", { path: hit.path }).catch(failed);
 }
 
@@ -229,7 +240,7 @@ function render() {
 
 function renderList() {
   $list.replaceChildren();
-  const nothing = !state.strong.length && !state.weaker.length && !applicationSearch.hits.length;
+  const nothing = !state.strong.length && !state.weaker.length && !applicationSearch.hits.length && !settingsSearch.visible().length;
   $list.hidden = nothing;
   if (nothing) return;
   const app=appPlacement();
@@ -267,6 +278,16 @@ function renderList() {
   if(applicationSearch.total>app.before.length+app.after.length){
     const more=element("button","app-more",`Show all ${applicationSearch.total} matching apps…`);
     more.onclick=()=>openInWindow("apps");$list.append(more);
+  }
+  if(settingsSearch.visible().length){
+    $list.append(element("div","group-title","Windows settings"));
+    for(const hit of settingsSearch.visible())$list.append(Apps.row(hit,state.selection===resultKey(hit),key=>{
+      state.selection=key;state.chosen=rawSelectedHit();state.navigated=true;render();
+    },hit=>openResult(hit).catch(failed)));
+  }
+  if(settingsSearch.total>settingsSearch.visible().length){
+    const more=element("button","app-more","Show all matching Windows settings");
+    more.onclick=()=>openInWindow("settings");$list.append(more);
   }
   $list.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
@@ -316,7 +337,8 @@ function renderPreview() {
   if(signature===previewSignature)return;
   previewSignature=signature;
   $preview.replaceChildren();
-  if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length) {
+  if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length && !settingsSearch.visible().length) {
+    if(state.isSettings){$preview.append(message("Windows settings",settingsSearch.status()));return;}
     if (state.isApps) {
       $preview.append(message("Applications", applicationSearch.status()));
       return;
@@ -350,7 +372,7 @@ function renderPreview() {
   }
   const hit = selectedHit();
   if (!hit) return;
-  if (isApp(hit)) { $preview.append(Apps.details(hit, failed)); return; }
+  if (isLauncher(hit)) { $preview.append(Apps.details(hit, failed)); return; }
   $preview.append(picture(hit), facts(hit));
 }
 
@@ -437,6 +459,7 @@ function renderFooter() {
   const strong = state.strong.length, weaker = state.weaker.length;
   let summary;
   if (state.error) summary = `DigUp: ${state.error}`;
+  else if(state.isSettings)summary=settingsSearch.status();
   else if (state.isApps) summary = applicationSearch.status();
   else if (state.phase === "words") {
     summary = state.encoder === "starting" ? "Matching words; meaning search is warming up…" : "Matching words…";
@@ -446,7 +469,7 @@ function renderFooter() {
   else if (state.caveat && !state.isCode) summary = state.caveat;
   else summary = `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : "");
   $summary.textContent = summary;
-  $keys.textContent = isApp(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
+  $keys.textContent = isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
 }
 
 // MARK: The big preview (Space, as Quick Look on the Mac)
@@ -458,7 +481,7 @@ document.getElementById("panel").append($big);
 /// Space, once a result is chosen with the arrows or a click: the panel at its tallest with the result over all of
 /// it, a video playing from its moment. Space or Esc puts it away; the arrows go on through the results under it.
 function toggleBig() {
-  if (isApp(selectedHit())) return;
+  if (isLauncher(selectedHit())) return;
   if (!$big.hidden) return closeBig();
   $big.hidden = false;
   renderBig();
@@ -474,7 +497,7 @@ function closeBig() {
 
 function renderBig() {
   const hit = selectedHit();
-  if (isApp(hit)) return closeBig();
+  if (isLauncher(hit)) return closeBig();
   if (!hit) return closeBig();
   const head = element("div", "head");
   head.append(element("span", "name", nameOf(hit.path)));
@@ -516,7 +539,7 @@ document.addEventListener("keydown", (event) => {
       else invoke("hide_panel").catch(() => {});
       break;
     case " ":
-      if (isApp(selectedHit())) return;
+      if (isLauncher(selectedHit())) return;
       // After the arrows or a click: the big preview (or the weaker matches' fold). While typing: a space.
       if (event.altKey || event.shiftKey || modifier || !(state.navigated || !$big.hidden) || !state.selection) return;
       event.preventDefault();
@@ -560,17 +583,17 @@ tauri.event.listen("panel-shown", () => {
   $query.focus();
   $query.select();
   if($query.value.trim()&&!applicationSearch.active)queryChanged();
-  if (!state.isApps) ask({ op: "prewarm" }).catch(() => {});
+  if (!state.isApps && !state.isSettings) ask({ op: "prewarm" }).catch(() => {});
 });
 tauri.event.listen("panel-hidden",()=>{
-  clearTimeout(state.timer);cancelAnimationFrame(state.frame);applicationSearch.suspend();
+  clearTimeout(state.timer);cancelAnimationFrame(state.frame);applicationSearch.suspend();settingsSearch.suspend();
   ask({op:"cancel",generation:++state.generation}).catch(()=>{});
 });
 
 tauri.event.listen("helper", ({ payload }) => {
   const { from, event } = payload;
-  if(from==="search"&&event.event==="search_index"&&event.state==="words_ready"&&!document.hidden&&!state.isApps&&state.text)state.refreshWords?.(true);
-  if(from==="search"&&event.event==="search_index"&&event.state==="ready"&&!document.hidden&&!state.isApps&&state.text)state.refine?.(true);
+  if(from==="search"&&event.event==="search_index"&&event.state==="words_ready"&&!document.hidden&&!state.isApps && !state.isSettings&&state.text)state.refreshWords?.(true);
+  if(from==="search"&&event.event==="search_index"&&event.state==="ready"&&!document.hidden&&!state.isApps && !state.isSettings&&state.text)state.refine?.(true);
   if (from === "search" && event.event === "encoder") {
     state.encoder = event.state;
     if (state.phase !== "empty") renderFooter();
@@ -578,7 +601,7 @@ tauri.event.listen("helper", ({ payload }) => {
 });
 
 tauri.event.listen("model", ({ payload }) => {
-  if (payload.state === "ready" && !state.isApps) ask({ op: "prewarm" }).catch(() => {});
+  if (payload.state === "ready" && !state.isApps && !state.isSettings) ask({ op: "prewarm" }).catch(() => {});
 });
 
 /// Indexing and the model, from the shell: a badge beside the field while results may be incomplete ("Indexing 42%"),
@@ -646,5 +669,5 @@ function report() {
 $query.addEventListener("compositionstart",()=>{state.composing=true;clearTimeout(state.timer);});
 $query.addEventListener("compositionend",()=>{state.composing=false;queryChanged();});
 document.addEventListener("visibilitychange",()=>{
-  if(document.hidden){clearTimeout(state.timer);applicationSearch.suspend();ask({op:"cancel",generation:++state.generation}).catch(()=>{});}
+  if(document.hidden){clearTimeout(state.timer);applicationSearch.suspend();settingsSearch.suspend();ask({op:"cancel",generation:++state.generation}).catch(()=>{});}
 });

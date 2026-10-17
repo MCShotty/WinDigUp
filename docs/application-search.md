@@ -159,3 +159,7 @@ Windows Server 2025 x64 / AMD EPYC 7763 with four logical processors. The
 [workflow log](https://github.com/MCShotty/WinDigUp/actions/runs/38750128191/job/116474039374) records the machine and
 timing. This is also backend-only; the separate transport test in that run exposed a subprocess startup timing
 assumption that was subsequently corrected to wait for a ready signal.
+
+## Additional Windows sources
+
+See [Windows settings, drive discovery and online descriptions](windows-discovery.md) for `settings:`, optional NTFS discovery, candidate review, attributed metadata, privacy, storage and validation boundaries. Existing app embeddings, accelerator policy and Apps placement are preserved.

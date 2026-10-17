@@ -1,3 +1,9 @@
+#[path = "../../../shell/src-tauri/src/enrichment_manager.rs"]
+pub mod enrichment_manager;
+#[path = "../../../shell/src-tauri/src/discovery/mod.rs"]
+pub mod discovery;
+#[path = "../../../shell/src-tauri/src/system_settings/mod.rs"]
+pub mod system_settings;
 // The real catalog/ranker, without desktop UI libraries. Linux CI exercises its portable fixture boundary.
 #[path = "../../../shell/src-tauri/src/applications/mod.rs"]
 pub mod applications;
@@ -308,3 +314,6 @@ mod tests {
             .any(|e| e["message"] == "retired index failed"));
     }
 }
+
+#[path = "../../../shell/src-tauri/src/options.rs"]
+pub mod options;

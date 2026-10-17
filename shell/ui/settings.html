@@ -175,6 +175,38 @@
       <div id="apps-status" class="apps-settings-status" aria-label="Application availability"><p id="apps-catalog-status"></p><p id="apps-purpose-status"></p></div>
       <div class="apps-settings-actions"><button id="apps-refresh">Refresh applications</button>
         <button id="apps-prepare">Prepare purpose matching</button><button class="link" id="apps-diagnostics">Activity and diagnostics…</button></div>
+      <div id="extra-app-sources" hidden>
+        <details class="source-section"><summary>Windows settings</summary>
+          <p class="note">Open Windows pages by name or describe a task. Use the Settings filter or settings: for destinations only.</p>
+          <label class="option"><input id="win-settings-enabled" type="checkbox"><span>Include Windows settings</span></label>
+          <label class="option"><input id="win-settings-purpose" type="checkbox"><span>Match settings by purpose on the selected accelerator</span></label>
+          <label class="option"><input id="win-settings-ordinary" type="checkbox"><span>Show settings in ordinary searches</span></label>
+          <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-prepare">Prepare settings purpose matching</button>
+        </details>
+        <details class="source-section"><summary>Find applications on drives</summary>
+          <p class="note">Discover unregistered desktop apps on selected drives. Windows shortcuts remain the preferred launch targets. Installers, internal helpers and uncertain executables stay in review.</p>
+          <label class="option"><input id="drive-enabled" type="checkbox"><span>Discover applications on selected drives</span></label>
+          <label class="option"><input id="drive-paused" type="checkbox"><span>Pause drive discovery</span></label>
+          <div id="drive-volumes" class="source-volumes" aria-label="Drives to scan"></div>
+          <p id="drive-draft" class="note" role="status"></p>
+          <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan drives</button></div>
+          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p>
+          <button id="drive-install">Install or update fast NTFS discovery…</button>
+          <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
+          <label for="drive-filter">Review discovered executables</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
+          <label for="drive-visibility">Candidates</label><select id="drive-visibility" class="field"><option value="review">Needs review</option><option value="accepted">Included</option><option value="hidden">Hidden</option><option value="excluded">Excluded</option><option value="all">All</option></select>
+          <div id="drive-candidates" aria-label="Discovered executable candidates"></div><button id="drive-more" hidden>Show more executables</button><p id="drive-count" class="note"></p>
+        </details>
+        <details class="source-section"><summary>Enhance app descriptions online</summary>
+          <p class="note">Optional. Reads installed product IDs and versions through WinGet, then requests matching manifests from Microsoft's community catalog on GitHub. If allowed, it may fetch the publisher page listed there. Those services see the requested product and your IP address. Search queries, documents and local file paths are never sent.</p>
+          <label class="option"><input id="descriptions-enabled" type="checkbox"><span>Fetch online app descriptions</span></label>
+          <label class="option"><input id="descriptions-publishers" type="checkbox"><span>Use publisher pages when the catalog description is too short</span></label>
+          <p class="note">Only exact product and publisher matches are used. Saved descriptions work offline. Your own purpose descriptions always take priority.</p>
+          <p id="descriptions-status" class="note" aria-label="Description preparation"></p>
+          <div class="apps-settings-actions"><button id="descriptions-refresh">Refresh descriptions</button><button id="descriptions-clear">Turn off and clear saved descriptions</button></div>
+        </details>
+        <p id="source-message" class="note" role="status"></p><span id="sources-announcement" class="visually-hidden" role="status"></span>
+      </div>
       <div class="apps-catalog-tools"><label for="apps-filter">Find an application to customize</label>
         <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">
         <label for="apps-visibility">Show</label><select id="apps-visibility" class="field"><option value="visible">Visible</option><option value="hidden">Hidden</option><option value="all">All</option></select></div>
@@ -198,8 +230,8 @@
       </div>
       <h3>Privacy</h3>
       <p class="privacy-text">DigUp reads the folders you choose and keeps what it learns in its index, on this
-        computer. It goes online only to download its model, once, and to check for updates (General), which sends nothing
-        about your files.</p>
+        computer. Model downloads and update checks send nothing about your files. Optional online app descriptions
+        request installed product metadata from the sources explained in Apps; this is off by default.</p>
       <p class="note"><span id="version"></span> <button class="link inline" id="licenses" hidden>Licenses</button></p>
     </section>
 
@@ -208,6 +240,7 @@
   <script src="shortcut.js"></script>
   <script src="activity.js"></script>
   <script src="applications-settings.js"></script>
+  <script src="discovery-settings.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

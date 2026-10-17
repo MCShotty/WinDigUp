@@ -9,6 +9,13 @@ mod acceleration;
 mod accelerator_probe;
 mod activity;
 mod applications;
+mod discovery;
+mod discovery_manager;
+mod discovery_commands;
+mod enrichment_manager;
+mod enrichment_commands;
+mod system_settings;
+mod system_setting_commands;
 mod application_commands;
 mod clipboard;
 mod diagnostics;
@@ -57,6 +64,11 @@ const WINDOW: &str = "main";
 /// What the commands and events share.
 struct Shell {
     applications: Arc<applications::Catalog>,
+    discovery: Arc<discovery_manager::Manager>,
+    enrichment: Arc<enrichment_manager::Manager>,
+    windows_settings: system_settings::Catalog,
+    settings_sync: tokio::sync::Mutex<Option<(u64,String)>>,
+    settings_semantic: Mutex<Value>,
     app_sync: tokio::sync::Mutex<Option<(u64, String)>>,
     app_semantic: Mutex<Value>,
     app_foreground: AtomicUsize,
@@ -319,6 +331,7 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     };
     json!({
         "applicationsSupported": applications::Catalog::supported(),
+        "windowsSettings": shell.windows_settings.info(),
         "offered": offered.iter().map(|folder| folder.display().to_string()).collect::<Vec<_>>(),
         "chosen": shell.folders(),
         "skipped": shell.settings.lock().unwrap().skipped.clone(),
@@ -536,6 +549,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "search": search.map(|(query, kind)| json!({"query": query, "kind": kind})),
         "hasCode": !shell.code_folders().is_empty(),
         "applications":shell.applications.info(),
+        "windowsSettings":shell.windows_settings.info(),
         "debugQuery": shell.options.debug_window,
         "debugSettings": shell.options.debug_settings,
         "debugCopy": shell.options.debug_copy,
@@ -664,6 +678,15 @@ fn main() {
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
+            enrichment_commands::set_app_enrichment_options, enrichment_commands::refresh_app_descriptions,
+            enrichment_commands::clear_app_descriptions, enrichment_commands::open_app_description_source,
+            discovery_commands::discovery_status, discovery_commands::discovery_volumes,
+            discovery_commands::refresh_discovery, discovery_commands::set_discovery_options,
+            discovery_commands::discovery_candidates, discovery_commands::set_discovery_candidate,
+            discovery_commands::install_discovery_component,
+            system_setting_commands::search_windows_settings, system_setting_commands::open_windows_setting,
+            system_setting_commands::set_windows_settings_options, system_setting_commands::windows_settings_status,
+            system_setting_commands::cancel_windows_settings_search, system_setting_commands::prepare_windows_settings,
             search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps, indexing_diagnostics
         ])
         .build(tauri::generate_context!())
@@ -738,12 +761,35 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
     let application_root = options.index_folder().unwrap_or_else(std::env::temp_dir).join("applications");
-    let applications = applications::Catalog::new(application_root, settings.applications.clone(), {
+    let applications = applications::Catalog::new(application_root.clone(), settings.applications.clone(), {
         let app = handle.clone();
         move |info| { let _ = app.emit("applications", info); }
     });
+    let discovery=discovery_manager::Manager::new(application_root.clone(),settings.discovery.clone(),applications.clone(),{
+        let app=handle.clone();let previous=Mutex::new(Value::Null);
+        move|state:Value|{
+            let key=json!({"phase":state["progress"]["phase"],"message":state["progress"]["message"],"mode":state["progress"]["mode"]});
+            let mut last=previous.lock().unwrap();
+            if *last!=key{*last=key.clone();if let Some(shell)=app.try_state::<Arc<Shell>>(){shell.diagnostics.record("drive-discovery",key);}}
+            drop(last);let _=app.emit("discovery",state);
+        }
+    });
+    let enrichment=enrichment_manager::Manager::new(application_root,applications.clone(),settings.enrichment.clone(),{
+        let app=handle.clone();let previous=Mutex::new(Value::Null);
+        move|state:Value|{
+            let key=json!({"state":state["progress"]["state"],"message":state["progress"]["message"]});
+            let mut last=previous.lock().unwrap();
+            if *last!=key{*last=key.clone();if let Some(shell)=app.try_state::<Arc<Shell>>(){shell.diagnostics.record("app-descriptions",key);}}
+            drop(last);let _=app.emit("app-enrichment",state);
+        }
+    });
     let shell = Arc::new(Shell {
         applications,
+        discovery,
+        enrichment,
+        windows_settings: system_settings::Catalog::new(settings.windows_settings.clone()),
+        settings_sync: tokio::sync::Mutex::new(None),
+        settings_semantic: Mutex::new(json!({"state":"preparing","encoder":"stopped"})),
         app_sync: tokio::sync::Mutex::new(None),
         app_semantic: Mutex::new(json!({"state":"preparing","total":0,"embedded":0})),
         app_foreground: AtomicUsize::new(0),
@@ -784,6 +830,9 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     shell.diagnostics.record("shell", json!({"event":"startup","build":env!("DIGUP_BUILD"),
         "backend":shell.settings.lock().unwrap().acceleration.backend,"folders":shell.folders(),"index":shell.index_folder()}));
     application_commands::start(&handle, &shell);
+    system_setting_commands::start(&handle, &shell);
+    shell.discovery.start();
+    shell.enrichment.start();
     discover_initial_accelerator(&handle, &shell);
     if shell.settings.lock().unwrap().delete_code_index {
         delete_code_index(&shell);
@@ -988,6 +1037,8 @@ fn delete_code_index(shell: &Arc<Shell>) {
 
 fn stop_helpers(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>();
+    shell.discovery.stop();
+    shell.enrichment.stop();
     shell.quitting.store(true, Ordering::SeqCst);
     shell.model.stop();
     shell.index.stop();
@@ -1261,6 +1312,10 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     json!({
         "applications": shell.applications.info(),
         "applicationSemantic": shell.app_semantic.lock().unwrap().clone(),
+        "windowsSettings":shell.windows_settings.info(),
+        "windowsSettingsSemantic":shell.settings_semantic.lock().unwrap().clone(),
+        "discovery":shell.discovery.info(),
+        "enrichment":shell.enrichment.info(),
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,
@@ -1320,12 +1375,14 @@ async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String
         let catalog = shell.applications.info();
         let has_folders = !shell.folders().is_empty();
         let blocked_by = indexing_blocker(&shell);
-        activity::snapshot(activity::Input {
+        let mut snapshot=activity::snapshot(activity::Input {
             state, catalog, semantic, configured: serde_json::to_value(configured).unwrap_or_default(),
             helpers: json!({"index":shell.index.snapshot(),"search":shell.search.snapshot()}),
             runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
             has_folders, blocked_by,
-        })
+        });
+        snapshot["windowsSettings"]=json!({"version":1,"catalog":shell.windows_settings.info(),"purpose":shell.settings_semantic.lock().unwrap().clone()});
+        snapshot["discovery"]=shell.discovery.info();snapshot["enrichment"]=shell.enrichment.info();snapshot
     }).await.map_err(|error| error.to_string())
 }
 
@@ -1357,6 +1414,9 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             "estimating":shell.estimating.load(Ordering::SeqCst),"state":shell.snapshot(),
             "indexHelper":shell.index.snapshot(),"searchHelper":shell.search.snapshot(),
             "applications":shell.applications.info(),"applicationSemantic":shell.app_semantic.lock().unwrap().clone(),
+            "windowsSettings":shell.windows_settings.info(),"windowsSettingsSemantic":shell.settings_semantic.lock().unwrap().clone(),
+            "discovery":shell.discovery.info(),
+            "enrichment":shell.enrichment.info(),
             "searchTimings":shell.diagnostics.search_timings(),
             "recent":shell.diagnostics.recent()});
         let mut text = serde_json::to_string_pretty(&report).unwrap_or_default();
@@ -1398,6 +1458,7 @@ fn storage(shell: &Shell) -> Value {
         "indexBytes": size("index.sqlite"),
         "codeBytes": size("code.sqlite"),
         "applicationsBytes": size("applications.sqlite"),
+        "windowsSettingsBytes":size("windows-settings.sqlite"),
         "models": models.map(|folder| folder.display().to_string()),
     })
 }
@@ -1972,6 +2033,11 @@ fn search_event(app: &AppHandle, event: Value) {
         let updated = state.clone();
         drop(state);
         let _ = app.emit("applications-progress", updated);
+        let mut settings_state=shell.settings_semantic.lock().unwrap();
+        settings_state["encoder"]=event["state"].clone();
+        settings_state["state"]=json!(if event["state"]=="unavailable"{"unavailable"}else{"preparing"});
+        if event["state"]=="unavailable"{settings_state["message"]=event["error"].clone();}
+        let _=app.emit("windows-settings-progress",settings_state.clone());
     }
     if cfg!(debug_assertions) {
         println!("search: {event}");

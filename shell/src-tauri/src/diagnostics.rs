@@ -83,7 +83,7 @@ impl Diagnostics {
     /// Strictly bounded numeric evidence. Never retain a query, path, hit, or frontend-provided metadata.
     pub fn record_search(&self, view: &str, sample: &Value) -> Result<(), String> {
         let phase = sample["phase"].as_str().unwrap_or_default();
-        if !["app_names","app_purpose","file_words","file_meaning"].contains(&phase) {
+        if !["app_names","app_purpose","settings_names","settings_purpose","file_words","file_meaning"].contains(&phase) {
             return Err("Unknown search timing phase".into());
         }
         if sample["total"].as_f64().is_none_or(|value| !value.is_finite() || value < 0.0 || value > 86_400_000.0) {

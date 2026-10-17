@@ -43,7 +43,7 @@ function showTab(name) {
   for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== name;
   if (name === "folders") loadSummaries();
   if (name === "code") loadCodeSummaries();
-  if (name === "apps") loadApplicationSettings();
+  if (name === "apps") { loadApplicationSettings(); DiscoverySettings.render(); }
 }
 
 for (const button of document.querySelectorAll("#tabs button")) button.onclick = () => showTab(button.dataset.tab);

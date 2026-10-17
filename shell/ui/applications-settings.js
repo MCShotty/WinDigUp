@@ -28,10 +28,11 @@ function renderApplications(statusOnly = false) {
     : `${prepared}${semantic.encoder === "stopped" || !semantic.encoder ? " · Purpose matching idle" : " · Preparing"}`;
   document.getElementById("apps-catalog-status").textContent = !catalog.enabled ? "Application discovery off. Your annotations are kept."
     : `${(catalog.count || 0).toLocaleString()} apps available by name${catalog.refreshing ? " · Refreshing Windows catalog…" : " · Launch through Windows"}${issues.length ? ` · Some sources could not refresh: ${issues.join("; ")}` : ""}`;
-  document.getElementById("apps-purpose-status").textContent = purpose;
-  document.getElementById("apps-prepare").disabled = !catalog.enabled || !catalog.semanticEnabled || model.state !== "ready" || complete || appPreparationPending;
+  document.getElementById("apps-purpose-status").textContent = purpose + (catalog.semanticOverflow ? ` · ${catalog.semanticOverflow.toLocaleString()} further apps available by name; purpose preparation is limited to ${catalog.semanticLimit.toLocaleString()} prioritized apps.` : "");
+  document.getElementById("apps-prepare").disabled = !catalog.enabled || !catalog.semanticEnabled || model.state !== "ready" || (complete && semantic.state !== "unavailable" && semantic.encoder !== "unavailable") || appPreparationPending;
   document.getElementById("apps-refresh").disabled = !catalog.enabled || Boolean(catalog.refreshing);
   updateAppDraftCount();
+  DiscoverySettings.render();
   if (!statusOnly && catalog.supported && !document.getElementById("apps").hidden) loadApplicationSettings();
 }
 
@@ -123,6 +124,8 @@ function renderApplicationEditor(force = false) {
   form.append(element("h3","app-editor-name",hit.name));
   if(hit.publisher)form.append(element("p","app-description",hit.publisher));
   if(hit.description)form.append(element("p","app-editor-purpose",hit.description));
+  if(hit.descriptionSource){const source=element("button","link description-attribution",`Description: ${hit.descriptionSource.provider||"online source"}`);
+    source.type="button";source.onclick=()=>invoke("open_app_description_source",{appId:hit.id}).catch(fail);form.append(source);}
   const initial={aliasesText:(hit.aliases||[]).join("\n"),purposeText:hit.purpose||"",hidden:Boolean(hit.hidden)};
   const value=appDrafts.get(hit.id)||initial;
   const aliases=element("textarea");aliases.value=value.aliasesText;aliases.maxLength=16*161;

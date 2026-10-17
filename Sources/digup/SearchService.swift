@@ -23,6 +23,8 @@ final class SearchService: @unchecked Sendable {
     private var lastEncodingTimings: [String: Any] = [:]
     private var lastQuery = ProcessInfo.processInfo.systemUptime
     private var applicationStore: ApplicationStore?
+    private var windowsSettingsStore: ApplicationStore?
+    private var settingsReceipt: [String: Any] = ["state": "preparing", "encoder": "stopped"]
     private var encoderError: String?
     private let stateLock = NSLock(), configLock = NSLock(), output = NSLock()
     private var generations: [String: UInt64] = [:]
@@ -229,12 +231,12 @@ final class SearchService: @unchecked Sendable {
             return
         }
         let neural =
-            op.hasPrefix("apps_") || op == "prewarm" || op == "embed_ahead"
+            op.hasPrefix("apps_") || op.hasPrefix("settings_") || op == "prewarm" || op == "embed_ahead"
             || (op == "search" && (r["meaning"] as? Bool ?? true) && !(r["q"] as? String ?? "").isEmpty)
         let queue = neural ? inference : lexical
         queue.submit(
-            key: op == "prewarm" ? "prewarm" : op == "apps_index_step" ? "app-background" : key,
-            foreground: op != "apps_index_step" && !(r["passive"] as? Bool ?? false), cancel: cancel
+            key: op == "prewarm" ? "prewarm" : op.hasSuffix("_index_step") ? "\(op)-background" : key,
+            foreground: !op.hasSuffix("_index_step") && !(r["passive"] as? Bool ?? false), cancel: cancel
         ) { [self] in
             let started = Self.now
             guard current(request) else {
@@ -324,23 +326,23 @@ final class SearchService: @unchecked Sendable {
             lastQuery = Self.now
             _ = runningEncoder()
             return ["ok": true, "encoder": encoderState]
-        case "apps_catalog":
+        case "apps_catalog", "settings_catalog":
             guard let revision = request["revision"] as? String,
                 let documents = request["documents"] as? [[String: Any]]
             else { throw CLIError("invalid application catalog") }
-            let db = try applications()
+            let db = try documentStore(settings: op.hasPrefix("settings_"))
             if db.revision != revision {
                 try db.synchronize(
                     JSONDecoder().decode(
                         [ApplicationDocument].self, from: JSONSerialization.data(withJSONObject: documents)),
                     revision: revision)
             }
-            return try applicationState(db)
-        case "apps_status": return try applicationState(applications())
-        case "apps_index_step":
-            let db = try applications()
-            guard let encoder, encoderState == "ready" else { return try applicationState(db) }
-            let fp = try applicationFingerprint(encoder)
+            return try applicationState(db, settings: op.hasPrefix("settings_"))
+        case "apps_status", "settings_status": return try applicationState(documentStore(settings: op.hasPrefix("settings_")), settings: op.hasPrefix("settings_"))
+        case "apps_index_step", "settings_index_step":
+            let db = try documentStore(settings: op.hasPrefix("settings_"))
+            guard let encoder, encoderState == "ready" else { return try applicationState(db, settings: op.hasPrefix("settings_")) }
+            let fp = try applicationFingerprint(encoder, settings: op.hasPrefix("settings_"))
             try db.prepare(fingerprint: fp)
             if let document = try db.pending() {
                 do {
@@ -356,24 +358,24 @@ final class SearchService: @unchecked Sendable {
                     throw error
                 }
             }
-            return try applicationState(db)
-        case "apps_search":
-            let db = try applications()
+            return try applicationState(db, settings: op.hasPrefix("settings_"))
+        case "apps_search", "settings_search":
+            let db = try documentStore(settings: op.hasPrefix("settings_"))
             guard let revision = request["revision"] as? String, revision == db.revision else {
                 return ["revision": db.revision, "hits": [], "state": "preparing"]
             }
             let text = request["q"] as? String ?? ""
             guard text.count <= 4096 else { throw CLIError("Application query is too long") }
-            var reply = try applicationState(db)
+            var reply = try applicationState(db, settings: op.hasPrefix("settings_"))
             reply["hits"] = []
             reply["meaning"] = false
             if !text.isEmpty,
                 let vector = vector(for: text, code: false, active: !(request["passive"] as? Bool ?? false)),
                 let encoder
             {
-                let fp = try applicationFingerprint(encoder)
+                let fp = try applicationFingerprint(encoder, settings: op.hasPrefix("settings_"))
                 try db.prepare(fingerprint: fp)
-                reply = try applicationState(db)
+                reply = try applicationState(db, settings: op.hasPrefix("settings_"))
                 reply["meaning"] = true
                 reply["hits"] = try db.search(
                     vector, fingerprint: fp,
@@ -382,7 +384,7 @@ final class SearchService: @unchecked Sendable {
                         1)
                 ).map { ["id": $0.id, "cosine": $0.cosine] as [String: Any] }
             } else {
-                reply = try applicationState(db)
+                reply = try applicationState(db, settings: op.hasPrefix("settings_"))
                 reply["hits"] = []
                 reply["meaning"] = false
             }
@@ -649,6 +651,16 @@ final class SearchService: @unchecked Sendable {
         return ["image": image]
     }
 
+    private func documentStore(settings: Bool) throws -> ApplicationStore {
+        if settings {
+            if let windowsSettingsStore { return windowsSettingsStore }
+            let db = try WindowsSettingsStore.recovering(directory: directory)
+            windowsSettingsStore = db
+            return db
+        }
+        return try applications()
+    }
+
     private func applications() throws -> ApplicationStore {
         if let applicationStore { return applicationStore }
         let store = try ApplicationStore.recovering(directory: directory)
@@ -656,15 +668,16 @@ final class SearchService: @unchecked Sendable {
         return store
     }
 
-    private func applicationFingerprint(_ worker: any Embedder) throws -> String {
+    private func applicationFingerprint(_ worker: any Embedder, settings: Bool = false) throws -> String {
         let backend = try Acceleration.selected()
         return ApplicationStore.fingerprint(
             info: worker.info, backend: backend.rawValue,
             runtimeBuild: backend == .openvinoNPU
-                ? "" : backend == .nvidiaCUDA ? LlamaEmbedder.buildIdentity : LlamaEmbedder.buildTag)
+                ? "" : backend == .nvidiaCUDA ? LlamaEmbedder.buildIdentity : LlamaEmbedder.buildTag,
+            documentPromptVersion: settings ? WindowsSettingsStore.promptVersion : ApplicationStore.promptVersion)
     }
 
-    private func applicationState(_ store: ApplicationStore) throws -> [String: Any] {
+    private func applicationState(_ store: ApplicationStore, settings: Bool = false) throws -> [String: Any] {
         let counts = try store.counts()
         let state =
             encoderState == "unavailable"
@@ -677,7 +690,7 @@ final class SearchService: @unchecked Sendable {
             "ranking_version": ApplicationStore.rankingVersion, "ranking_calibrated": false,
         ]
         if let encoder {
-            reply["fingerprint"] = try applicationFingerprint(encoder)
+            reply["fingerprint"] = try applicationFingerprint(encoder, settings: settings)
             reply["device"] = encoder.info.device ?? ""
             reply["execution_policy"] = encoder.info.executionPolicy ?? ""
             for (key, value) in encoder.info.fields
@@ -688,7 +701,7 @@ final class SearchService: @unchecked Sendable {
             .contains(key) { reply[key] = value }
         }
         if let encoderError { reply["message"] = encoderError }
-        stateLock.withLock { applicationReceipt = reply }
+        stateLock.withLock { if settings { settingsReceipt = reply } else { applicationReceipt = reply } }
         return reply
     }
 

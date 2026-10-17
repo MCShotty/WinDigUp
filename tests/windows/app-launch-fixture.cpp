@@ -44,9 +44,10 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         }
         CoUninitialize();LocalFree(args);return FAILED(result)?2:0;
     }
-    if(!args||count<3||std::wstring(args[1])!=L"--record")return 2;
+    if(!args||(count!=1&&(count<3||std::wstring(args[1])!=L"--record")))return 2;
+    const auto recordPath=count==1?std::filesystem::path(L"launch record.json"):std::filesystem::path(args[2]);
     wchar_t cwd[32768];GetCurrentDirectoryW(32768,cwd);
-    std::ofstream out(std::filesystem::path(args[2]),std::ios::binary);
+    std::ofstream out(recordPath,std::ios::binary);
     out<<"{\"pid\":"<<GetCurrentProcessId()<<",\"cwd\":"<<quoted(cwd)<<",\"args\":[";
     for(int i=0;i<count;i++){if(i)out<<',';out<<quoted(args[i]);} out<<"]}";out.close();LocalFree(args);
     auto window=CreateWindowExW(0,L"STATIC",L"DigUp application launch fixture",WS_OVERLAPPEDWINDOW,

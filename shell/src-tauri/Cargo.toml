@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "DigUp for Windows and Linux: the tray icon, the hotkey and the search panel, over DigUp's helper"
 edition = "2021"
 publish = false
+default-run = "digup-shell"
+
+[[bin]]
+name = "digup-discovery"
+path = "src/bin/discovery.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
@@ -23,6 +28,14 @@ tauri-plugin-updater = "2.13.3"
 sha2 = "0.10"
 unicode-normalization = "0.1"
 unicode-casefold = "0.2"
+
+
+# Structured, bounded app metadata; no executable code is loaded from descriptions.
+yaml-rust2 = { version = "=0.13.0", default-features = false }
+url = "=2.5.8"
+rustls = { version = "=0.23.45", default-features = false, features = ["ring","std","tls12"] }
+dom_query = "=0.28.0"
+reqwest = { version = "=0.13.5", default-features = false, features = ["blocking","rustls-no-provider","system-proxy"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

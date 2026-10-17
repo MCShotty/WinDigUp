@@ -148,6 +148,7 @@ unsafe fn shortcut(path: &Path, source: &str) -> Option<Record> {
             }
             if arguments_known && directory_known {
                 record.identity = desktop_identity(&target, &string(&args), &string(&cwd));
+                record.executable=target.clone();record.arguments=string(&args);record.working_directory=string(&cwd);
             }
             record
                 .icon_revision
@@ -271,7 +272,7 @@ unsafe fn apps_folder(enabled: &dyn Fn() -> bool) -> Result<Vec<Record>, String>
 unsafe fn enrich(record: &mut Record) {
     unsafe {
         let path = match &record.target {
-            Target::Shortcut { path } => path,
+            Target::Shortcut { path } | Target::Executable { path,.. } => path,
             Target::Shell { parsing_name } => parsing_name,
         };
         let spelling = wide(path);
@@ -291,6 +292,8 @@ unsafe fn enrich(record: &mut Record) {
                 }
             }
         }
+        if !record.executable.is_empty(){record.launch_key=crate::discovery::volume::launch_key(&record.executable,&record.arguments,&record.working_directory).unwrap_or_default();}
+        record.product=property(&item,"System.Software.ProductName");
         record.publisher = property(&item, "System.Company");
         record.keywords = formatted_property(&item, "System.Keywords");
         let mut description = property(&item, "System.FileDescription");
@@ -366,7 +369,7 @@ pub fn launch(target: &Target) -> Result<(), String> {
         };
         let mut pidl = std::ptr::null_mut();
         let spelling = wide(match target {
-            Target::Shortcut { path } => path,
+            Target::Shortcut { path } | Target::Executable { path,.. } => path,
             Target::Shell { parsing_name } => parsing_name,
         });
         match target {
@@ -375,6 +378,19 @@ pub fn launch(target: &Target) -> Result<(), String> {
                     return Err("The application's shortcut is no longer available.".into());
                 }
                 info.lpFile = PCWSTR(spelling.as_ptr());
+            }
+            Target::Executable { path,working_directory } => {
+                let metadata=std::fs::symlink_metadata(path).map_err(|_|"The discovered executable is no longer available.")?;
+                if !metadata.is_file()||!path.to_ascii_lowercase().ends_with(".exe"){
+                    return Err("This discovered target is not an executable application.".into())
+                }
+                let executable=crate::discovery::volume::shell_path(path).ok_or("The application's volume is unavailable.")?;
+                let executable=wide(&executable);info.lpFile=PCWSTR(executable.as_ptr());
+                // The original path is never combined with query text or invented arguments.
+                let directory=crate::discovery::volume::shell_path(working_directory).ok_or("The application's working directory is unavailable.")?;
+                let directory=wide(&directory);
+                info.lpDirectory=PCWSTR(directory.as_ptr());
+                return ShellExecuteExW(&mut info).map_err(|e|format!("Windows could not launch this application: {e}"));
             }
             Target::Shell { .. } => {
                 SHParseDisplayName(PCWSTR(spelling.as_ptr()), None, &mut pidl, 0, None)
@@ -397,7 +413,7 @@ pub fn icon(target: &Target, size: u32, path: &Path) -> Result<(), String> {
     let _apartment = Apartment::new()?;
     unsafe {
         let spelling = wide(match target {
-            Target::Shortcut { path } => path,
+            Target::Shortcut { path } | Target::Executable { path,.. } => path,
             Target::Shell { parsing_name } => parsing_name,
         });
         let item: IShellItemImageFactory =

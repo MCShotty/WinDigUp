@@ -1,8 +1,10 @@
 // Native name matching is independent of the file helper and its inference queue.
 "use strict";
 function isApp(hit) { return hit?.resultType === "application"; }
-function resultKey(hit) { return isApp(hit) ? hit.id : `file:${hit.path}`; }
-function titleOf(hit) { return isApp(hit) ? hit.name : nameOf(hit.path); }
+function isSetting(hit) { return hit?.resultType === "windows_setting"; }
+function isLauncher(hit) { return isApp(hit) || isSetting(hit); }
+function resultKey(hit) { return isLauncher(hit) ? hit.id : `file:${hit.path}`; }
+function titleOf(hit) { return isLauncher(hit) ? hit.name : nameOf(hit.path); }
 
 const Apps = {
   supported: /Win/.test(navigator.platform),
@@ -32,14 +34,17 @@ const Apps = {
   launching: new Set(),
   rowCache: new Map(),
   parse(query, filter = null) {
-    const typed = query.trim();
-    const appPrefix = this.supported && /^apps:/i.test(typed);
-    const codePrefix = /^code:/i.test(typed);
-    const mode = appPrefix ? "apps" : codePrefix ? "code" : filter === "apps" ? "apps" : filter === "code" ? "code" : filter ? "files" : "all";
-    return { mode, text: appPrefix || codePrefix ? typed.slice(5).trim() : typed,
-      apps: this.supported && (mode === "all" || mode === "apps"), files: mode !== "apps", code: mode === "code" };
+    const typed=query.trim(),appPrefix=this.supported&&/^apps:/i.test(typed),
+      settingsPrefix=this.supported&&/^settings:/i.test(typed),codePrefix=/^code:/i.test(typed);
+    const mode=settingsPrefix?"settings":appPrefix?"apps":codePrefix?"code":
+      filter==="settings"?"settings":filter==="apps"?"apps":filter==="code"?"code":filter?"files":"all";
+    return {mode,text:settingsPrefix?typed.slice(9).trim():appPrefix||codePrefix?typed.slice(5).trim():typed,
+      apps:this.supported&&(mode==="all"||mode==="apps"),
+      settings:this.supported&&(mode==="all"||mode==="settings"),
+      files:mode!=="apps"&&mode!=="settings",code:mode==="code"};
   },
   async launch(hit) {
+    if(isSetting(hit))return WindowsSettings.open(hit);
     if (this.launching.has(hit.id)) return;
     this.launching.add(hit.id);
     try { return await invoke("launch_app", { appId: hit.id }); }
@@ -52,6 +57,7 @@ const Apps = {
     }
   },
   icon(hit, size = 64) {
+    if(isSetting(hit))return WindowsSettings.icon(hit);
     const holder = element("span", "app-icon"); holder.setAttribute("aria-hidden", "true");
     const fallback = element("img", "app-generic"); fallback.src = "app-generic.svg"; fallback.alt = ""; holder.append(fallback);
     const key = `${hit.id}:${hit.iconRevision || ""}:${size}`;
@@ -89,10 +95,10 @@ const Apps = {
       return node;
     }
     const row = element("div", "app-row" + (selected ? " selected" : ""));
-    row.title = hit.shortcut || "Registered Windows application";
+    row.title = isSetting(hit) ? "Windows settings page" : hit.shortcut || "Registered Windows application";
     row.dataset.resultKey = resultKey(hit); row.setAttribute("role", expanded ? "row" : "option");
     row.setAttribute("aria-selected", String(selected));
-    row.setAttribute("aria-label", `Application, ${hit.name}`);
+    row.setAttribute("aria-label", `${isSetting(hit)?"Windows settings":"Application"}, ${hit.name}`);
     const text = element("div", "app-row-text");
     const title=element("div","app-title-line");title.append(element("div", "app-name", hit.name));
     if(hit.publisher)title.append(element("span","app-inline-publisher",hit.publisher));
@@ -105,7 +111,7 @@ const Apps = {
       row.classList.add("app-row-expanded"); icon.setAttribute("role","gridcell"); text.setAttribute("role","gridcell");
       const reason = element("span", "app-match-reason", hit.reason === "semantic" ? "Purpose match" : ""); reason.setAttribute("role","gridcell"); row.append(reason);
       const actions = element("span", "app-row-actions"); actions.setAttribute("role","gridcell");
-      const button = element("button", "app-launch", "Launch"); button.setAttribute("aria-label",`Launch ${hit.name}`);
+      const button = element("button", "app-launch", isSetting(hit)?"Open settings":"Launch"); button.setAttribute("aria-label",`${isSetting(hit)?"Open settings":"Launch"} ${hit.name}`);
       button.disabled = this.launching.has(hit.id); button.tabIndex = selected ? 0 : -1;
       button.onclick = async event => { event.stopPropagation(); select(resultKey(hit)); button.disabled=true; try { await launch(hit); } finally { button.disabled=false; } };
       actions.append(button); row.append(actions);
@@ -116,12 +122,15 @@ const Apps = {
     return row;
   },
   details(hit, fail) {
+    if(isSetting(hit))return WindowsSettings.details(hit,fail);
     const box = element("div", "app-details");
     box.append(this.icon(hit, 128), element("div", "app-name", hit.name));
     if (hit.publisher) box.append(element("div", "app-description", hit.publisher));
     if (hit.purpose || hit.description) box.append(element("p", "", hit.purpose || hit.description));
+    if(hit.descriptionSource){const source=element("button","link description-attribution",`Description: ${hit.descriptionSource.provider||"online source"}`);
+      source.onclick=()=>invoke("open_app_description_source",{appId:hit.id}).catch(fail);box.append(source);}
     if (hit.aliases?.length) box.append(element("p", "app-description", `Aliases: ${hit.aliases.join(", ")}`));
-    box.append(element("p", "app-description", hit.shortcut || "Registered with Windows"));
+    box.append(element("p", "app-description", hit.shortcut || (hit.source?.startsWith("drive:") ? "Discovered on a selected drive" : "Registered with Windows")));
     box.append(element("p", "app-description", hit.reason === "semantic" ? "Matches what this application does" : "Matches the application name or alias"));
     const launch = element("button", "primary", "Launch");
     launch.onclick = async () => { launch.disabled = true; try { await this.launch(hit); } catch (e) { fail(e); } finally { launch.disabled = false; } };

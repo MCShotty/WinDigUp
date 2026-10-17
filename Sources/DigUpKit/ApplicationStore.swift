@@ -19,9 +19,10 @@ public final class ApplicationStore {
     public static let minimumCosine: Float = 0.60
     public static let distanceFromBest: Float = 0.08
     private let db: Database
+    private let documentPrefix: String
 
-    public static func recovering(directory: URL) throws -> ApplicationStore {
-        do { return try ApplicationStore(directory: directory) }
+    public static func recovering(directory: URL, fileName: String = ApplicationStore.fileName, prefix: String = "app:") throws -> ApplicationStore {
+        do { return try ApplicationStore(directory: directory, fileName: fileName, prefix: prefix) }
         catch {
             let message = String(describing: error).lowercased()
             guard message.contains("not a database") || message.contains("malformed") else { throw error }
@@ -30,13 +31,17 @@ public final class ApplicationStore {
                 let file = directory.appendingPathComponent(fileName + suffix)
                 if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
             }
-            return try ApplicationStore(directory: directory)
+            return try ApplicationStore(directory: directory, fileName: fileName, prefix: prefix)
         }
     }
 
-    public init(directory: URL, readOnly: Bool = false) throws {
+    public init(directory: URL, readOnly: Bool = false, fileName: String = ApplicationStore.fileName, prefix: String = "app:") throws {
+        guard (fileName == ApplicationStore.fileName && prefix == "app:") || (fileName == "windows-settings.sqlite" && prefix == "setting:") else {
+            throw Database.Failure(message: "Invalid launcher document namespace")
+        }
+        documentPrefix = prefix
         if !readOnly { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
-        db = try Database(path: directory.appendingPathComponent(Self.fileName).path, readOnly: readOnly)
+        db = try Database(path: directory.appendingPathComponent(fileName).path, readOnly: readOnly)
         var version: Int64 = 0
         try db.query("PRAGMA user_version") { version = $0.int(0) }
         guard version <= 1 else { throw Database.Failure(message: "Application cache was made by a newer DigUp") }
@@ -71,9 +76,9 @@ public final class ApplicationStore {
     }
 
     /// Includes the full revision, not the abbreviated display label, and the actual NPU bundle runtime fingerprint.
-    public static func fingerprint(info: WorkerInfo, backend: String, runtimeBuild: String = "") -> String {
+    public static func fingerprint(info: WorkerInfo, backend: String, runtimeBuild: String = "", documentPromptVersion: String = ApplicationStore.promptVersion) -> String {
         // SQLite's text binder uses NUL termination. Encode components before joining, keeping the identity lossless.
-        var components = [info.model, info.revision, info.runtime, runtimeBuild, info.dtype, String(info.dim), backend, promptVersion]
+        var components = [info.model, info.revision, info.runtime, runtimeBuild, info.dtype, String(info.dim), backend, documentPromptVersion]
         if backend == "nvidia-cuda" { components += [info.precisionProfile ?? "", info.buildIdentity ?? "", info.vectorSource] }
         return components.map { Data($0.utf8).base64EncodedString() }.joined(separator: ".")
     }
@@ -81,7 +86,7 @@ public final class ApplicationStore {
     public func synchronize(_ documents: [ApplicationDocument], revision: String) throws {
         guard documents.count <= 20_000, revision.count <= 128, !revision.contains("\0"),
               Set(documents.map(\.id)).count == documents.count,
-              documents.allSatisfy({ $0.id.hasPrefix("app:") && $0.id.count <= 128 && $0.hash.count == 64
+              documents.allSatisfy({ $0.id.hasPrefix(documentPrefix) && $0.id.count <= 128 && $0.hash.count == 64
                   && $0.name.count <= 4096 && $0.text.count <= 16_384
                   && !$0.id.contains("\0") && !$0.name.contains("\0") && !$0.text.contains("\0") && !$0.hash.contains("\0") }) else {
             throw Database.Failure(message: "Invalid application catalog snapshot")

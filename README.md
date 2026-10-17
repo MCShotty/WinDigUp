@@ -251,3 +251,7 @@ trademarks of Apple Inc.; Windows is a trademark of Microsoft Corporation.
 ## License
 
 MIT
+
+### Additional Windows search sources (PR #8, depends on PR #7)
+
+Windows settings can be searched by name or purpose with `settings:` / the Settings filter. Optional drive discovery finds unregistered desktop apps using NTFS records or directory fallback. Optional WinGet/publisher descriptions add attributed purpose information; online fetching is off by default. [Configuration and validation status](docs/windows-discovery.md).
