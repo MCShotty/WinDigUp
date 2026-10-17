@@ -22,7 +22,7 @@ A current-generation exact or strong filename returned below the file searcher's
 in Best matches. It is removed from the folded weaker list so it never appears twice. Ambiguous exact application
 variants and exact file/settings collisions remain separate, selectable results.
 
-Remaining source sections follow their strongest available match class. File results keep their existing relevance
+Remaining source sections follow their strongest available match class. Remaining file results keep their existing relevance
 order in both views; the compact panel no longer gathers all images or documents into a higher section.
 Files first keeps application results after files. Apps view only suppresses applications from ordinary searches.
 Neither preference disables Windows settings. Explicit file-kind/code scopes exclude launcher providers, while
@@ -47,7 +47,7 @@ individually chosen subfolders, exclusions, file-type choices and schedules rema
 Windows folder-path semantics. Application choices retain stable volume GUIDs across drive-letter changes.
 
 Save writes file and application choices together when both changed. Native code validates reported volume IDs,
-rejects unavailable/newly disconnected file roots, merges changes with current preferences, preserves application
+rejects unavailable or missing entries in the current native inventory, merges changes with current preferences, preserves application
 review decisions, and saves atomically through the configured settings path. Explicit CLI folder overrides reject
 drive file changes rather than pretending to apply them.
 
@@ -73,5 +73,5 @@ system drive without installing the optional component. Swift tests exercise act
 category names, explicit filters and multilingual query hints.
 
 Checks run in GitHub Actions because the chat has no usable local execution environment. Final workflow links and
-screenshots are recorded in PR #11. Hosted browser fixtures do not establish installed-device latency, semantic
+screenshots are recorded in PR #11 and [the delivery evidence](antislop-mixed-results-evidence.md). Hosted browser fixtures do not establish installed-device latency, semantic
 relevance or physical AMD/CUDA/NPU execution.
