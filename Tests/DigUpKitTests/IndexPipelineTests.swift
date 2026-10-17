@@ -104,6 +104,7 @@ struct IndexPipelineTests {
 
     @Test func inferenceFailureKeepsEarlierResultsAndStopsNewAdmissions() throws {
         let failed = DispatchSemaphore(value: 0)
+        let firstStarted = DispatchSemaphore(value: 0)
         let events = Events()
         let pipeline = IndexPipeline<Int, Int, Int>(Array(0..<40), prepare: { _, value in
             events.mark(value, preparation: true); return value
@@ -111,9 +112,14 @@ struct IndexPipelineTests {
         defer { pipeline.close() }
         pipeline.startInference(parallelism: 3) { value in
             if value == 0 {
+                firstStarted.signal()
                 guard failed.wait(timeout: .now() + 5) == .success else { throw TestFailure.timeout }
             }
-            if value == 1 { failed.signal(); throw TestFailure.inference }
+            if value == 1 {
+                guard firstStarted.wait(timeout: .now() + 5) == .success else { throw TestFailure.timeout }
+                failed.signal()
+                throw TestFailure.inference
+            }
             return value
         }
         let first = try #require(pipeline.next(shouldStop: { false }))
