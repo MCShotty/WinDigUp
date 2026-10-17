@@ -126,6 +126,10 @@ let browser;
   await page.locator("#drive-save").focus(); await page.keyboard.press("Enter");
   await page.waitForFunction(()=>!DiscoverySettings.dirty);
   assert.ok(await page.evaluate(()=>window.fileFolders.includes("D:\\")),"Keyboard save lost the file root");
+  assert.deepEqual(await page.evaluate(()=>window.fileFolders),["C:\\Users\\Test\\Documents","D:\\"],"Saving one drive selected another drive");
+  assert.equal(await page.locator('#drive-volumes input[data-source=files][value="volume-c"]').isChecked(),false,"A newly attached drive was selected for files");
+  console.log("DRIVE_CHOICE_EVIDENCE="+JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll("#drive-volumes input")].map(input=>({volume:input.value,source:input.dataset.source,checked:input.checked})))));
+
   await page.evaluate(()=>{const label=document.createElement("div");label.textContent="UI fixture · Synthetic drive inventory";
     label.style.cssText="position:fixed;bottom:2px;right:4px;font:12px Segoe UI;color:var(--text);background:var(--surface);z-index:100";document.body.append(label);});
   for (const [theme, width] of [["light", 1100], ["dark", 760], ["light", 520]]) {
