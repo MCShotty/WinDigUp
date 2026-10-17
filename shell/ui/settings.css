@@ -80,3 +80,5 @@ select.field {
   .tabs { justify-content: flex-start; overflow-x: auto; }
   .tabs button { flex: none; }
 }
+
+#drive-file-settings, #folders-drives { color: var(--leaf-text, var(--moss)); }

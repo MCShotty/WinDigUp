@@ -71,7 +71,7 @@ const DiscoverySettings = {
     this.el("drive-list-refresh").disabled=this.pending.has("volumes")||volumeState==="loading";
     this.text("drive-volumes-state",volumeState==="loading"?"Checking mounted drives. Existing choices remain available.":
       volumeState==="failed"?"Could not refresh the drive list. "+(d.volumeCatalog.message||"Select Refresh drive list to retry."):
-      "Choose the drives where DigUp should discover applications.");
+      "Select Files, Applications, or both for each drive.");
     const volumes=d.volumes||[];
     const all=[...volumes,...(draft.volumes||[]).filter(id=>!volumes.some(v=>v.id===id)).map(id=>({id,name:"Disconnected volume",paths:[],available:false}))];
     const signature=JSON.stringify([all.map(v=>[v.id,v.paths,v.name,v.filesystem,v.available]),draft.volumes,info.folders,[...this.fileChoices],all.length?null:volumeState]);

@@ -120,11 +120,37 @@ let browser;
   await page.locator("#folders-drives").click(); assert.equal(await page.locator("#drives").isVisible(),true);
   await page.getByRole("tab",{name:"Activity",exact:true}).click();
   await page.locator('[data-key="drive-settings"]').click(); assert.equal(await page.locator("#drives").isVisible(),true);
+  const fileChoice=page.locator('#drive-volumes input[data-source=files][value="volume-a"]');
+  await fileChoice.focus(); await page.keyboard.press("Space");
+  assert.equal(await fileChoice.isChecked(),true,"Keyboard could not choose file indexing");
+  await page.locator("#drive-save").focus(); await page.keyboard.press("Enter");
+  await page.waitForFunction(()=>!DiscoverySettings.dirty);
+  assert.ok(await page.evaluate(()=>window.fileFolders.includes("D:\\")),"Keyboard save lost the file root");
   await page.evaluate(()=>{const label=document.createElement("div");label.textContent="UI fixture · Synthetic drive inventory";
     label.style.cssText="position:fixed;bottom:2px;right:4px;font:12px Segoe UI;color:var(--text);background:var(--surface);z-index:100";document.body.append(label);});
   for (const [theme, width] of [["light", 1100], ["dark", 760], ["light", 520]]) {
     await page.emulateMedia({colorScheme: theme}); await page.setViewportSize({width, height: 900});
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    const contrastFailures=await page.evaluate(()=>{
+      const rgba=value=>{
+        const numbers=(value.match(/[\d.]+/g)||[]).map(Number);
+        if(value.startsWith("color(srgb "))for(let i=0;i<3;i++)numbers[i]*=255;
+        return numbers;
+      };
+      const over=(front,back)=>front.slice(0,3).map((value,i)=>value*(front[3]??1)+back[i]*(1-(front[3]??1)));
+      const light=values=>values.map(value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4;})
+        .reduce((sum,value,i)=>sum+value*[.2126,.7152,.0722][i],0);
+      const failures=[];
+      for(const node of document.querySelectorAll("#drive-file-settings,#drive-volumes-state,.drive-name,.source-drive-options label,#drive-save,#drive-revert,#drive-list-refresh,#drive-draft")){
+        if(!node.getClientRects().length||!node.textContent.trim()||node.disabled)continue;
+        const parents=[];for(let parent=node;parent;parent=parent.parentElement)parents.unshift(parent);
+        let background=[255,255,255];for(const parent of parents)background=over(rgba(getComputedStyle(parent).backgroundColor),background);
+        const levels=[light(over(rgba(getComputedStyle(node).color),background)),light(background)].sort((a,b)=>b-a);
+        const ratio=(levels[0]+.05)/(levels[1]+.05);if(ratio<4.5)failures.push({text:node.textContent,ratio});
+      }
+      return failures;
+    });
+    assert.deepEqual(contrastFailures,[],"Drive-picker text contrast in "+theme+" at "+width);
     if (process.env.DIGUP_ORDER_SCREENSHOT_LOG && theme==="light" && width===1100)
       console.log("DRIVE_SCREENSHOT_BASE64="+(await page.screenshot({type:"jpeg",quality:60})).toString("base64"));
     if (process.env.DIGUP_ACTIVITY_SCREENSHOTS) {
