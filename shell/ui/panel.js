@@ -59,7 +59,7 @@ function queryChanged() {
   closeBig();
   clearTimeout(statusTimer); state.waitingVisible = false;
   statusTimer = setTimeout(() => { state.waitingVisible = true; renderFooter(); renderPreview(); scheduleFit(); }, 180);
-  state.heightFloor = FIELD_HEIGHT;
+  state.heightFloor = FIELD_HEIGHT; lastAnnouncement = "";
   const generation = ++state.generation;
   SearchTiming.begin(generation);state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;
   state.exactFilenameKnown=false;state.exactFilename=false;
@@ -265,6 +265,7 @@ function announceResults() {
   announceTimer = setTimeout(() => { $("announcer").textContent = text; lastAnnouncement = text; }, 250);
 }
 function syncSelection() {
+  if (!$big.hidden) { $query.removeAttribute("aria-activedescendant"); return; }
   for (const node of $list.querySelectorAll('[role="option"]')) {
     const key = node.dataset.resultKey || (node.classList.contains("weaker") ? WEAKER : "");
     node.id = "panel-option-" + encodeURIComponent(key);
@@ -277,7 +278,8 @@ function render() {
   const empty = state.phase === "empty";
   $panel.dataset.state = empty ? "empty" : "results";
   $panel.classList.toggle("previewing", !$big.hidden);
-  $query.setAttribute("aria-expanded", String(!empty));
+  $query.setAttribute("aria-expanded", String(!empty && $big.hidden));
+  $details.setAttribute("aria-expanded", String(!$big.hidden));
   $body.hidden = empty;
   $footer.hidden = empty;
   if (!empty) { renderList(); renderPreview(); renderFooter(); syncSelection(); }
@@ -300,6 +302,7 @@ function extra(key, text, action) {
   node.textContent = text; node.onclick = action; return node;
 }
 function renderList() {
+  thumbnailObserver.disconnect();
   const scroll = $list.scrollTop, layout = resultLayout(), weaker = weakerFiles(layout), sections = [], more = [];
   $list.hidden = !layout.rows.length && !state.weaker.length;
   $results.hidden = $list.hidden;
@@ -341,6 +344,7 @@ function renderList() {
     more.push(extra("settings", "Show all matching Windows settings", () => openInWindow("settings")));
   for (const {section, nodes} of groups) reconcile(section, nodes);
   reconcile($list, sections); reconcile($moreResults, more); $moreResults.hidden = !more.length;
+  for (const image of $list.querySelectorAll("img.thumb")) if (!image.thumbnailStarted) thumbnailObserver.observe(image);
   $list.scrollTop = scroll;
   if (state.navigated) $list.querySelector(".selected")?.scrollIntoView({block: "nearest"});
 }
@@ -369,6 +373,7 @@ function row(hit) {
   else sub.textContent = folderOf(hit);
   text.append(title, sub);
   item.append(text);
+  item.onmousedown = event => { if (event.button === 0) event.preventDefault(); };
   item.onclick = () => {
     state.selection = resultKey(hit);
     state.chosen=hit;
@@ -385,7 +390,7 @@ function row(hit) {
 /// kind's icon. All come small from the helper (a full-size photo per row would cost the web view hundreds of MB).
 const thumbnailObserver = new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting) {
-    thumbnailObserver.unobserve(entry.target); entry.target.loadThumbnail?.();
+    thumbnailObserver.unobserve(entry.target); entry.target.thumbnailStarted = true; entry.target.loadThumbnail?.();
   }
 }, {root: $list, rootMargin: "60px"});
 function thumbnail(hit) {
@@ -568,6 +573,8 @@ function renderFooter() {
 // MARK: The big preview (Space, as Quick Look on the Mac)
 
 const $big = element("div", "big");
+$big.id = "result-preview"; $big.setAttribute("role", "region"); $big.setAttribute("aria-label", "Selected result details");
+$details.setAttribute("aria-controls", "result-preview");
 $big.hidden = true;
 document.getElementById("panel").append($big);
 
