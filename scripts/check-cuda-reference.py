@@ -45,9 +45,10 @@ def receipt(info):
 
 
 class Worker:
-    def __init__(self, args, text_only, log):
-        env = dict(os.environ, DIGUP_ACCELERATOR="nvidia-cuda", DIGUP_MODELS=str(args.models.resolve()))
-        command = [str(args.helper.resolve()), "worker", "--index", str(args.output.resolve() / "worker-index")]
+    def __init__(self, args, text_only, log, *, backend="nvidia-cuda", validate=receipt):
+        env = dict(os.environ, DIGUP_ACCELERATOR=backend, DIGUP_MODELS=str(args.models.resolve()))
+        command = [str(args.helper.resolve()), "worker", "--index", str(args.output.resolve() / "worker-index"),
+                   "--worker-log", str(log.resolve().with_suffix(".native.log"))]
         if text_only:
             command += ["--text-only"]
         self.log = log.open("w", encoding="utf-8")
@@ -62,7 +63,7 @@ class Worker:
             first = self.line()
             if not first.get("ready"):
                 raise RuntimeError(first.get("error", "CUDA worker did not become ready"))
-            self.info = receipt(first["info"])
+            self.info = validate(first["info"])
             self.cold_seconds = time.monotonic()-started
         except BaseException:
             self.close()
@@ -76,10 +77,17 @@ class Worker:
             self.lines.put(None)
 
     def line(self):
-        line = self.lines.get(timeout=self.timeout)
-        if line is None:
-            raise RuntimeError("CUDA worker exited; inspect its log")
-        return json.loads(line)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Worker response timed out; inspect its log")
+            line = self.lines.get(timeout=remaining)
+            if line is None:
+                raise RuntimeError("Worker exited; inspect its log")
+            response = json.loads(line)
+            if response.get("event") != "inference_activity":
+                return response
 
     def embed(self, operation, inputs, **extra):
         self.counter += 1

@@ -39,6 +39,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check physical-validation harness protocol without model inference
+        run: |
+          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py
+          python3 -m unittest discover -s tests/native -p 'test_worker_protocol.py'
       - name: Build and run real admission and pool contracts without model weights
         run: |
           clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o
@@ -75,4 +79,4 @@ jobs:
             Vendor/llama-build
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Storage, prepared inference and worker contracts with synthetic embedders
-        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|WorkerDeadlineTests|AccelerationTests|SearchReadersTests'
+        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|WorkerDeadlineTests|AccelerationTests|SearchReadersTests|LongFilesTests'

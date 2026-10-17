@@ -379,48 +379,71 @@ public final class EmbeddingWorker: Embedder, InferenceReporting {
     }
 }
 
-/// The query owner has bounded startup/IPC waits. Indexing and reference workers retain their own budgets.
+/// Deadlines use a dedicated thread because synchronous pipe reads can starve executor-backed queues.
+private final class WorkerTimers: @unchecked Sendable {
+    static let shared=WorkerTimers()
+    private struct Entry { let deadline:Double;let action:()->Void }
+    private let changed=NSCondition()
+    private var entries:[UUID:Entry]=[:]
+    private init(){Thread.detachNewThread{[self] in run()}}
+    func schedule(_ id:UUID,after seconds:Double,action:@escaping ()->Void){
+        changed.lock()
+        entries[id]=Entry(deadline:ProcessInfo.processInfo.systemUptime+seconds,action:action)
+        changed.signal();changed.unlock()
+    }
+    func cancel(_ id:UUID){
+        changed.lock();entries.removeValue(forKey:id);changed.signal();changed.unlock()
+    }
+    private func run(){
+        while true {
+            changed.lock()
+            guard let next=entries.min(by:{$0.value.deadline<$1.value.deadline})else{
+                changed.wait();changed.unlock();continue
+            }
+            let remaining=next.value.deadline-ProcessInfo.processInfo.systemUptime
+            if remaining>0 {
+                _=changed.wait(until:Date().addingTimeInterval(min(1,remaining)))
+                changed.unlock();continue
+            }
+            entries.removeValue(forKey:next.key);changed.unlock()
+            next.value.action()
+        }
+    }
+}
 private final class WorkerDeadline: @unchecked Sendable {
-    private let lock = NSLock()
-    private var generation = 0
-    private var expired = false
-    private var work: DispatchWorkItem?
-    func arm(_ seconds: TimeInterval?, process: Process) {
-        let token = lock.withLock {
-            generation += 1
-            expired = false
-            work?.cancel()
-            work = nil
+    private let lock=NSLock()
+    private let id=UUID()
+    private var generation=0
+    private var expired=false
+    func arm(_ seconds:TimeInterval?,process:Process){
+        let token=lock.withLock{
+            generation+=1;expired=false
+            WorkerTimers.shared.cancel(id)
             return generation
         }
-        guard let seconds, seconds > 0 else { return }
-        let timer = DispatchWorkItem { [weak self, weak process] in
-            guard let self else { return }
-            self.lock.withLock {
-                guard self.generation == token, process?.isRunning == true else { return }
-                self.expired = true
-                if let process { Self.stop(process) }
+        guard let seconds,seconds.isFinite,seconds>0 else{return}
+        WorkerTimers.shared.schedule(id,after:seconds){[weak self,weak process] in
+            guard let self else{return}
+            self.lock.withLock{
+                guard self.generation==token,let process,process.isRunning else{return}
+                self.expired=true
+                Self.stop(process)
             }
         }
-        lock.withLock { work = timer }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds, execute: timer)
     }
-    func finish() -> Bool {
-        lock.withLock {
-            generation += 1
-            work?.cancel()
-            work = nil
-            let value = expired
-            expired = false
-            return value
+    func finish()->Bool{
+        lock.withLock{
+            generation+=1;WorkerTimers.shared.cancel(id)
+            let value=expired;expired=false;return value
         }
     }
-    static func stop(_ process: Process) {
-        guard process.isRunning else { return }
+    deinit{WorkerTimers.shared.cancel(id)}
+    static func stop(_ process:Process){
+        guard process.isRunning else{return}
         #if os(Windows)
-            process.terminate()  // Foundation uses the owned process handle / TerminateProcess on Windows.
+            process.terminate() // Uses the owned process handle.
         #else
-            _ = kill(process.processIdentifier, SIGKILL)  // Only this model worker, never the Shell-launched application.
+            _=kill(process.processIdentifier,SIGKILL) // Only the model worker.
         #endif
     }
 }

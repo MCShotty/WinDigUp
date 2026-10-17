@@ -83,6 +83,11 @@ Windows search shows keyword results immediately and adds meaning matches after 
 follow file results; Settings → Apps offers Smart placement, Files first, or Apps view only. Activity's **Last search**
 breakdown shows where time was spent. See [search responsiveness and measurement limits](docs/search-responsiveness.md).
 
+Drive discovery can scan independent physical disks together. Activity shows each drive's phase and separate stage
+measurements. GPU jobs in General settings allows up to three AMD Vulkan/NVIDIA CUDA operations, subject to device
+memory; search keeps foreground priority. System, Light, and Dark appearance is shared across windows.
+See [discovery and GPU concurrency](docs/discovery-concurrency.md) for limits, measurements, and remaining hardware checks.
+
 | Mac | Windows and Linux | What it does |
 |---|---|---|
 | ⇧⌘Space | Ctrl+Shift+Space | Opens the search panel from any app (you can change it) |
