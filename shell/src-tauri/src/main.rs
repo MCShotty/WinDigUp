@@ -1145,7 +1145,8 @@ fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
         .inner_size(PANEL_WIDTH, FIELD_HEIGHT)
         .decorations(false)
         .transparent(true)
-        .shadow(true)
+        .background_color(tauri::window::Color(0, 0, 0, 0))
+        .shadow(!cfg!(windows))
         // GTK 3 makes a window that can't be resized at least 200 px tall when its content has no height of its own (a
         // web view's), so the field alone wouldn't fit; resizable, it takes the size asked for. It has no edges to drag.
         .resizable(cfg!(target_os = "linux"))

@@ -104,6 +104,17 @@ let browser;
     assert.equal(await page.locator("#panel").evaluate(node => Math.round(node.getBoundingClientRect().height)),64,
       "Background progress expanded an empty search");
     assert.equal(await page.locator("#activity").isVisible(),false);
+    for (const theme of ["light","dark"]) {
+      await page.evaluate(theme=>AppearanceUI.apply(theme),theme);
+      for (const material of ["solid","acrylic"]) {
+        await page.evaluate(material=>AppearanceUI.applyPanel({material,supported:true}),material);
+        for (const selector of ["html","body"]) {
+          assert.equal(await page.locator(selector).evaluate(node=>getComputedStyle(node).backgroundColor),"rgba(0, 0, 0, 0)",
+            "The web canvas outside the capsule became opaque");
+        }
+      }
+    }
+    await page.evaluate(()=>AppearanceUI.apply("system"));
     await capture(page,"capsule-light","#panel");
     await page.emulateMedia({colorScheme:"dark"});
     await capture(page,"capsule-dark","#panel");

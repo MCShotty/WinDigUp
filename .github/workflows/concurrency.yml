@@ -1,14 +1,12 @@
 name: Discovery and inference concurrency
 on:
   pull_request:
-  push:
-    branches: [codex/continuous-indexing]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: concurrency-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  cancel-in-progress: true
 jobs:
   baseline:
     runs-on: windows-2025
