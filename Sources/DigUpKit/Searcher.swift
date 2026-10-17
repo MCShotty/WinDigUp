@@ -430,9 +430,8 @@ public final class Searcher {
         "صورة", "صور", "لقطة", "شاشة", "فيديو", "ملف", "مستند",
     ]
 
-    /// The content words of a query, normalized as keyword search keeps its text (`SearchText`). Kind words
-    /// ("screenshot", "video") and stopwords are dropped: they describe what to look for, not what's in it. Words of
-    /// two letters or more count; a Bengali letter with its vowel sign ("মা") is two.
+    /// Bare category names remain keywords; descriptive queries drop category words with other stopwords.
+    /// Two Unicode scalars count, including a Bengali letter with its vowel sign ("মা").
     public static func terms(_ text: String) -> [String] {
         var seen = Set<String>()
         let words = SearchText.normalized(text).lowercased()
@@ -478,14 +477,13 @@ public final class Searcher {
         "مقطع": .video, "صوت": .audio, "تسجيل": .audio, "اغنية": .audio,
     ]
 
-    /// Kinds the query asks for ("…in a video", "screenshot of…", "ভিডিওতে"): a soft boost, not a filter. Bengali
-    /// attaches case endings, so a Bengali kind word also counts at the start of a longer word.
     private static func kindWord(_ word: String) -> FileKind? {
         kindWords[word] ?? kindWords.first { key, _ in
             SearchText.inflects(key) && key.unicodeScalars.count >= 3 && word.hasPrefix(key)
         }?.value
     }
 
+    /// A category hint requires a subject beyond the category or a settings/application action.
     public static func kindHints(_ text: String) -> Set<FileKind> {
         let words = SearchText.normalized(text).lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }

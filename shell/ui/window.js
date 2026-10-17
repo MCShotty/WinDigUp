@@ -5,7 +5,7 @@
 // the reference; the helper (`digup search-service`) does the work, and results.js has what a result says.
 "use strict";
 
-const TYPING_PAUSE = 120;   // ms after the last keystroke until the search runs (the query was embedded meanwhile)
+const TYPING_PAUSE = 120;   // ms after typing before semantic search
 const LIMIT = 120;
 const FILTERS = [
   { key: "screenshots", title: "Screenshots", kinds: ["screenshot"], icon: "screenshot" },
@@ -126,8 +126,6 @@ function isCode() {
 function isAppsMode() { return Apps.parse(state.query, state.filter).mode === "apps"; }
 function hasQuery() { return Boolean(state.query.trim()) || isAppsMode() || isSettingsMode(); }
 
-/// The query or the filter changed: after a short pause in typing, the search (and the same search of one kind, for a
-/// filter), all at once. The query's meaning is embedded on every keystroke, so the pause is the whole wait.
 function run() {
   const generation = ++state.generation;
   SearchTiming.begin(generation);
@@ -628,7 +626,6 @@ function move(step) {
   select(resultKey(shown[Math.max(0, Math.min(shown.length - 1, (index < 0 ? -1 : index) + step))]));
 }
 
-/// The grid's columns right now (↑ ↓ move by a row); a list has one.
 function moveVertical(direction) {
   const shown = rows(), index = shown.findIndex(hit => resultKey(hit) === state.selection);
   const current = $content.querySelector('[data-result-key="' + CSS.escape(state.selection || "") + '"]');

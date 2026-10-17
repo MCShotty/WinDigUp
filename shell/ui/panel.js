@@ -1,8 +1,4 @@
-// The search panel of DigUp's Windows and Linux shell (tried out on the Mac first). Every keystroke shows keyword
-// results at once (the last word as a prefix); once typing pauses for 120 ms the meaning results replace them (the
-// query was embedded while you typed). Results far weaker than the best are folded under "N weaker matches". The
-// helper (`digup search-service`) does the work; the Mac app's panel (Sources/DigUpApp/SearchPanel.swift) is the
-// reference for how it behaves. results.js has what a result says.
+// File and native launcher providers refine these rows independently. Visual and keyboard order share one plan.
 "use strict";
 
 const TYPING_PAUSE = 120;          // ms after the last keystroke until the meaning results show
