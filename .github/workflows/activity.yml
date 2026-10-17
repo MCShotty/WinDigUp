@@ -28,6 +28,10 @@ jobs:
           export NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome
           node --check shell/ui/activity.js
           node --check shell/ui/applications-settings.js
+          node tests/ui/mixed-ordering-contract.cjs
+          export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
+          DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/mixed-ordering.cjs
+          node tests/ui/drive-picker.cjs
           node tests/ui/acceleration.cjs
           node tests/ui/applications.cjs
           node tests/ui/activity.cjs
@@ -38,11 +42,8 @@ jobs:
           node --check shell/ui/windows-settings.js
           node tests/ui/windows-settings.cjs
           node --check shell/ui/mixed-results.js
-          node tests/ui/mixed-ordering-contract.cjs
-          DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/mixed-ordering.cjs
           node --check shell/ui/discovery-settings.js
           node tests/ui/discovery-settings.cjs
-          node tests/ui/drive-picker.cjs
           node --check shell/ui/pipeline.js
           node --check shell/ui/appearance.js
           DIGUP_CONCURRENCY_SCREENSHOT_LOG=1 node tests/ui/concurrency.cjs

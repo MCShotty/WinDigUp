@@ -75,3 +75,8 @@ select.field {
 .path-button:hover { color: var(--text); text-decoration: underline; }
 .privacy-text { font-size: 12px; color: var(--secondary); line-height: 1.5; margin: 0; }
 .problem { color: #c4441c; }
+
+@media (max-width: 640px) {
+  .tabs { justify-content: flex-start; overflow-x: auto; }
+  .tabs button { flex: none; }
+}

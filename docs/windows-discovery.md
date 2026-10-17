@@ -6,8 +6,8 @@ Windows 10 (19041+) and Windows 11 x64 are the supported desktop targets. Linux 
 ## Searching and opening Windows settings
 
 Use **Settings** (Ctrl+9 in the larger window) or type `settings: display`. An empty `settings:` lists destinations
-alphabetically. Ordinary searches show at most two matching destinations below files and Apps; Apps placement
-preferences continue to apply to applications. Settings → Apps → Windows settings controls inclusion, purpose
+alphabetically. Ordinary searches include up to two matching destinations in the shared Best matches/source ordering. Exact settings
+names and aliases can lead file results; Apps placement preferences continue to apply to applications. Settings → Apps → Windows settings controls inclusion, purpose
 matching and ordinary-search visibility independently.
 
 The versioned built-in catalog contains 38 destinations, descriptions and aliases. Display names have English
@@ -22,7 +22,9 @@ can open an `ms-settings:` URI; query text is never converted into a URI or comm
 
 ## Finding unregistered applications
 
-In **Settings → Apps → Find applications on drives**, enable discovery, choose volumes and save. Volumes are
+In **Settings → Drives**, choose Applications for the desired drives, enable application discovery and save.
+Choose Files independently to index supported file content across a drive. Existing subfolder selections and exclusions
+are retained. Refresh drive list works before discovery is enabled. See [drive choices](mixed-result-ordering.md#drives). Volumes are
 identified by Windows volume GUIDs; drive letters are labels. Discovery is off by default and has its own pause,
 rescan and candidate-review controls. Unsaved drive choices survive progress updates and focus changes.
 
@@ -40,7 +42,7 @@ every filesystem. The component never creates a journal on a user's drive; absen
 Reparse points, offline placeholders and inaccessible programs are skipped. Disconnected or failed sources keep
 their last usable catalog and remain visible in Activity. A failure on one selected volume does not stop later volumes.
 
-Install **fast NTFS discovery** explicitly from Apps settings. Windows requests administrator permission once
+Install **fast NTFS discovery** explicitly from Drives settings. Windows requests administrator permission once
 to register a demand-start service. Declining leaves ordinary directory discovery available. Non-NTFS volumes
 use the directory provider, which is slower and does not traverse reparse points. The selected-volume controller
 processes volumes sequentially; metadata work is parallel and bounded, rather than multiplying random disk reads.

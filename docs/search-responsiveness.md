@@ -51,9 +51,10 @@ Old filename caches retire on a utility thread after the serial ownership handof
 a runtime-gated F16C conversion on compatible x64 CPUs, checking both CPU features and OS AVX state. Other hosts use
 a portable conversion. Both paths preserve every finite half-float bit pattern; the neural pipeline is unchanged.
 
-The exact-filename cache is built in the background across all indexed names, including names outside the returned
-top hits. A database revision change invalidates it conservatively until rebuilt, suppressing app promotion while
-collision information is unknown. This changes no file/code schemas or embedding fingerprints.
+The exact-filename cache is built in the background across indexed names. Mixed-result ordering now preserves exact
+file/app/settings collisions together using shared match classes; it no longer waits for collision metadata before
+showing native names. See [mixed-result ordering](mixed-result-ordering.md). File/code schemas and embedding fingerprints
+are unchanged.
 
 ## Automated checks
 
