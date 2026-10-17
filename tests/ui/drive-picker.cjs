@@ -84,7 +84,7 @@ let browser;
   assert.equal(await page.locator('#drive-volumes input[data-source=applications][value="volume-a"]').isChecked(), true);
   assert.equal(await page.locator('#drive-volumes input[data-source=applications][value="volume-b"]').isChecked(), true);
   assert.equal(await page.locator('#drive-volumes input[data-source=applications][value="volume-c"]').isChecked(), false, "A newly attached drive was selected automatically");
-  assert.match(await page.locator('#drive-volumes input[data-source=applications][value="volume-a"]').locator('xpath=ancestor::div[contains(@class,"source-volume")]').innerText(), /D:/);
+  assert.match(await page.locator('#drive-volumes input[data-source=applications][value="volume-a"]').locator('xpath=ancestor::div[@class="source-volume"]').innerText(), /D:/);
   await page.locator("#drive-save").click();
   await page.waitForFunction(() => !DiscoverySettings.dirty);
   saved = await page.evaluate(() => window.calls.filter(call => call.command === "set_discovery_options").at(-1).args.options);

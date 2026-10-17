@@ -153,6 +153,27 @@ let browser;
       assert.ok(await page.evaluate(() => [...document.querySelectorAll(".best-matches [data-result-key]")].every(node =>
         node.getBoundingClientRect().right <= innerWidth + 1)), "Best match overflow");
       await page.press("#query", "ArrowDown"); await page.press("#query", "ArrowUp");
+      const contrastFailures=await page.evaluate(()=>{
+        const rgba=value=>{
+          const numbers=(value.match(/[\\d.]+/g)||[]).map(Number);
+          if(value.startsWith("color(srgb "))for(let i=0;i<3;i++)numbers[i]*=255;
+          return numbers;
+        };
+        const over=(front,back)=>front.slice(0,3).map((value,i)=>value*(front[3]??1)+back[i]*(1-(front[3]??1)));
+        const light=values=>values.map(value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4;})
+          .reduce((sum,value,i)=>sum+value*[.2126,.7152,.0722][i],0);
+        const ratio=(a,b)=>{const levels=[light(a),light(b)].sort((a,b)=>b-a);return (levels[0]+.05)/(levels[1]+.05);};
+        const failures=[];
+        for(const node of document.querySelectorAll(".best-matches .app-name,.best-matches .app-description,.best-matches .app-inline-publisher,.best-matches .cell .name,.best-matches .cell .folder,.best-matches .row-sub,.best-matches .row-title,.best-matches .app-launch")){
+          if(!node.getClientRects().length||!node.textContent.trim())continue;
+          const parents=[];for(let parent=node;parent;parent=parent.parentElement)parents.unshift(parent);
+          let background=[255,255,255];for(const parent of parents)background=over(rgba(getComputedStyle(parent).backgroundColor),background);
+          const color=over(rgba(getComputedStyle(node).color),background),measured=ratio(color,background);
+          if(measured<4.5)failures.push({text:node.textContent,ratio:measured});
+        }
+        return failures;
+      });
+      assert.deepEqual(contrastFailures,[], "Best-match text contrast in "+theme+" at "+width);
       if (process.env.DIGUP_SEARCH_SCREENSHOTS) {
         fs.mkdirSync(process.env.DIGUP_SEARCH_SCREENSHOTS, {recursive: true});
         await page.screenshot({path: path.join(process.env.DIGUP_SEARCH_SCREENSHOTS, view + "-" + theme + "-" + width + ".png")});

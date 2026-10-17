@@ -474,6 +474,15 @@ function renderFooter() {
   // Results while indexing (or before the model is in) may be missing some: that, where they're counted.
   else if (state.caveat && !state.isCode) summary = state.caveat;
   else summary = `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : "");
+  if(!state.isApps&&!state.isSettings&&!state.isCode){
+    const native=[];
+    if(applicationSearch.active&&applicationSearch.total)native.push(applicationSearch.total+" "+(applicationSearch.total===1?"app":"apps"));
+    if(settingsSearch.active&&settingsSearch.total)native.push(settingsSearch.total+" Windows "+(settingsSearch.total===1?"setting":"settings"));
+    if(native.length){
+      const files=resultLayout().rows.filter(hit=>!isLauncher(hit)).length;
+      summary=(state.error?summary+" · ":"")+native.join(" · ")+" · "+(state.lexicalReady?files+" file "+(files===1?"match":"matches")+" shown":"Files pending");
+    }
+  }
   $summary.textContent = summary;
   $keys.textContent = isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
 }

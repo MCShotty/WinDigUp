@@ -125,3 +125,11 @@ body.apps-mode .app-group-title { font-size:23px; font-weight:650; }
 .drive-name { font-weight: 600; overflow-wrap: anywhere; }
 .source-volume .note { margin: 0; }
 @media (pointer: coarse) { .source-drive-options label { min-height: 44px; } }
+
+.cell.best-file-row { border-left: 3px solid transparent; }
+.cell.best-file-row.selected, .best-matches .app-row-expanded.selected { border-left-color: var(--leaf-text, var(--moss)); }
+.panel-result-group .row, .panel-result-group .app-row { border-left: 3px solid transparent; }
+.panel-result-group .row.selected, .panel-result-group .app-row.selected {
+  border-left-color: var(--leaf-text, var(--moss));
+  background: color-mix(in srgb, var(--moss, #356652) 8%, var(--surface));
+}
