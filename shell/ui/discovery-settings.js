@@ -73,7 +73,7 @@ const DiscoverySettings = {
     for(const check of this.el("drive-volumes").querySelectorAll("input"))check.disabled=driveBusy;
     for(const id of ["drive-enabled","drive-paused","drive-install"])this.el(id).disabled=driveBusy;
     this.el("drive-save").disabled=driveBusy||!this.dirty;this.el("drive-revert").disabled=driveBusy||!this.dirty;
-    this.el("drive-refresh").disabled=driveBusy||!d.options?.enabled||d.options?.paused||Boolean(d.running);
+    this.el("drive-refresh").disabled=driveBusy||d.catalogEnabled===false||!d.options?.enabled||d.options?.paused||Boolean(d.running);
     this.text("drive-draft",this.dirty?"Unsaved drive selections. Save to apply.":"");
     const legacy=[p.phase||"Waiting",Number.isFinite(p.records)?this.n(p.records)+" records checked":"",
       Number.isFinite(p.candidates)?this.n(p.candidates)+" executable candidates":"",
@@ -158,6 +158,7 @@ const DiscoverySettings = {
   },
   emptyMessage(q,classification){
     const d=info.discovery||{};
+    if(d.catalogEnabled===false)return "Application search is off. Enable installed applications above to resume drive discovery.";
     if(q.trim())return "No executables match this name. Try another name or clear the search.";
     if(!d.options?.enabled)return "Drive discovery is off. Enable it and save your drive choices.";
     if(!d.options?.volumes?.length)return "No drives are selected. Choose drives and save to begin discovery.";

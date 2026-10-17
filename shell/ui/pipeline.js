@@ -26,6 +26,7 @@ window.PipelineUI = (() => {
     return [(volume?.paths || []).join(", "), volume?.name].filter(Boolean).join(" · ") || "Disconnected volume";
   }
   function phase(discovery, progress) {
+    if (discovery.catalogEnabled === false) return "Application search is off";
     if (!discovery.options?.enabled) return "Off";
     if (discovery.options?.paused) return "Paused";
     if (!discovery.running && discovery.progress?.phase === "failed" && !["watching","failed","unavailable"].includes(progress.phase))

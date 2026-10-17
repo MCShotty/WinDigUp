@@ -41,7 +41,7 @@ impl Manager {
     }
     pub fn root(&self)->PathBuf{self.root.clone()}
     pub fn info(&self)->Value{
-        json!({"version":2,"supported":cfg!(windows),"options":self.options.read().unwrap().clone(),
+        json!({"version":2,"supported":cfg!(windows),"catalogEnabled":self.apps.enabled(),"options":self.options.read().unwrap().clone(),
             "progress":self.progress.read().unwrap().clone(),"byVolume":self.by_volume.read().unwrap().clone(),"volumes":self.volumes.read().unwrap().clone(),
             "sourceErrors":self.source_errors.read().unwrap().clone(),"running":self.running.load(Ordering::SeqCst)})
     }
