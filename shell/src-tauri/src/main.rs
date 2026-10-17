@@ -548,7 +548,7 @@ fn refresh_panel_appearance(app: &AppHandle) {
 }
 
 #[tauri::command]
-async fn panel_ready(shell: State<'_, Arc<Shell>>, request_id: usize) {
+async fn panel_ready(shell: State<'_, Arc<Shell>>, request_id: usize) -> Result<(), String> {
     let sample = {
         let mut shown = shell.panel_shown.lock().unwrap();
         if shown.as_ref().is_some_and(|(id, _)| *id == request_id) {
@@ -559,8 +559,10 @@ async fn panel_ready(shell: State<'_, Arc<Shell>>, request_id: usize) {
     };
     if let Some(sample) = sample {
         let shell = Arc::clone(&shell);
-        let _ = tauri::async_runtime::spawn_blocking(move || shell.diagnostics.record("panel", sample)).await;
+        tauri::async_runtime::spawn_blocking(move || shell.diagnostics.record("panel", sample))
+            .await.map_err(|error| error.to_string())?;
     }
+    Ok(())
 }
 
 /// Where the page drew the panel in a window that fills the screen (wayland.rs): only there does it take the pointer.
