@@ -73,4 +73,29 @@ struct ApplicationStoreTests {
         try store.save(vector(0), for: item, fingerprint: fingerprint)
         #expect(try store.counts().embedded == 1)
     }
+    @Test func documentClaimsRejectOldCatalogAndCompetingOwners() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:root)}
+        let first=try ApplicationStore(directory:root)
+        let second=try ApplicationStore(directory:root)
+        let item=document("editor")
+        try first.synchronize([item],revision:"one")
+        try first.prepare(fingerprint:"gpu")
+        let claim=try #require(first.claimPending(owner:"first",now:100))
+        #expect(try second.claimPending(owner:"second",now:101)==nil)
+        try first.synchronize([item],revision:"two")
+        try first.save(vector(0),claim:claim)
+        #expect(try first.counts().embedded==0)
+        let current=try #require(second.claimPending(owner:"second",now:102))
+        try second.save(vector(0),claim:current)
+        #expect(try first.counts().embedded==1)
+        try first.prepare(fingerprint:"another-device")
+        let expired=try #require(first.claimPending(owner:"old",now:200))
+        let replacement=try #require(second.claimPending(owner:"new",now:381))
+        try first.save(vector(0),claim:expired)
+        #expect(try first.counts().embedded==0)
+        try second.save(vector(0),claim:replacement)
+        #expect(try first.counts().embedded==1)
+    }
+
 }

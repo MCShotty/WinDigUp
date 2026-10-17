@@ -64,7 +64,7 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
                 } catch {
                     changed.lock();if creationPending {creating=max(0,creating-1)}
                     if String(describing:error).contains("capacity_limited:") {
-                        limit=max(1,slots.count)
+                        limit=max(1,slots.count+creating)
                         capacityReason=String(describing:error)
                         changed.broadcast()
                         continue

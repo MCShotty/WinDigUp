@@ -37,3 +37,19 @@ jobs:
           clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o
           swiftc -swift-version 6 -I Sources/CGPUAdmission/include Sources/DigUpKit/GPUAdmission.swift Sources/DigUpKit/EmbeddingPool.swift Sources/DigUpKit/EmbeddingPlan.swift tests/native/inference-contracts.swift /tmp/digup-lease.o -o /tmp/digup-inference-contracts
           /tmp/digup-inference-contracts
+
+  shared-engine:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Build the pinned native runtime
+        run: bash scripts/build-llama.sh
+      - name: Storage, prepared inference and worker contracts with synthetic embedders
+        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|WorkerDeadlineTests|AccelerationTests|SearchReadersTests'
