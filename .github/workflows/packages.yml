@@ -20,8 +20,8 @@ permissions:
 
 concurrency:
   group: packages-${{ github.event.pull_request.number || github.ref }}
-  # An installer for a superseded commit must not delay the current candidate.
-  cancel-in-progress: true
+  # Finish the native dependency build; retain only the latest pending installer.
+  cancel-in-progress: false
 
 jobs:
   linux:

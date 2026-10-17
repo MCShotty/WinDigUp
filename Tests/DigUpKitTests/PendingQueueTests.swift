@@ -14,6 +14,27 @@ struct PendingQueueTests {
         return store
     }
 
+    @Test func metadataPagesUseTheQueueRangeRatherThanTheFileStateIndex() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try makeStore(root, count: 80)
+        let queue = try store.pendingQueue()
+        defer { queue.close() }
+        func plan(_ sql: String) throws -> [String] {
+            var result: [String] = []
+            try store.db.query("EXPLAIN QUERY PLAN " + sql, [.int(0), .text("pending"), .int(128)]) {
+                result.append($0.text(3))
+            }
+            return result
+        }
+        let original = try plan(queue.pageSQL.replacingOccurrences(of: "CROSS JOIN", with: "JOIN"))
+        let bounded = try plan(queue.pageSQL)
+        #expect(bounded.contains { $0.hasPrefix("SEARCH q ") && $0.contains("rowid>?") })
+        #expect(bounded.contains { $0.hasPrefix("SEARCH f ") && $0.contains("rowid=?") })
+        #expect(!bounded.contains { $0.contains("files_state") || $0.contains("TEMP B-TREE") })
+        print("QUEUE_PAGE_QUERY_PLANS: original=\(original) bounded=\(bounded)")
+    }
+
     @Test func pagesAndImageBatchesDoNotChangeTheFileLimit() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -104,7 +125,10 @@ struct PendingQueueTests {
             let queue = try store.pendingQueue()
             defer { queue.close() }
             var received = 0
-            while try queue.take() != nil { received += 1 }
+            while try queue.take() != nil {
+                received += 1
+                if received % 100_000 == 0 { print("QUEUE_SCALE_PROGRESS: \(received)/\(count)") }
+            }
             #expect(received == count && queue.rows == count)
             #expect(queue.peakBufferedRecords <= 128)
             #expect(queue.pages <= count / 128 + 2)

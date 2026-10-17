@@ -60,6 +60,15 @@ final class PendingFileQueue {
         }
     }
 
+    // CROSS JOIN keeps the queue's rowid range outside file-state index lookups.
+    var pageSQL: String {
+        let columns = IndexStore.fileColumns.split(separator: ",").map { "f." + $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ",")
+        return """
+            SELECT \(columns),q.priority,q.ord FROM \(table) q CROSS JOIN files f ON f.id=q.file
+            WHERE q.ord>? AND f.state=? ORDER BY q.ord LIMIT ?
+            """
+    }
+
     func peek() throws -> Entry? {
         guard !closed else { return nil }
         if offset == buffer.count {
@@ -67,11 +76,7 @@ final class PendingFileQueue {
             buffer.removeAll(keepingCapacity: true)
             offset = 0
             let start = ProcessInfo.processInfo.systemUptime
-            let columns = IndexStore.fileColumns.split(separator: ",").map { "f." + $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ",")
-            try store.db.query("""
-                SELECT \(columns),q.priority,q.ord FROM \(table) q JOIN files f ON f.id=q.file
-                WHERE q.ord>? AND f.state=? ORDER BY q.ord LIMIT ?
-                """, [.int(after), .text(state), .int(Int64(pageSize))]) {
+            try store.db.query(pageSQL, [.int(after), .text(state), .int(Int64(pageSize))]) {
                 buffer.append(Entry(file: IndexStore.record($0), priority: Int($0.int(8))))
                 after = $0.int(9)
             }
