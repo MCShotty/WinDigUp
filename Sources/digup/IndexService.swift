@@ -44,6 +44,7 @@ final class IndexService: @unchecked Sendable {
     private let modelReady: () -> Bool
     private let newFilesLimit: Int
     private let linger: Double
+    private let output: (([String: Any]) -> Void)?
 
     private let lock = NSLock()
     private var syncRequested = true       // the first thing it does
@@ -58,7 +59,7 @@ final class IndexService: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
 
     init(main: Part, code: Part?, folder: URL, model: SharedEmbedder, modelReady: @escaping () -> Bool,
-         backfill: Bool, newFilesLimit: Int, linger: Double) {
+         backfill: Bool, newFilesLimit: Int, linger: Double, output: (([String: Any]) -> Void)? = nil) {
         self.main = main
         self.code = code
         self.folder = folder
@@ -67,6 +68,7 @@ final class IndexService: @unchecked Sendable {
         self.backfillAllowed = backfill
         self.newFilesLimit = newFilesLimit
         self.linger = linger
+        self.output = output
         self.model.beforeInference = { [weak self] in self?.yieldToSearch() }
     }
 
@@ -81,7 +83,11 @@ final class IndexService: @unchecked Sendable {
 
     private var parts: [Part] { [main] + (code.map { [$0] } ?? []) }
 
-    func serve() -> Int32 {
+    private func emit(_ fields: [String: Any]) {
+        if let output { output(fields) } else { emitServiceOutput(fields) }
+    }
+
+    func serve(commandInput: Bool = true) -> Int32 {
         emit(["event": "phase", "stage": "cleanup", "message": "Preparing indexing scratch space…"])
         removeStaleScratchFolders()
         do {
@@ -107,7 +113,7 @@ final class IndexService: @unchecked Sendable {
             finish()
             return 1
         }
-        Thread.detachNewThread { [self] in readCommands() }
+        if commandInput { Thread.detachNewThread { [self] in readCommands() } }
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var codeCounted = code == nil
         var preferCode=false
@@ -428,3 +434,5 @@ func emit(_ fields: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) else { return }
     ProtocolOutput.lock.withLock { try? FileHandle.standardOutput.write(contentsOf: data + [0x0A]) }
 }
+
+private func emitServiceOutput(_ fields: [String: Any]) { emit(fields) }

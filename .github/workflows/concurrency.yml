@@ -1,6 +1,8 @@
 name: Discovery and inference concurrency
 on:
   pull_request:
+  push:
+    branches: [codex/continuous-indexing]
   workflow_dispatch:
 permissions:
   contents: read
@@ -86,6 +88,10 @@ jobs:
             Vendor/llama.cpp
             Vendor/llama-build
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Reproduce service drain and preparation head-of-line blocking
+        env:
+          DIGUP_INDEX_BASELINE: '1'
+        run: swift test --filter 'ServiceSchedulingTests|ReadyDispatchTests'
       - name: Bounded worker startup and response deadlines
         run: swift test --filter 'WorkerDeadlineTests'
       - name: Storage, prepared inference and long-file contracts with synthetic embedders
