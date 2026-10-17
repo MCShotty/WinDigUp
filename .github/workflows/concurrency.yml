@@ -10,6 +10,7 @@ concurrency:
 jobs:
   baseline:
     runs-on: windows-2025
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
@@ -37,6 +38,7 @@ jobs:
 
   inference-contracts:
     runs-on: macos-15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Check physical-validation harness protocol without model inference
@@ -51,6 +53,7 @@ jobs:
 
   shared-engine:
     runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Select an installed Swift 6.2 or newer toolchain
@@ -78,5 +81,7 @@ jobs:
             Vendor/llama.cpp
             Vendor/llama-build
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
-      - name: Storage, prepared inference and worker contracts with synthetic embedders
-        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|WorkerDeadlineTests|AccelerationTests|SearchReadersTests|LongFilesTests'
+      - name: Bounded worker startup and response deadlines
+        run: swift test --filter 'WorkerDeadlineTests'
+      - name: Storage, prepared inference and long-file contracts with synthetic embedders
+        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|LongFilesTests'

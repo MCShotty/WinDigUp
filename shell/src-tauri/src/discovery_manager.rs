@@ -270,7 +270,13 @@ impl Manager {
                     let measured=Instant::now();self.publish_cached(&db,options)?;
                     for (id,pass) in &mut passes{
                         pass.timings.record("catalogPublication",measured,0);
-                        self.update(json!({"version":2,"phase":"metadata","volume":id,"timings":pass.timings,
+                        let phase=if pass.complete.is_some(){"metadata"}else{
+                            let rows=self.by_volume.read().unwrap();
+                            match rows.get(id).and_then(|row|row["phase"].as_str()){
+                                Some("resolving")=>"resolving",Some("reconciling")=>"reconciling",_=>"enumerating"
+                            }
+                        };
+                        self.update(json!({"version":2,"phase":phase,"volume":id,"timings":pass.timings,
                             "metadataDone":pass.finished,"metadataQueued":pass.seen,"accepted":db.accepted_for(id)?.len(),"total":null}));
                     }
                     dirty=false;last_publish=Instant::now();

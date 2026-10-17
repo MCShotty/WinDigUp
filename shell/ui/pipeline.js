@@ -43,7 +43,7 @@ window.PipelineUI = (() => {
     if (!timings?.stages) return;
     const names = { enumeration:"Enumeration", pathResolution:"Path resolution", permissionChecks:"Access checks",
       metadataReads:"Metadata reads", metadataQueue:"Metadata waiting", databaseCommit:"Database commits",
-      catalogPublication:"Catalog publication", directoryMetadata:"Directory metadata" };
+      catalogPublication:"Catalog publication (shared)", directoryMetadata:"Directory metadata" };
     const heading = create("p", "pipeline-timing-owner", title);
     const table = create("dl", "pipeline-timings");
     for (const [key, value] of Object.entries(timings.stages)) {

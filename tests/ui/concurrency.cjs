@@ -89,6 +89,11 @@ const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";
   assert.equal(await page.evaluate(()=>window.candidateRow===document.querySelector(".source-candidate")),true);
   assert.equal(await page.locator("#drive-candidates button").first().evaluate(element=>element===document.activeElement),true);
   await page.locator("#drive-candidates button").first().click();
+  await page.waitForFunction(()=>calls.some(call=>call.command==="set_discovery_candidate"&&call.args.action==="include"));
+  await page.locator("#drive-candidates button").nth(1).click();
+  await page.waitForFunction(()=>calls.some(call=>call.command==="set_discovery_candidate"&&call.args.action==="hide"));
+  await page.locator("#drive-candidates button").nth(2).click();
+  await page.waitForFunction(()=>calls.some(call=>call.command==="set_discovery_candidate"&&call.args.action==="reset"));
   await page.evaluate(()=>window.emptyCandidates=true);
   await page.locator("#drive-filter").fill("");await page.waitForTimeout(300);
   assert.match(await page.locator("#drive-list-state").innerText(),/No executables need review/);
@@ -120,7 +125,11 @@ const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";
   });
   await page.emulateMedia({colorScheme:"dark"});await page.evaluate(()=>AppearanceUI.apply("light"));
   const checkContrast=async()=>page.evaluate(()=>{
-   const rgba=value=>(value.match(/[\d.]+/g)||[]).map(Number);
+   const rgba=value=>{
+    const values=(value.match(/[\d.]+/g)||[]).map(Number);
+    if(value.startsWith("color(srgb "))for(let index=0;index<3;index++)values[index]*=255;
+    return values;
+   };
    const over=(front,back)=>front.slice(0,3).map((value,index)=>value*(front[3]??1)+back[index]*(1-(front[3]??1)));
    const luminance=values=>values.map(value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4;}).reduce((sum,value,index)=>sum+value*[.2126,.7152,.0722][index],0);
    const failures=[];
