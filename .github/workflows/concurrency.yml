@@ -48,9 +48,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Check physical-validation harness protocol without model inference
         run: |
-          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py scripts/benchmark-index-service.py
+          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py scripts/benchmark-index-service.py scripts/compare-index-service.py
           python3 -m unittest discover -s tests/native -p 'test_worker_protocol.py'
           python3 -m unittest discover -s tests/native -p 'test_index_service_benchmark.py'
+          python3 -m unittest discover -s tests/native -p 'test_index_service_comparison.py'
       - name: Build and run real admission and pool contracts without model weights
         run: |
           clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o
@@ -108,8 +109,25 @@ jobs:
           done
           swift build --package-path "$base" --build-tests
           swift build --build-tests
-          /usr/bin/time -l swift test --skip-build --package-path "$base" --filter ServiceIndexingBenchmark 2>&1 | tee service-before.txt
-          /usr/bin/time -l swift test --skip-build --filter ServiceIndexingBenchmark 2>&1 | tee service-after.txt
+          : > service-before.txt
+          : > service-after.txt
+          measure() {
+            local variant=$1 package=$2
+            /usr/bin/time -l swift test --skip-build --package-path "$package" --filter ServiceIndexingBenchmark 2>&1 | tee -a "service-$variant.txt"
+          }
+          for workload in images documents mixed; do
+            export DIGUP_SERVICE_WORKLOAD="$workload" DIGUP_SERVICE_TRIALS=1
+            for trial in 0 1 2 3 4; do
+              export DIGUP_SERVICE_TRIAL_NUMBER="$trial"
+              if (( trial % 2 == 0 )); then
+                measure before "$base"
+                measure after "$GITHUB_WORKSPACE"
+              else
+                measure after "$GITHUB_WORKSPACE"
+                measure before "$base"
+              fi
+            done
+          done
           python3 scripts/compare-index-service.py service-before.txt service-after.txt > service-comparison.json
           cat service-comparison.json
       - name: Queue scale at 100,000 and one million metadata records

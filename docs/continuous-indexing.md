@@ -82,7 +82,7 @@ evict significant failures from the Activity timeline.
 
 The concurrency workflow runs the actual IndexService against its baseline on the same macOS
 runner, with fresh indexes, warm fixture files and three delayed deterministic embedding owners.
-It runs five trials each of image-only, document-only and mixed file/code workloads for the baseline and changed service. Reports retain
+It alternates five paired trials each of image-only, document-only and mixed file/code workloads for the baseline and changed service. Reports retain
 elapsed time, first file, completion gaps, vectors, inference calls, peak active calls and machine
 identity. Equal completed work is required before comparison.
 
@@ -103,22 +103,22 @@ No throughput improvement is claimed until those measurements pass.
 
 At d9daec7, [run 39062311004](https://github.com/MCShotty/WinDigUp/actions/runs/39062311004)
 passed 15 scheduling/queue/service tests, three worker-deadline tests and 53 shared-engine regressions,
-then compared the actual service on macOS 15.7.9 (24G830), three logical processors and 7 GiB RAM.
-Each side used five trials, fresh indexes, warm fixture files and the same three delayed synthetic
-embedding owners. These are scheduling measurements, not physical accelerator throughput.
+then exercised the actual service on macOS 15.7.9 (24G830), three logical processors and 7 GiB RAM.
+The fixtures use fresh indexes, warm files and three synthetic embedding owners. They do not
+establish physical accelerator throughput.
 
-| Workload | Median before | Median after | Inference calls per trial | Vectors per trial |
-| --- | ---: | ---: | ---: | ---: |
-| 96 images | 524.83 ms | 308.26 ms | 12 on both | 96 on both |
-| 192 short documents | 3,421.05 ms | 3,196.75 ms | 192 on both | 192 on both |
-| 32 images, 64 documents, 32 code files | 2,063.96 ms | 1,724.01 ms | 100 on both | 128 on both |
+Initial runs assigned synthetic delays by request ordinal. Ready-first dispatch changes that
+assignment, and hosted runs varied: one run reduced elapsed time for all three workloads, while a
+subsequent run was slower for documents and mixed inputs. Those percentages are provisional.
+Raw [initial measurements](https://github.com/MCShotty/WinDigUp/actions/runs/39062311004/artifacts/12112012418)
+and [subsequent measurements](https://github.com/MCShotty/WinDigUp/actions/runs/39063136563/artifacts/12111839961)
+are retained; neither is presented as a general speedup.
 
-Median elapsed time fell 41.3%, 6.6% and 16.5% in these fixtures. Peak active inference calls
-remained three. Raw distributions and completion gaps are retained in the
-[measurement artifact](https://github.com/MCShotty/WinDigUp/actions/runs/39062311004/artifacts/12112012418).
-Compiler/test-process RSS in that retained run cannot establish an isolated helper memory change.
-The workflow prebuilds both versions before subsequent timed RSS sampling; the envelope still
-includes SwiftPM/test subprocesses and is not dedicated GPU memory.
+The workflow now fixes source modification times, binds text delays to input identity, gives the
+identical image batches a fixed cost, alternates before/after order over five paired trials per
+workload, and rejects unequal synthetic-delay totals, call counts or vector counts. Both versions
+are prebuilt before timing. The final paired results are recorded in the PR.
+RSS sampling includes SwiftPM/test subprocesses and is not isolated helper RSS or GPU memory.
 
 The same run measured the disposable metadata queue:
 

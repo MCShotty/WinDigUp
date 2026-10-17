@@ -10,22 +10,34 @@ struct ServiceIndexingBenchmark {
         let info = WorkerInfo(model: "service-benchmark", revision: "fixture", runtime: "fixture", dtype: "fixture",
                               dim: 768, textOnly: false, loadSeconds: nil)
         let lock = NSLock()
-        var calls = 0, inputs = 0, active = 0, peak = 0
-        func encode(_ count: Int) -> [[Float]] {
+        enum Failure: Error { case missingFixtureIdentity }
+        var calls = 0, inputs = 0, active = 0, peak = 0, syntheticDelayMs = 0
+        func encode(_ values: [String], fixedNumber: Int? = nil) throws -> [[Float]] {
+            var number: Int? = fixedNumber
+            if number == nil, let first = values.first {
+                for prefix in ["image-", "note-", "schedule_"] {
+                    if let range = first.range(of: prefix) {
+                        number = Int(first[range.upperBound...].prefix(while: \.isNumber))
+                        break
+                    }
+                }
+            }
+            guard let number else { throw Failure.missingFixtureIdentity }
+            let delay = number % 3 == 0 ? 60 : 6
             lock.lock()
-            let ordinal = calls
-            calls += 1; inputs += count; active += 1; peak = max(peak, active)
+            calls += 1; inputs += values.count; active += 1; peak = max(peak, active)
+            syntheticDelayMs += delay
             lock.unlock()
-            Thread.sleep(forTimeInterval: ordinal % 3 == 0 ? 0.06 : 0.006)
+            Thread.sleep(forTimeInterval: Double(delay) / 1000)
             lock.lock(); active -= 1; lock.unlock()
-            return (0..<count).map { _ in [Float(1)] + [Float](repeating: 0, count: 767) }
+            return values.map { _ in [Float(1)] + [Float](repeating: 0, count: 767) }
         }
-        func embedTexts(_ texts: [String]) throws -> [[Float]] { encode(texts.count) }
+        func embedTexts(_ texts: [String]) throws -> [[Float]] { try encode(texts) }
         func embedImages(_ paths: [String], budget: Int) throws -> [Embedding] {
-            encode(paths.count).map { Embedding(vector: $0, error: nil) }
+            try encode(paths, fixedNumber: 0).map { Embedding(vector: $0, error: nil) }
         }
         func embedAudio(_ paths: [String]) throws -> [Embedding] {
-            encode(paths.count).map { Embedding(vector: $0, error: nil) }
+            try encode(paths).map { Embedding(vector: $0, error: nil) }
         }
         func close() {}
     }
@@ -34,9 +46,17 @@ struct ServiceIndexingBenchmark {
     func compareActualServiceWithImagesDocumentsAndMixedSources() throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("DigUpKitTests/Pictures/pattern-o6.jpg")
-        for workload in ["images", "documents", "mixed"] {
+        let environment = ProcessInfo.processInfo.environment
+        let requested = environment["DIGUP_SERVICE_WORKLOAD"]
+        let count = max(1, min(5, environment["DIGUP_SERVICE_TRIALS"].flatMap(Int.init) ?? 5))
+        let offset = environment["DIGUP_SERVICE_TRIAL_NUMBER"].flatMap(Int.init) ?? 0
+        func order(_ file: URL, _ number: Int) throws {
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000 - Double(number))],
+                                                  ofItemAtPath: file.path)
+        }
+        for workload in ["images", "documents", "mixed"] where requested == nil || requested == workload {
             var trials: [[String: Any]] = []
-            for trial in 0..<5 {
+            for trial in 0..<count {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("digup-service-bench-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: root) }
                 let documents = root.appendingPathComponent("files")
@@ -47,15 +67,19 @@ struct ServiceIndexingBenchmark {
                 let notes = workload == "documents" ? 192 : workload == "mixed" ? 64 : 0
                 let sources = workload == "mixed" ? 32 : 0
                 for index in 0..<pictures {
-                    try FileManager.default.copyItem(at: fixture, to: documents.appendingPathComponent("image-\(index).jpg"))
+                    let file = documents.appendingPathComponent("image-\(index).jpg")
+                    try FileManager.default.copyItem(at: fixture, to: file)
+                    try order(file, index)
                 }
                 for index in 0..<notes {
                     try "A railway timetable and photography document, item \(index).".write(
                         to: documents.appendingPathComponent("note-\(index).txt"), atomically: false, encoding: .utf8)
+                    try order(documents.appendingPathComponent("note-\(index).txt"), index)
                 }
                 for index in 0..<sources {
                     try "def schedule_\(index)():\n    # Resolve a railway departure time.\n    return \(index)\n".write(
                         to: code.appendingPathComponent("schedule-\(index).py"), atomically: false, encoding: .utf8)
+                    try order(code.appendingPathComponent("schedule-\(index).py"), index)
                 }
                 let directory = root.appendingPathComponent("index")
                 let store = try IndexStore(directory: directory)
@@ -84,14 +108,15 @@ struct ServiceIndexingBenchmark {
                 let files = pictures + notes + sources
                 #expect(vectors == files)
                 #expect(model.inputs == files)
-                trials.append(["trial": trial, "wallMs": elapsed * 1000, "filesPerSecond": Double(files) / elapsed,
+                trials.append(["trial": offset + trial, "wallMs": elapsed * 1000, "filesPerSecond": Double(files) / elapsed,
                     "firstFileMs": (first ?? 0) * 1000, "completionGapsMs": gaps, "vectors": vectors,
-                    "inferenceCalls": model.calls, "inputs": model.inputs, "peakActiveCalls": model.peak])
+                    "inferenceCalls": model.calls, "inputs": model.inputs, "peakActiveCalls": model.peak,
+                    "syntheticDelayMs": model.syntheticDelayMs])
             }
             let report: [String: Any] = ["schemaVersion": 1, "workload": workload, "hardwareInference": false,
                 "scope": "Actual IndexService: discovery, extraction, model-call scheduling, SQLite commits and cleanup",
                 "cache": "Warm source cache after fixture creation; fresh indexes; synthetic model without startup cost",
-                "modelDelay": "Every third call 60 ms, others 6 ms; three synthetic inference owners",
+                "modelDelay": "Identical image batches: 60 ms; text input number divisible by three: 60 ms, others 6 ms; fixed mtimes; three synthetic owners",
                 "os": ProcessInfo.processInfo.operatingSystemVersionString,
                 "logicalProcessors": ProcessInfo.processInfo.activeProcessorCount,
                 "physicalMemoryBytes": ProcessInfo.processInfo.physicalMemory, "trials": trials]
