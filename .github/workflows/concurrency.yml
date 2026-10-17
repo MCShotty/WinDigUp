@@ -24,8 +24,13 @@ jobs:
       - name: Record reference machine and storage fixture
         shell: pwsh
         run: |
-          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors | ConvertTo-Json > reference-machine.json
-          Get-Disk | Select-Object Number, FriendlyName, BusType, Size | ConvertTo-Json >> reference-machine.json
+          $machine = [ordered]@{
+            os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber
+            cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors)
+            disks = @(Get-Disk | Select-Object Number, FriendlyName, BusType, Size)
+            commit = $env:GITHUB_SHA
+          }
+          $machine | ConvertTo-Json -Depth 5 | Tee-Object -FilePath reference-machine.json
           cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml --lib discovery::benchmark::baseline -- --ignored --nocapture 2>&1 | Tee-Object -FilePath discovery-baseline.txt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
