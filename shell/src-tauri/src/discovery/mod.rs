@@ -140,3 +140,56 @@ mod tests {
         assert_eq!(classify(&c).0,"review","Unsigned/unknown-publisher apps remain available for review.");
     }
 }
+
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct FileChoice {pub volume_id:String,pub enabled:bool}
+pub fn drive_path_key(path:&str)->String{path.replace('/',"\\").trim_end_matches('\\').to_lowercase()}
+pub fn apply_file_choices(folders:&mut Vec<String>,volumes:&[serde_json::Value],choices:&[FileChoice])->Result<bool,String>{
+    if choices.len()>64{return Err("Too many drive choices.".into())}
+    let mut next=folders.clone();
+    let mut seen=BTreeSet::new();
+    for choice in choices{
+        if !valid_volume(&choice.volume_id)||!seen.insert(&choice.volume_id){return Err("Invalid drive selection.".into())}
+        let volume=volumes.iter().find(|v|v["id"]==choice.volume_id).ok_or("A selected drive disconnected. Refresh the drive list and try again.")?;
+        let paths:Vec<&str>=volume["paths"].as_array().into_iter().flatten().filter_map(|p|p.as_str()).filter(|p|!p.is_empty()).collect();
+        if choice.enabled{
+            if volume["available"]==false||paths.is_empty(){return Err("A selected drive is unavailable. Refresh the drive list and try again.".into())}
+            if !next.iter().any(|folder|paths.iter().any(|path|drive_path_key(folder)==drive_path_key(path))){
+                let path=paths.iter().min_by_key(|path|path.len()).unwrap();
+                next.push((*path).to_owned());
+            }
+        }else{
+            next.retain(|folder|!paths.iter().any(|path|drive_path_key(folder)==drive_path_key(path)));
+        }
+    }
+    let changed=*folders!=next;*folders=next;Ok(changed)
+}
+#[cfg(test)]
+mod file_choice_tests{
+    use super::*;
+    use serde_json::json;
+    fn id()->String{r"\\?\Volume{00000000-0000-0000-0000-000000000001}\".into()}
+    fn volume()->serde_json::Value{json!({"id":id(),"paths":["C:\\"],"available":true})}
+    #[test]
+    fn whole_drive_selection_preserves_subfolders_and_deduplicates_roots(){
+        let mut folders=vec![r"C:\Users\Test\Documents".into(),r"D:\Music".into()];
+        assert!(apply_file_choices(&mut folders,&[volume()],&[FileChoice{volume_id:id(),enabled:true}]).unwrap());
+        assert_eq!(folders,vec![r"C:\Users\Test\Documents",r"D:\Music",r"C:\"]);
+        assert!(!apply_file_choices(&mut folders,&[volume()],&[FileChoice{volume_id:id(),enabled:true}]).unwrap());
+        folders[2]="c:/".into();
+        assert!(apply_file_choices(&mut folders,&[volume()],&[FileChoice{volume_id:id(),enabled:false}]).unwrap());
+        assert_eq!(folders,vec![r"C:\Users\Test\Documents",r"D:\Music"]);
+    }
+    #[test]
+    fn missing_or_invalid_drives_do_not_partially_change_selections(){
+        let mut folders=vec![r"D:\Music".into()];let before=folders.clone();
+        let choices=[FileChoice{volume_id:id(),enabled:true},FileChoice{volume_id:"missing".into(),enabled:true}];
+        assert!(apply_file_choices(&mut folders,&[volume()],&choices).is_err());
+        assert_eq!(folders,before);
+        assert!(apply_file_choices(&mut folders,&[],&choices[..1]).is_err());
+        assert_eq!(folders,before);
+        assert!(apply_file_choices(&mut folders,&[json!({"id":id(),"paths":["C:\\"],"available":false})],&choices[..1]).is_err());
+        assert_eq!(folders,before);
+    }
+}

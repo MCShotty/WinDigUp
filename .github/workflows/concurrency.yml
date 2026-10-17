@@ -89,4 +89,4 @@ jobs:
       - name: Bounded worker startup and response deadlines
         run: swift test --filter 'WorkerDeadlineTests'
       - name: Storage, prepared inference and long-file contracts with synthetic embedders
-        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|LongFilesTests'
+        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|LongFilesTests'

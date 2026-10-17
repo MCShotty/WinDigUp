@@ -1,9 +1,10 @@
 # Windows application search
 
-Press Ctrl+Shift+Space and type an application name. Ordinary searches put files first, with up to three applications
-in a compact **Apps** group. Smart placement can promote one unambiguous exact name or explicit alias; filename
-collisions, file-category queries and ambiguous names keep files first. Settings → Apps → **Apps in ordinary searches**
-also offers **Files first** and **Apps view only**. These preferences preserve application discovery and embeddings.
+Press Ctrl+Shift+Space and type an application name. Smart placement shows files, applications and Windows settings
+together in a compact **Best matches** section. Exact names and explicit aliases lead; ambiguous names and filename
+collisions remain selectable together. Remaining source sections follow their strongest match, while files retain
+their relevance order. Settings → Apps → **Apps in ordinary searches** also offers **Files first** and **Apps view only**.
+See [mixed-result ordering and drive choices](mixed-result-ordering.md).
 Enter or double-click launches the selected application. Use `apps: photoshop` to search only applications,
 or choose **Apps** in the larger window. `apps:` by itself lists the catalog alphabetically; Show All/Show More opens
 the remaining matches. Ctrl+8 selects the Apps filter. Existing file/code filter shortcuts retain their meanings.

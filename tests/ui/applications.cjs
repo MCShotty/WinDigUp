@@ -30,7 +30,7 @@ const {setup, photo, semantic} = require('./application-fixtures.cjs');
   await page.fill('#query','photo');
   await page.waitForSelector('.app-row');
   assert.match(await page.locator('.app-row').first().textContent(),/Photo Studio/);
-  assert.equal(await page.locator('.group-title').first().textContent(),'Apps');
+  assert.equal(await page.locator('.group-title').first().textContent(),'Best matches');
   await page.locator('.app-row').first().click();await page.press('#query','Enter');
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='launch_app'));
   assert.deepEqual(await page.evaluate(()=>window.calls.find(c=>c.command==='launch_app').args),{appId:photo.id});
@@ -40,8 +40,7 @@ const {setup, photo, semantic} = require('./application-fixtures.cjs');
   await page.evaluate(()=>{window.fileMode='ready';});
   await page.fill('#query','photo ');
   await page.waitForSelector('.row');
-  await page.press('#query','ArrowDown');
-  await page.press('#query','ArrowUp'); // Files are now first; return from the following app to the file.
+  await page.locator('.row').first().click();
   assert.match(await page.locator('.row.selected').textContent(),/photos.txt/);
   await page.waitForFunction(()=>document.querySelectorAll('.app-row').length===2);
   assert.match(await page.locator('.row.selected').textContent(),/photos.txt/);

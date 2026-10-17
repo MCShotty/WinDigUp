@@ -430,14 +430,15 @@ public final class Searcher {
         "صورة", "صور", "لقطة", "شاشة", "فيديو", "ملف", "مستند",
     ]
 
-    /// The content words of a query, normalized as keyword search keeps its text (`SearchText`). Kind words
-    /// ("screenshot", "video") and stopwords are dropped: they describe what to look for, not what's in it. Words of
-    /// two letters or more count; a Bengali letter with its vowel sign ("মা") is two.
+    /// Bare category names remain keywords; descriptive queries drop category words with other stopwords.
+    /// Two Unicode scalars count, including a Bengali letter with its vowel sign ("মা").
     public static func terms(_ text: String) -> [String] {
         var seen = Set<String>()
-        return SearchText.normalized(text).lowercased()
+        let words = SearchText.normalized(text).lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.unicodeScalars.count >= 2 && !stopwords.contains($0) && seen.insert($0).inserted }
+            .filter { $0.unicodeScalars.count >= 2 && seen.insert($0).inserted }
+        let content = words.filter { !stopwords.contains($0) }
+        return content.isEmpty ? words.filter { kindWord($0) != nil } : content
     }
 
     /// FTS5 patterns for the query's words: quoted, and as prefixes for the last word while it's being typed and for
@@ -476,14 +477,25 @@ public final class Searcher {
         "مقطع": .video, "صوت": .audio, "تسجيل": .audio, "اغنية": .audio,
     ]
 
-    /// Kinds the query asks for ("…in a video", "screenshot of…", "ভিডিওতে"): a soft boost, not a filter. Bengali
-    /// attaches case endings, so a Bengali kind word also counts at the start of a longer word.
+    private static func kindWord(_ word: String) -> FileKind? {
+        kindWords[word] ?? kindWords.first { key, _ in
+            SearchText.inflects(key) && key.unicodeScalars.count >= 3 && word.hasPrefix(key)
+        }?.value
+    }
+
+    /// A category hint requires a subject beyond the category or a settings/application action.
     public static func kindHints(_ text: String) -> Set<FileKind> {
-        Set(SearchText.normalized(text).lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .compactMap { word in
-                kindWords[word] ?? kindWords.first { key, _ in
-                    SearchText.inflects(key) && key.unicodeScalars.count >= 3 && word.hasPrefix(key)
-                }?.value
-            })
+        let words = SearchText.normalized(text).lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let actions: Set<String> = [
+            "app", "apps", "application", "applications", "settings", "setting", "options", "preferences",
+            "change", "configure", "configuration", "enable", "disable", "turn", "open", "launch",
+            "edit", "editor", "play", "player", "default", "manage", "adjust"
+        ]
+        let hasSubject = words.contains {
+            $0.unicodeScalars.count >= 2 && kindWord($0) == nil && !stopwords.contains($0) && !actions.contains($0)
+        }
+        guard hasSubject else { return [] }
+        return Set(words.compactMap { kindWord($0) })
     }
 }

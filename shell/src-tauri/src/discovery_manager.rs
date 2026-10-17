@@ -7,6 +7,7 @@ pub struct Manager {
     root:PathBuf,apps:Arc<Catalog>,options:RwLock<Options>,progress:RwLock<Value>,volumes:RwLock<Vec<Value>>,
     source_errors:RwLock<std::collections::BTreeMap<String,String>>,
     by_volume:RwLock<std::collections::BTreeMap<String,Value>>,
+    volume_catalog:RwLock<Value>,volume_refreshing:AtomicBool,volume_enumeration:Mutex<()>,
     #[cfg(windows)]metadata_gate:Arc<discovery::scheduler::Gate>,
     cancel:Mutex<Option<Arc<AtomicBool>>>,wake:AtomicBool,full:AtomicBool,running:AtomicBool,
     last_foreground:Mutex<Instant>,renewing:AtomicBool,
@@ -21,6 +22,7 @@ impl Manager {
         let phase=if !options.enabled{"disabled"}else if options.paused{"paused"}else{"waiting"};
         let manager=Arc::new(Self{configuring:Mutex::new(()),last_notification:Mutex::new(Instant::now()-Duration::from_secs(1)),root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
             source_errors:RwLock::new(std::collections::BTreeMap::new()),by_volume:RwLock::new(std::collections::BTreeMap::new()),
+            volume_catalog:RwLock::new(json!({"state":"unavailable","revision":0})),volume_refreshing:AtomicBool::new(false),volume_enumeration:Mutex::new(()),
             #[cfg(windows)]metadata_gate:discovery::scheduler::Gate::new(discovery::scheduler::Mode::Metadata),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
             running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
             renewing:AtomicBool::new(false),dirty_options:AtomicBool::new(true),failed:AtomicBool::new(false),
@@ -43,7 +45,41 @@ impl Manager {
     pub fn info(&self)->Value{
         json!({"version":2,"supported":cfg!(windows),"catalogEnabled":self.apps.enabled(),"options":self.options.read().unwrap().clone(),
             "progress":self.progress.read().unwrap().clone(),"byVolume":self.by_volume.read().unwrap().clone(),"volumes":self.volumes.read().unwrap().clone(),
-            "sourceErrors":self.source_errors.read().unwrap().clone(),"running":self.running.load(Ordering::SeqCst)})
+            "sourceErrors":self.source_errors.read().unwrap().clone(),"running":self.running.load(Ordering::SeqCst),
+            "volumeCatalog":self.volume_catalog.read().unwrap().clone()})
+    }
+    pub fn request_volumes(self:&Arc<Self>){
+        if self.volume_refreshing.swap(true,Ordering::SeqCst){return}
+        {let mut catalog=self.volume_catalog.write().unwrap();
+            let revision=catalog["revision"].as_u64().unwrap_or(0).saturating_add(1);
+            *catalog=json!({"state":"loading","revision":revision});}
+        (self.notify)(self.info());
+        let weak=Arc::downgrade(self);
+        std::thread::spawn(move||{
+            let Some(manager)=weak.upgrade()else{return};
+            manager.read_volumes();
+            manager.volume_refreshing.store(false,Ordering::SeqCst);
+        });
+    }
+    fn read_volumes(&self){
+        let _serial=self.volume_enumeration.lock().unwrap();
+        #[cfg(windows)]
+        let result=discovery::volume::checked_volumes().map(|rows|rows.into_iter().map(|v|serde_json::to_value(v).unwrap()).collect());
+        #[cfg(not(windows))]
+        let result=Err("Drive selection is available on Windows.".into());
+        self.publish_volume_result(result);
+    }
+    fn publish_volume_result(&self,result:Result<Vec<Value>,String>){
+        let captured=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+        let mut status=match result{
+            Ok(rows)=>{*self.volumes.write().unwrap()=rows;json!({"state":"ready","capturedAt":captured})},
+            Err(message)=>json!({"state":"failed","message":message,"capturedAt":captured}),
+        };
+        {let mut catalog=self.volume_catalog.write().unwrap();
+            status["revision"]=json!(catalog["revision"].as_u64().unwrap_or(0).saturating_add(1));
+            *catalog=status;
+        }
+        (self.notify)(self.info());
     }
     fn update(&self,mut value:Value){
         let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
@@ -92,12 +128,9 @@ impl Manager {
         }
     }
     pub fn start(self:&Arc<Self>){
+        self.request_volumes();
         let weak=Arc::downgrade(self);
         std::thread::spawn(move||{
-            #[cfg(windows)]if let Some(manager)=weak.upgrade(){
-                *manager.volumes.write().unwrap()=discovery::volume::volumes().into_iter().map(|v|serde_json::to_value(v).unwrap()).collect();
-                (manager.notify)(manager.info());
-            }
             let mut last=Instant::now();
             loop{
                 std::thread::sleep(Duration::from_millis(250));
@@ -114,7 +147,7 @@ impl Manager {
                 if !requested&&(manager.failed.load(Ordering::SeqCst)||last.elapsed()<Duration::from_secs(15)){continue}
                 let full=manager.full.swap(false,Ordering::SeqCst);last=Instant::now();
                 #[cfg(windows)]{
-                    *manager.volumes.write().unwrap()=discovery::volume::volumes().into_iter().map(|v|serde_json::to_value(v).unwrap()).collect();
+                    manager.read_volumes();
                     let cancel=Arc::new(AtomicBool::new(false));*manager.cancel.lock().unwrap()=Some(cancel.clone());
                     manager.running.store(true,Ordering::SeqCst);manager.apps.discovery_running(true);
                     manager.install_watcher(&options);
@@ -518,4 +551,27 @@ enum ScanEvent{Progress(String,Value),Candidate(String,Candidate),Complete(Strin
 struct Pass{
     revision:String,seen:u64,finished:u64,complete:Option<Value>,error:Option<String>,pending:Vec<Candidate>,
     timings:discovery::metrics::Timings,topology:discovery::scheduler::Topology,_lease:discovery::scheduler::Lease,
+}
+
+#[cfg(test)]
+mod volume_catalog_tests{
+    use super::*;
+    #[test]
+    fn disabled_discovery_keeps_drive_choices_and_retains_inventory_after_failure(){
+        let root=std::env::temp_dir().join(format!("digup-drive-choices-{}",std::process::id()));
+        let apps=Catalog::new(root.clone(),applications::Options::default(),|_|{});
+        let options=Options{enabled:false,volumes:vec!["saved-drive".into()],..Options::default()};
+        let manager=Manager::new(root,options,apps,|_|{});
+        manager.publish_volume_result(Ok(vec![json!({"id":"mounted","paths":["C:\\\\"]})]));
+        let before=manager.info();
+        assert_eq!(before["volumeCatalog"]["state"],"ready");
+        assert_eq!(before["options"]["enabled"],false);
+        manager.publish_volume_result(Err("Windows inventory failed".into()));
+        let after=manager.info();
+        assert_eq!(after["volumes"],before["volumes"]);
+        assert_eq!(after["options"],before["options"]);
+        assert_eq!(after["volumeCatalog"]["state"],"failed");
+        assert!(after["volumeCatalog"]["revision"].as_u64().unwrap()>before["volumeCatalog"]["revision"].as_u64().unwrap());
+        assert_eq!(after["running"],false);
+    }
 }

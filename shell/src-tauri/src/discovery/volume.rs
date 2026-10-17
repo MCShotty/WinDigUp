@@ -40,12 +40,13 @@ impl FileInfo {
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct VolumeInfo {pub id:String,pub name:String,pub paths:Vec<String>,pub filesystem:String,pub fixed:bool,pub available:bool,#[serde(default)]pub topology:super::scheduler::Topology}
-pub fn volumes()->Vec<VolumeInfo>{
+pub fn volumes()->Vec<VolumeInfo>{checked_volumes().unwrap_or_default()}
+pub fn checked_volumes()->Result<Vec<VolumeInfo>,String>{
     struct ErrorMode(u32,bool);impl Drop for ErrorMode{fn drop(&mut self){if self.1{unsafe{SetThreadErrorMode(self.0,std::ptr::null_mut());}}}}
     let mut old_mode=0;let changed=unsafe{SetThreadErrorMode(0x8001,&mut old_mode)}!=0;let _mode=ErrorMode(old_mode,changed);
     let mut results=vec![];let mut name=vec![0u16;1024];
     let handle=unsafe{FindFirstVolumeW(name.as_mut_ptr(),name.len()as u32)};
-    if handle==INVALID{return results}
+    if handle==INVALID{return Err(format!("Windows could not enumerate drives: {}",error()))}
     loop {
         let id=String::from_utf16_lossy(&name[..name.iter().position(|c|*c==0).unwrap_or(name.len())]);
         if valid_volume(&id) {
@@ -58,9 +59,16 @@ pub fn volumes()->Vec<VolumeInfo>{
             let fixed=unsafe{GetDriveTypeW(wide(&id).as_ptr())}==3;
             if !paths.is_empty(){results.push(VolumeInfo{id:id.clone(),name:text(&label),paths,filesystem:text(&fs),fixed,available,topology:topology(&id)});}
         }
-        name.fill(0);if unsafe{FindNextVolumeW(handle,name.as_mut_ptr(),name.len()as u32)}==0{break}
+        name.fill(0);if unsafe{FindNextVolumeW(handle,name.as_mut_ptr(),name.len()as u32)}==0{
+            let error=std::io::Error::last_os_error();
+            if error.raw_os_error()!=Some(18){
+                unsafe{FindVolumeClose(handle)};
+                return Err(format!("Windows drive enumeration was interrupted: {error}"))
+            }
+            break
+        }
     }
-    unsafe{FindVolumeClose(handle)};results.sort_by(|a,b|a.paths.cmp(&b.paths));results
+    unsafe{FindVolumeClose(handle)};results.sort_by(|a,b|a.paths.cmp(&b.paths));Ok(results)
 }
 #[repr(C)]struct FileIdDescriptor {size:u32,kind:u32,id:[u64;2]}
 #[repr(C)]struct EnumData {start:u64,low:i64,high:i64}
@@ -279,4 +287,16 @@ pub fn topology(id:&str)->super::scheduler::Topology {
         }
     }
     Topology{known:true,disks,media}
+}
+
+#[cfg(test)]
+mod inventory_tests{
+    use super::*;
+    #[test]
+    fn mounted_system_drive_is_selectable_without_fast_discovery(){
+        let rows=checked_volumes().expect("Windows must report the hosted system volume");
+        let system=std::env::var("SystemDrive").unwrap_or_else(|_|"C:".into()).to_lowercase();
+        assert!(rows.iter().any(|v|v.paths.iter().any(|p|p.to_lowercase().starts_with(&system))));
+        assert!(rows.iter().all(|v|valid_volume(&v.id)&&!v.paths.is_empty()));
+    }
 }

@@ -35,7 +35,8 @@ const activityView = new ActivityUI.View($("settings-activity"), { onSettings: t
 // MARK: Tabs
 
 function showTab(name) {
-  if (!["activity", "general", "folders", "code", "apps", "storage"].includes(name)) name = "general";
+  if (!["activity", "general", "folders", "code", "apps", "drives", "storage"].includes(name)) name = "general";
+  if (name === "drives" && !info.discovery?.supported) name = "general";
   if (name === "activity") activityView.show(); else activityView.hide();
   for (const button of document.querySelectorAll("#tabs button")) {
     button.setAttribute("aria-selected", String(button.dataset.tab === name));
@@ -44,9 +45,12 @@ function showTab(name) {
   if (name === "folders") loadSummaries();
   if (name === "code") loadCodeSummaries();
   if (name === "apps") { loadApplicationSettings(); DiscoverySettings.render(); }
+  if (name === "drives") { DiscoverySettings.render(); DiscoverySettings.refreshVolumes(); DiscoverySettings.candidates(); }
 }
 
 for (const button of document.querySelectorAll("#tabs button")) button.onclick = () => showTab(button.dataset.tab);
+$("open-drives").onclick = $("folders-drives").onclick = () => showTab("drives");
+$("drive-file-settings").onclick = () => showTab("folders");
 
 // MARK: General
 
@@ -587,7 +591,11 @@ function fail(error) {
 // MARK: Start
 
 async function refresh() {
-  info = await invoke("settings_info");
+  const fresh = await invoke("settings_info"), previousDiscovery = info.discovery;
+  info = fresh;
+  if (previousDiscovery && fresh.discovery) {
+    info.discovery = previousDiscovery; DiscoverySettings.accept("discovery", fresh.discovery);
+  }
   renderGeneral();
   renderStatus();
   renderFolders();

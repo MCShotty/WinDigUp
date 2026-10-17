@@ -1,8 +1,4 @@
-// The search panel of DigUp's Windows and Linux shell (tried out on the Mac first). Every keystroke shows keyword
-// results at once (the last word as a prefix); once typing pauses for 120 ms the meaning results replace them (the
-// query was embedded while you typed). Results far weaker than the best are folded under "N weaker matches". The
-// helper (`digup search-service`) does the work; the Mac app's panel (Sources/DigUpApp/SearchPanel.swift) is the
-// reference for how it behaves. results.js has what a result says.
+// File and native launcher providers refine these rows independently. Visual and keyboard order share one plan.
 "use strict";
 
 const TYPING_PAUSE = 120;          // ms after the last keystroke until the meaning results show
@@ -46,7 +42,7 @@ const state = {
 let debugPending = false;
 const applicationSearch = new ApplicationSearch((statusOnly=false) => {
   const ids = rowIDs();
-  if (!state.navigated) state.selection = !state.isApps && !state.isSettings&&!state.lexicalReady&&!state.error?null:ids[0]??null;
+  if (!state.navigated) state.selection = ids[0] ?? null;
   else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
   if(statusOnly){renderFooter();return;}
   render();
@@ -121,15 +117,8 @@ function show(reply, text, phase) {
   state.phase = phase;
   state.strong = hits.slice(0, strong);
   state.weaker = hits.slice(strong);
-  // Grouped by kind, the best hit's group first; code is one group with the room of all of them.
-  const groups = new Map();
-  for (const hit of state.strong) {
-    const title = GROUP_OF[hit.kind] || "Files";
-    if (!groups.has(title)) groups.set(title, []);
-    groups.get(title).push(hit);
-  }
-  const perGroup = state.isCode ? ROWS_PER_GROUP * 3 : ROWS_PER_GROUP;
-  state.groups = [...groups].map(([title, rows]) => ({ title, rows: rows.slice(0, perGroup), total: rows.length }));
+  const visible = state.strong.slice(0, ROWS_PER_GROUP * 3);
+  state.groups = visible.length ? [{title: state.isCode ? "Code" : "Files", rows: visible, total: state.strong.length}] : [];
   if (!state.navigated) state.showWeaker = false;
   // Follow the top hit until you pick something with the arrow keys.
   const ids = rowIDs();
@@ -146,22 +135,33 @@ function failed(error) {
 
 const settingsSearch=new WindowsSettingsSearch((statusOnly=false)=>{
   const ids=rowIDs();
-  if(!state.navigated)state.selection=(!state.isSettings&&!state.lexicalReady&&!state.error)?null:ids[0]??null;
+  if(!state.navigated)state.selection = ids[0] ?? null;
   else if(!ids.includes(state.selection)){state.selection=null;state.chosen=null;}
   if(statusOnly)renderFooter();else render();
 });
-function appPlacement(){return Apps.placement(applicationSearch.hits,state.fileWords||[],{appsOnly:state.isApps,text:state.text,
-  lexicalReady:state.lexicalReady,categoryQuery:state.categoryQuery,exactFilenameKnown:state.exactFilenameKnown,exactFilename:state.exactFilename});}
+function resultLayout() {
+  return MixedResults.compose({
+    text: state.text, mode: state.isApps ? "apps" : state.isSettings ? "settings" : state.isCode || !Apps.supported ? "files" : "all",
+    files: [...state.groups.flatMap(group => group.rows),
+      ...state.weaker.filter(hit => !state.isApps && !state.isSettings && !state.isCode && MixedResults.tier(hit, state.text) <= 1)], apps: applicationSearch.active ? applicationSearch.hits : [],
+    settings: settingsSearch.visible(), preference: Apps.mixedSearch, includeEmptyFiles: state.weaker.length > 0,
+  });
+}
 function rowIDs() {
-  const app=appPlacement();
-  return [
-    ...app.before.map(resultKey),
-    ...state.groups.flatMap((group) => group.rows.map(resultKey)),
-    ...(state.weaker.length ? [WEAKER] : []),
-    ...(state.showWeaker ? state.weaker.map(resultKey) : []),
-    ...app.after.map(resultKey),
-    ...settingsSearch.visible().map(resultKey),
-  ];
+  const layout = resultLayout(), ids = layout.best.map(resultKey);
+  for (const section of layout.sections) {
+    ids.push(...section.hits.map(resultKey));
+    if (section.source === "files" && weakerFiles(layout).length) {
+      ids.push(WEAKER);
+      if (state.showWeaker) ids.push(...weakerFiles(layout).map(resultKey));
+    }
+  }
+  return ids;
+}
+
+function weakerFiles(layout = resultLayout()) {
+  const shown = new Set(layout.rows.map(resultKey));
+  return state.weaker.filter(hit => !shown.has(resultKey(hit)));
 }
 
 function selectedHit() {
@@ -239,62 +239,62 @@ function render() {
 }
 
 function renderList() {
+  const scroll = $list.scrollTop, layout = resultLayout(), weaker = weakerFiles(layout);
   $list.replaceChildren();
-  const nothing = !state.strong.length && !state.weaker.length && !applicationSearch.hits.length && !settingsSearch.visible().length;
-  $list.hidden = nothing;
-  if (nothing) return;
-  const app=appPlacement();
-  const appSection=(hits,title)=>{
-    const section=element("section","panel-app-group");section.dataset.appGroup=title;
-    if(!hits.length)return section;
-    section.append(element("div","group-title",title));
-    for(const hit of hits)section.append(Apps.row(hit,state.selection===resultKey(hit),key=>{
-      state.selection=key;state.chosen=rawSelectedHit();state.navigated=true;render();
-    },hit=>openResult(hit).catch(failed)));
-    return section;
+  $list.hidden = !layout.rows.length && !state.weaker.length;
+  if ($list.hidden) return;
+  const appendHits = (hits, title, best = false) => {
+    const section = element("section", "panel-result-group" + (best ? " best-matches" : ""));
+    section.setAttribute("role", "group"); section.setAttribute("aria-label", title);
+    section.append(element("div", "group-title", title));
+    for (const hit of hits) section.append(isLauncher(hit) ? Apps.row(hit, state.selection === resultKey(hit), key => {
+      state.selection = key; state.chosen = rawSelectedHit(); state.navigated = true; render();
+    }, hit => openResult(hit).catch(failed)) : row(hit));
+    $list.append(section); return section;
   };
-  $list.append(appSection(app.before,state.isApps?"Apps":"Best match · App"));
-  for (const group of state.groups) {
-    $list.append(element("div", "group-title", group.title));
-    for (const hit of group.rows) $list.append(row(hit));
-    // More of this kind than the panel has room for: all of them in the window.
-    if (group.total > group.rows.length && FILTER_OF[group.title]) {
-      const more = element("div", "more", `Show all ${group.total} ${group.title.toLowerCase()}…`);
-      more.title = `Open them in the DigUp window (${MOD}O shows everything)`;
-      more.onclick = () => openInWindow(FILTER_OF[group.title]);
-      $list.append(more);
+  if (layout.best.length) appendHits(layout.best, "Best matches", true);
+  for (const section of layout.sections) {
+    const title = section.source === "apps" ? "Apps" : section.source === "settings" ? "Windows settings" : state.isCode ? "Code" : "Files";
+    const node = appendHits(section.hits, title);
+    if (section.source === "files") {
+      if (state.strong.length > state.groups.flatMap(group => group.rows).length) {
+        const more = element("button", "app-more", "Show all matching files");
+        more.onclick = () => openInWindow(); node.append(more);
+      }
+      if (weaker.length) {
+        const fold = element("div", "weaker" + (state.showWeaker ? " open" : "") + (state.selection === WEAKER ? " selected" : ""));
+        fold.setAttribute("role", "option"); fold.setAttribute("aria-selected", String(state.selection === WEAKER));
+        fold.innerHTML = ICONS.chevron;
+        fold.append(state.showWeaker ? "Weaker matches" : weaker.length + " weaker matches");
+        fold.onclick = toggleWeaker; node.append(fold);
+        if (state.showWeaker) for (const hit of weaker) node.append(row(hit));
+      }
     }
   }
-  if (state.weaker.length) {
-    const fold = element("div", "weaker" + (state.showWeaker ? " open" : "") + (state.selection === WEAKER ? " selected" : ""));
-    fold.innerHTML = ICONS.chevron;
-    const count = state.weaker.length;
-    fold.append(state.showWeaker ? "Weaker matches" : `${count} weaker ${count === 1 ? "match" : "matches"}`);
-    fold.onclick = toggleWeaker;
-    $list.append(fold);
-    if (state.showWeaker) for (const hit of state.weaker) $list.append(row(hit));
+  if (applicationSearch.active && applicationSearch.total > layout.rows.filter(isApp).length) {
+    const more = element("button", "app-more", "Show all " + applicationSearch.total + " matching apps…");
+    more.onclick = () => openInWindow("apps"); $list.append(more);
   }
-  $list.append(appSection(app.after,"Apps"));
-  if(applicationSearch.total>app.before.length+app.after.length){
-    const more=element("button","app-more",`Show all ${applicationSearch.total} matching apps…`);
-    more.onclick=()=>openInWindow("apps");$list.append(more);
+  if (settingsSearch.active && settingsSearch.total > layout.rows.filter(isSetting).length) {
+    const more = element("button", "app-more", "Show all matching Windows settings");
+    more.onclick = () => openInWindow("settings"); $list.append(more);
   }
-  if(settingsSearch.visible().length){
-    $list.append(element("div","group-title","Windows settings"));
-    for(const hit of settingsSearch.visible())$list.append(Apps.row(hit,state.selection===resultKey(hit),key=>{
-      state.selection=key;state.chosen=rawSelectedHit();state.navigated=true;render();
-    },hit=>openResult(hit).catch(failed)));
-  }
-  if(settingsSearch.total>settingsSearch.visible().length){
-    const more=element("button","app-more","Show all matching Windows settings");
-    more.onclick=()=>openInWindow("settings");$list.append(more);
-  }
-  $list.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  $list.scrollTop = scroll;
+  if (state.navigated) $list.querySelector(".selected")?.scrollIntoView({block: "nearest"});
 }
 
+const fileRows = new Map();
 function row(hit) {
+  const key = resultKey(hit), signature = JSON.stringify(hit), previous = fileRows.get(key);
+  if (previous?.signature === signature) {
+    previous.node.classList.toggle("selected", state.selection === key);
+    previous.node.setAttribute("aria-selected", String(state.selection === key));
+    return previous.node;
+  }
   const item = element("div", "row" + (state.selection === resultKey(hit) ? " selected" : ""));
-  item.setAttribute("role", "option");
+  item.setAttribute("role", "option"); item.setAttribute("aria-selected", String(state.selection === key));
+  item.dataset.resultKey = key;
+  item.setAttribute("aria-label", (KIND_TITLE[hit.kind] || "File") + ", " + nameOf(hit.path));
   item.append(thumbnail(hit));
   const text = element("div", "row-text");
   const title = element("div", "row-title");
@@ -314,6 +314,8 @@ function row(hit) {
     render();
   };
   item.ondblclick = openSelected;
+  fileRows.set(key, {signature, node: item});
+  if (fileRows.size > 100) fileRows.delete(fileRows.keys().next().value);
   return item;
 }
 
@@ -456,7 +458,7 @@ function facts(hit) {
 }
 
 function renderFooter() {
-  const strong = state.strong.length, weaker = state.weaker.length;
+  const weaker = weakerFiles().length, strong = state.strong.length + state.weaker.length - weaker;
   let summary;
   if (state.error) summary = `DigUp: ${state.error}`;
   else if(state.isSettings)summary=settingsSearch.status();
@@ -468,6 +470,15 @@ function renderFooter() {
   // Results while indexing (or before the model is in) may be missing some: that, where they're counted.
   else if (state.caveat && !state.isCode) summary = state.caveat;
   else summary = `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : "");
+  if(!state.isApps&&!state.isSettings&&!state.isCode){
+    const native=[];
+    if(applicationSearch.active&&applicationSearch.total)native.push(applicationSearch.total+" "+(applicationSearch.total===1?"app":"apps"));
+    if(settingsSearch.active&&settingsSearch.total)native.push(settingsSearch.total+" Windows "+(settingsSearch.total===1?"setting":"settings"));
+    if(native.length){
+      const files=resultLayout().rows.filter(hit=>!isLauncher(hit)).length;
+      summary=(state.error?summary+" · ":"")+native.join(" · ")+" · "+(state.lexicalReady?files+" file "+(files===1?"match":"matches")+" shown":"Files pending");
+    }
+  }
   $summary.textContent = summary;
   $keys.textContent = isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
 }

@@ -16,19 +16,6 @@ const Apps = {
     this.mixedSearch=catalog.mixedSearch||this.mixedSearch;
   },
   normalized(text) { return text.normalize("NFKD").replace(/\p{M}/gu,"").toLowerCase().replace(/ß/g,"ss").trim(); },
-  placement(hits, files, {appsOnly=false, lexicalReady=false, text="", categoryQuery=false,exactFilenameKnown=true,exactFilename=false}={}) {
-    if(appsOnly)return {before:hits,after:[],best:false};
-    if(!this.enabled||this.mixedSearch==="apps-only")return {before:[],after:[],best:false};
-    const visible=hits.slice(0,3),exact=hits.filter(hit=>hit.reason==="exact"),q=this.normalized(text);
-    const category=categoryQuery||new Set(["photo","photos","images","image","pictures","videos","video","documents","document","pdf","audio","screenshots","files","code"]).has(q);
-    const collision=exactFilename||files.some(hit=>{
-      const name=this.normalized(String(hit.path||"").split(/[\\/]/).pop());
-      return name===q||name.replace(/\.[^.]+$/,"")===q;
-    });
-    if(this.mixedSearch==="smart"&&lexicalReady&&exactFilenameKnown&&!category&&!collision&&exact.length===1)
-      return {before:[exact[0]],after:visible.filter(hit=>hit.id!==exact[0].id),best:true};
-    return {before:[],after:visible,best:false};
-  },
   iconCache: new Map(),
   observedIcons: new Set(),
   launching: new Set(),
