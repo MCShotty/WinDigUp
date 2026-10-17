@@ -6,9 +6,14 @@ use crate::hours::Hours;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+#[derive(Clone,Debug,Default,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="snake_case")]
+pub enum Appearance { #[default] System, Light, Dark }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    pub appearance: Appearance,
     pub applications: crate::applications::Options,
     pub windows_settings: crate::system_settings::Options,
     pub discovery: crate::discovery::Options,

@@ -39,7 +39,7 @@ impl Diagnostics {
                     if value["phase"]=="limited"{runtime["inferenceCapacity"]=value.clone();}
                 }
             }
-            if event["fatal"]==true || matches!(event["event"].as_str(),Some("exit"|"stopped")) ||
+            if event["fatal"]==true || matches!(event["event"].as_str(),Some("exit"|"stopped"|"ended")) ||
                 event["event"]=="encoder" && matches!(event["state"].as_str(),Some("stopped"|"unavailable")){
                 if let Some(jobs)=runtime["inferenceJobs"].as_object_mut(){
                     for value in jobs.values_mut().filter(|v|v["source"]==source){value["phase"]=json!("stopped");value["activeJobs"]=Value::Null;}
@@ -73,6 +73,7 @@ impl Diagnostics {
                 }
             }
         }
+        if event["event"]=="inference_activity" && event["activity"]["phase"]!="limited"{return}
         let entry = json!({"time": time, "source": source, "event": event});
         if important {
             let mut significant=self.significant.lock().unwrap();
