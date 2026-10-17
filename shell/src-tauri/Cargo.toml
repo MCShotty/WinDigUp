@@ -49,7 +49,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects",
                                               "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_SystemInformation",
                                               "Win32_UI_Shell", "Win32_System_DataExchange", "Win32_System_Memory",
-                                              "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
+                                              "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
 
 # GNOME's shortcut settings, `--toggle` handed to the running DigUp, and the panel's window on Wayland (all already in
 # Tauri's build on Linux).

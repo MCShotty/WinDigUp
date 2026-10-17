@@ -41,3 +41,35 @@ The difference between compact search rows, explanatory drive rows, and collapse
 | Larger targets on narrow/coarse-pointer layouts | Keep source actions usable when space or pointing precision is limited |
 
 No new illustration, logo, decorative icon set, or marketing content is introduced.
+
+
+## Floating search panel
+
+The supplied floating capsule is the visual reference for Ctrl+Shift+Space. Its neutral desktop material,
+rounded ends, thin edge and circular action distinguish quick search from the larger search workspace.
+
+The empty panel is 640 by 64 logical pixels where the work area permits. It expands downward around a
+single full-width result list. Its top anchor stays fixed, and its height is limited by the work area.
+A file preview or application details view opens deliberately in the same window. The compact panel
+does not reserve a second column or prepare a full preview merely because a row is selected.
+
+Use one native material surface. Windows Acrylic is requested through the already-pinned
+window-vibrancy runtime; native application success determines the material receipt. Respect Windows
+transparency, contrast and Remote Desktop restrictions. The Solid preference and unsupported desktops
+use an opaque neutral surface. The result list and footer remain opaque to protect reading contrast.
+
+The circular button opens full search and retains the query, compatible scope and selected result ID.
+It has a visible focus state, a tooltip and an accessible name. The input uses the existing Segoe UI
+system stack rather than the reference's command-oriented monospace. The desktop supplies background
+colour; DigUp does not capture wallpaper or add an image behind the launcher.
+
+Purpose notes:
+- The capsule shape identifies the quick-search entry point.
+- Native material places one transient launcher over the desktop; it does not decorate every row.
+- Moss selection and a full outline identify exactly what Enter activates.
+- A compact footer keeps primary actions reachable and sends failures to Activity.
+- Shared field, control and spacing tokens connect the panel, full search and Settings.
+
+Dials remain ENERGY 1 / RHYTHM 2 / MOTION 1. Reduced motion removes transitions. System, Light and Dark
+remain independent of Automatic/Solid material. No new illustration, branding asset or navigation
+hierarchy is introduced.

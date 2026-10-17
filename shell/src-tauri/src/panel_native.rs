@@ -62,9 +62,9 @@ mod windows {
         Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
         Graphics::Dwm::DwmIsCompositionEnabled,
         System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
-        UI::WindowsAndMessaging::{
-            GetSystemMetrics, SystemParametersInfoW, HIGHCONTRASTW, HCF_HIGHCONTRASTON,
-            SM_REMOTESESSION, SPI_GETHIGHCONTRAST,
+        UI::{
+            Accessibility::{HIGHCONTRASTW, HCF_HIGHCONTRASTON},
+            WindowsAndMessaging::{GetSystemMetrics, SystemParametersInfoW, SM_REMOTESESSION, SPI_GETHIGHCONTRAST},
         },
     };
 

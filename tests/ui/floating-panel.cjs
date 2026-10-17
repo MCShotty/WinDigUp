@@ -170,6 +170,10 @@ let browser;
     await page.evaluate(()=>window.emit("applications-progress",{state:"preparing",encoder:"starting",embedded:1,total:150}));
     await page.press("#query","Enter");
     assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.command==="launch_app").at(-1).args.appId),chosen);
+    await page.fill("#query","notes"); await page.waitForSelector("#list .row");
+    await page.waitForTimeout(80);
+    assert.ok(await page.locator("#panel").evaluate(node=>node.getBoundingClientRect().height<480),
+      "A new short query did not shrink a previously long list");
     for (const theme of ["light","dark"]) for (const width of [320,440,640]) {
       await page.setViewportSize({width,height:720});
       await page.evaluate(theme=>AppearanceUI.apply(theme),theme);
@@ -186,6 +190,13 @@ let browser;
     assert.equal(await page.locator("#panel").evaluate(node=>getComputedStyle(node).backgroundColor),
       await page.evaluate(()=>{const node=document.createElement("div");node.style.background="Canvas";document.body.append(node);
         const value=getComputedStyle(node).backgroundColor;node.remove();return value;}));
+    const selectedContrast = await page.locator("#list .row.selected").evaluate(node => ({
+      background:getComputedStyle(node).backgroundColor,color:getComputedStyle(node.querySelector(".row-title")).color}));
+    const systemContrast = await page.evaluate(() => {
+      const node=document.createElement("div");node.style.cssText="background:Highlight;color:HighlightText";document.body.append(node);
+      const value={background:getComputedStyle(node).backgroundColor,color:getComputedStyle(node).color};node.remove();return value;
+    });
+    assert.deepEqual(selectedContrast,systemContrast,"Forced-colour selection must retain contrasting system text");
     await capture(page,"panel-contrast","#panel");
     await page.emulateMedia({forcedColors:"none",reducedMotion:"no-preference"});
     await page.close();

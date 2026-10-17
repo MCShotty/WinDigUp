@@ -67,6 +67,8 @@ main.settings input.field, main.settings select.field { min-height: 36px; max-wi
 }
 @media (forced-colors: active) {
   :root { --selection-edge: Highlight; --selection-bg: Canvas; --accent: Highlight; }
-  .cell.selected, .row.selected, .app-row.selected { outline: 2px solid Highlight; }
+  .panel .row.selected, .panel .app-row.selected, .panel .weaker.selected,
+  .cell.selected, .row.selected, .app-row.selected { outline: 2px solid Highlight; background: Highlight; color: HighlightText; }
+  .cell.selected *, .row.selected *, .app-row.selected * { color: HighlightText; }
   button { border-color: ButtonText; }
 }

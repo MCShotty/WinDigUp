@@ -19,6 +19,9 @@ const $footer = $("footer"), $summary = $("summary"), $keys = $("keys"), $activi
 const $moreResults = $("more-results"), $results = $("results"), $primary = $("primary-action"), $details = $("details-action");
 const panelConfig = {maxHeight: PANEL_HEIGHT, nativeSized: false};
 let layoutFrame = null, announceTimer = null, lastAnnouncement = "", statusTimer = null;
+if (!Apps.supported) { $query.placeholder = "Search files and code"; $query.setAttribute("aria-label", "Search files and code"); }
+$("expand-search").title = "Open full search (" + MOD + "+O)";
+$("expand-search").setAttribute("aria-keyshortcuts", isMac ? "Meta+O" : "Control+O");
 
 const state = {
   generation: 0,
@@ -238,8 +241,11 @@ function scheduleFit() {
   layoutFrame = requestAnimationFrame(() => {
     layoutFrame = null;
     const empty = state.phase === "empty", count = rowIDs().length;
+    const listStyle = getComputedStyle($list);
+    const listContent = [...$list.children].reduce((sum, section) => sum + section.getBoundingClientRect().height, 0)
+      + parseFloat(listStyle.paddingTop) + parseFloat(listStyle.paddingBottom);
     const measured = FIELD_HEIGHT + $footer.getBoundingClientRect().height
-      + (count ? $list.scrollHeight + $moreResults.getBoundingClientRect().height : 104);
+      + (count ? listContent + $moreResults.getBoundingClientRect().height + 1 : 104);
     let height = empty ? FIELD_HEIGHT : !$big.hidden ? BIG_HEIGHT : measured;
     // Keep a list steady while replies refine it; a new query can choose a new height.
     if (!empty && $big.hidden && count) {

@@ -271,6 +271,7 @@ function render() {
 }
 
 function renderBar() {
+  if (!Apps.supported) { $query.placeholder = "Search files and code"; $query.setAttribute("aria-label", "Search files and code"); }
   const code = isCode();
   $("glass").innerHTML = code ? ICONS.code : SEARCH_ICON;
   document.body.classList.toggle("apps-mode", isAppsMode());
