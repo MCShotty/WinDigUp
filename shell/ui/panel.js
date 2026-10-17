@@ -462,7 +462,7 @@ function facts(hit) {
 }
 
 function renderFooter() {
-  const strong = state.strong.length, weaker = state.weaker.length;
+  const weaker = weakerFiles().length, strong = state.strong.length + state.weaker.length - weaker;
   let summary;
   if (state.error) summary = `DigUp: ${state.error}`;
   else if(state.isSettings)summary=settingsSearch.status();

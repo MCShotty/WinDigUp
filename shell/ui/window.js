@@ -1141,10 +1141,13 @@ function renderStatus() {
   else if(isSettingsMode())count=settingsSearch.status();
   else if (isAppsMode()) count = applicationSearch.status();
   else if (state.hasResults && state.query.trim()) {
-    const strong = state.ranked.length, weaker = state.weaker.length;
+    const weaker = weakerFiles().length, strong = state.ranked.length + state.weaker.length - weaker;
     count = app.caveat || (!state.meaning ? "Words only: meaning search isn't available"
       : `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : ""));
-    if (applicationSearch.hits.length) count = `${applicationSearch.total} ${applicationSearch.total===1?"app":"apps"} · ${strong} file ${strong === 1 ? "result" : "results"}`;
+    const providers=[];
+    if(applicationSearch.active&&applicationSearch.total)providers.push(applicationSearch.total+" "+(applicationSearch.total===1?"app":"apps"));
+    if(settingsSearch.active&&settingsSearch.total)providers.push(settingsSearch.total+" Windows "+(settingsSearch.total===1?"setting":"settings"));
+    if(providers.length)count=providers.join(" · ")+" · "+strong+" file "+(strong===1?"match":"matches")+(weaker?" · "+weaker+" weaker":"");
   }
   $("count").textContent = count;
   renderUpdate(app.update);
