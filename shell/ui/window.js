@@ -128,13 +128,15 @@ function hasQuery() { return Boolean(state.query.trim()) || isAppsMode() || isSe
 
 function run() {
   const generation = ++state.generation;
+  state.handoff = state.nextSelection ? {key: state.nextSelection, generation} : null;
+  state.nextSelection = null;
   SearchTiming.begin(generation);
   state.exactFilenameKnown=false;state.exactFilename=false;
   state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;state.finalGeneration=-1;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
-  state.navigated = false;
+  state.navigated = Boolean(state.handoff);
   state.chosen = null;
   state.error = null;
   state.fileError = null;
@@ -305,7 +307,14 @@ function chip(title, icon, count, selected, action, number) {
   return button;
 }
 
+function restoreHandoff() {
+  const pending = state.handoff;
+  if (!pending || pending.generation !== state.generation) return;
+  const hit = rows().find(hit => resultKey(hit) === pending.key);
+  if (hit) { state.selection = pending.key; state.chosen = hit; state.navigated = true; state.handoff = null; }
+}
 function renderContent() {
+  restoreHandoff();
   const focused = document.activeElement;
   const focusedLaunch = focused.closest?.(".app-row")?.dataset.resultKey;
   const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
@@ -606,6 +615,7 @@ function wire(item, hit) {
 }
 
 function select(path) {
+  state.handoff = null;
   state.selection = path;
   state.chosen = rows().find(hit=>resultKey(hit)===path)??null;
   state.navigated = true;
@@ -1374,6 +1384,7 @@ tauri.event.listen("helper",({payload})=>{
 
 // The panel handed its search over (Ctrl+O, "Show all…"): this window was already open.
 tauri.event.listen("window-search", ({ payload }) => {
+  state.nextSelection = payload.selected || null;
   state.filter = payload.kind || null;
   setQuery(payload.query || "");
   $query.focus();
@@ -1421,6 +1432,7 @@ async function start() {
   WindowsSettings.configure(info.windowsSettings);
   state.app = info.state || {};
   if (info.search) {
+    state.nextSelection = info.search.selected || null;
     state.filter = info.search.kind || null;
     $query.value = info.search.query || "";
     state.query = $query.value;

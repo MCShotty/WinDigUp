@@ -3,9 +3,9 @@
 
 const TYPING_PAUSE = 120;          // ms after the last keystroke until the meaning results show
 const ROWS_PER_GROUP = 6;
-const FIELD_HEIGHT = 56;
-const PANEL_HEIGHT = 480;
-const BIG_HEIGHT = 640;   // the panel at its tallest, for the big preview
+const FIELD_HEIGHT = 64;
+const PANEL_HEIGHT = 640;
+const BIG_HEIGHT = 560;   // the panel at its tallest, for the big preview
 const WEAKER = "\u0000weaker";     // the selectable row that folds and unfolds the weaker matches
 // Wayland: the window fills the screen and this page places the panel (the shell's wayland.rs).
 const fillsScreen = new URLSearchParams(location.search).has("fills");
@@ -16,6 +16,9 @@ const FILTER_OF = { Screenshots: "screenshots", Images: "images", Documents: "do
 const $ = (id) => document.getElementById(id);
 const $panel = $("panel"), $query = $("query"), $body = $("body"), $list = $("list"), $preview = $("preview");
 const $footer = $("footer"), $summary = $("summary"), $keys = $("keys"), $activity = $("activity");
+const $moreResults = $("more-results"), $results = $("results"), $primary = $("primary-action"), $details = $("details-action");
+const panelConfig = {maxHeight: PANEL_HEIGHT, nativeSized: false};
+let layoutFrame = null, announceTimer = null, lastAnnouncement = "", statusTimer = null;
 
 const state = {
   generation: 0,
@@ -54,6 +57,9 @@ const applicationSearch = new ApplicationSearch((statusOnly=false) => {
 function queryChanged() {
   if(state.composing)return;
   closeBig();
+  clearTimeout(statusTimer); state.waitingVisible = false;
+  statusTimer = setTimeout(() => { state.waitingVisible = true; renderFooter(); renderPreview(); scheduleFit(); }, 180);
+  state.heightFloor = FIELD_HEIGHT;
   const generation = ++state.generation;
   SearchTiming.begin(generation);state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;
   state.exactFilenameKnown=false;state.exactFilename=false;
@@ -200,85 +206,141 @@ function revealSelected() {
 
 /// The same search in the window, for a bigger look (only one kind, if given).
 function openInWindow(kind) {
-  invoke("open_window", { query: $query.value.trim(), kind: kind ?? null }).catch(failed);
+  invoke("open_window", { query: $query.value.trim(), kind: kind ?? null, selected: state.selection === WEAKER ? null : state.selection }).catch(failed);
 }
 
 // MARK: Drawing
 
 /// The panel's height: the window's, or in a window that fills the screen the panel's own, whose place the shell is
 /// told so that only the panel takes the pointer.
+function acceptConfig(reply) {
+  if (!reply || typeof reply !== "object") return;
+  if (Number.isFinite(reply.maxHeight) && reply.maxHeight > 0) panelConfig.maxHeight = reply.maxHeight;
+  if (reply.nativeSized === true) panelConfig.nativeSized = true;
+  if (reply.material) AppearanceUI.applyPanel(reply.material);
+}
 function fit() {
+  $panel.style.height = state.height + "px";
   if (!fillsScreen) {
-    invoke("panel_height", { height: state.height }).catch(() => {});
+    invoke("panel_height", {height: state.height}).then(reply => {
+      const old = panelConfig.maxHeight; acceptConfig(reply);
+      if (old !== panelConfig.maxHeight) scheduleFit();
+    }).catch(() => {});
     return;
   }
-  $panel.style.height = `${state.height}px`;
-  const { left, top, width, height } = $panel.getBoundingClientRect();
-  invoke("panel_area", { x: left, y: top, width, height }).catch(() => {});
+  const {left, top, width, height} = $panel.getBoundingClientRect();
+  invoke("panel_area", {x:left, y:top, width, height}).catch(() => {});
 }
-
-if (fillsScreen) {
-  document.documentElement.classList.add("fills-screen");
-  window.addEventListener("resize", fit);
-  fit();
+function scheduleFit() {
+  if (layoutFrame !== null) return;
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = null;
+    const empty = state.phase === "empty", count = rowIDs().length;
+    const measured = FIELD_HEIGHT + $footer.getBoundingClientRect().height
+      + (count ? $list.scrollHeight + $moreResults.getBoundingClientRect().height : 104);
+    let height = empty ? FIELD_HEIGHT : !$big.hidden ? BIG_HEIGHT : measured;
+    // Keep a list steady while replies refine it; a new query can choose a new height.
+    if (!empty && $big.hidden && count) {
+      state.heightFloor = Math.max(state.heightFloor || FIELD_HEIGHT, height);
+      height = state.heightFloor;
+    }
+    const screenLimit = fillsScreen ? window.innerHeight * 0.8 - 16
+      : panelConfig.nativeSized ? panelConfig.maxHeight : window.innerHeight;
+    height = Math.round(Math.min(Math.max(FIELD_HEIGHT, height), panelConfig.maxHeight, Math.max(FIELD_HEIGHT, screenLimit)));
+    if (height !== state.height) { state.height = height; fit(); }
+  });
 }
+if (fillsScreen) document.documentElement.classList.add("fills-screen");
+window.addEventListener("resize", scheduleFit);
+tauri.event.listen("panel-geometry", () => invoke("panel_config").then(reply => {acceptConfig(reply); scheduleFit();}).catch(() => {}));
+invoke("panel_config").then(reply => {acceptConfig(reply); scheduleFit();}).catch(() => {});
 
+function announceResults() {
+  clearTimeout(announceTimer);
+  const count = rowIDs().filter(id => id !== WEAKER).length;
+  const text = state.phase === "empty" ? "" : state.error && !count ? "Search unavailable. Open Activity for details."
+    : count ? count + (count === 1 ? " result available." : " results available.")
+    : state.waitingVisible && state.phase === "words" ? "Searching." : "";
+  if (text === lastAnnouncement) return;
+  announceTimer = setTimeout(() => { $("announcer").textContent = text; lastAnnouncement = text; }, 250);
+}
+function syncSelection() {
+  for (const node of $list.querySelectorAll('[role="option"]')) {
+    const key = node.dataset.resultKey || (node.classList.contains("weaker") ? WEAKER : "");
+    node.id = "panel-option-" + encodeURIComponent(key);
+  }
+  const selected = $list.querySelector('[role="option"][aria-selected="true"]');
+  if (selected) $query.setAttribute("aria-activedescendant", selected.id);
+  else $query.removeAttribute("aria-activedescendant");
+}
 function render() {
   const empty = state.phase === "empty";
-  const height = empty ? FIELD_HEIGHT : $big.hidden ? PANEL_HEIGHT : BIG_HEIGHT;
-  if (height !== state.height) {
-    state.height = height;
-    fit();
-  }
+  $panel.dataset.state = empty ? "empty" : "results";
+  $panel.classList.toggle("previewing", !$big.hidden);
+  $query.setAttribute("aria-expanded", String(!empty));
   $body.hidden = empty;
   $footer.hidden = empty;
-  if (empty) return;
-  renderList();
-  renderPreview();
-  renderFooter();
+  if (!empty) { renderList(); renderPreview(); renderFooter(); syncSelection(); }
+  else { $query.removeAttribute("aria-activedescendant"); $activity.hidden = true; }
+  announceResults(); scheduleFit();
 }
 
+const sectionNodes = new Map(), extraNodes = new Map();
+function reconcile(parent, nodes) {
+  let next = parent.firstChild;
+  for (const node of nodes) {
+    if (node !== next) parent.insertBefore(node, next);
+    next = node.nextSibling;
+  }
+  while (next) { const old = next; next = next.nextSibling; old.remove(); }
+}
+function extra(key, text, action) {
+  let node = extraNodes.get(key);
+  if (!node) { node = element("button", "app-more"); node.type = "button"; extraNodes.set(key, node); }
+  node.textContent = text; node.onclick = action; return node;
+}
 function renderList() {
-  const scroll = $list.scrollTop, layout = resultLayout(), weaker = weakerFiles(layout);
-  $list.replaceChildren();
+  const scroll = $list.scrollTop, layout = resultLayout(), weaker = weakerFiles(layout), sections = [], more = [];
   $list.hidden = !layout.rows.length && !state.weaker.length;
-  if ($list.hidden) return;
+  $results.hidden = $list.hidden;
   const appendHits = (hits, title, best = false) => {
-    const section = element("section", "panel-result-group" + (best ? " best-matches" : ""));
-    section.setAttribute("role", "group"); section.setAttribute("aria-label", title);
-    section.append(element("div", "group-title", title));
-    for (const hit of hits) section.append(isLauncher(hit) ? Apps.row(hit, state.selection === resultKey(hit), key => {
+    const key = best ? "best" : title;
+    let section = sectionNodes.get(key);
+    if (!section) {
+      section = element("section", "panel-result-group" + (best ? " best-matches" : ""));
+      section.setAttribute("role", "group"); section.setAttribute("aria-label", title);
+      section.heading = element("div", "group-title", title); sectionNodes.set(key, section);
+    }
+    const nodes = [section.heading, ...hits.map(hit => isLauncher(hit) ? Apps.row(hit, state.selection === resultKey(hit), key => {
       state.selection = key; state.chosen = rawSelectedHit(); state.navigated = true; render();
-    }, hit => openResult(hit).catch(failed)) : row(hit));
-    $list.append(section); return section;
+    }, hit => openResult(hit).catch(failed)) : row(hit))];
+    sections.push(section); return {section, nodes};
   };
-  if (layout.best.length) appendHits(layout.best, "Best matches", true);
+  const groups = [];
+  if (layout.best.length) groups.push(appendHits(layout.best, "Best matches", true));
   for (const section of layout.sections) {
     const title = section.source === "apps" ? "Apps" : section.source === "settings" ? "Windows settings" : state.isCode ? "Code" : "Files";
-    const node = appendHits(section.hits, title);
+    const group = appendHits(section.hits, title); groups.push(group);
     if (section.source === "files") {
-      if (state.strong.length > state.groups.flatMap(group => group.rows).length) {
-        const more = element("button", "app-more", "Show all matching files");
-        more.onclick = () => openInWindow(); node.append(more);
-      }
+      if (state.strong.length > state.groups.flatMap(group => group.rows).length)
+        more.push(extra("files", "Show all matching files", () => openInWindow()));
       if (weaker.length) {
-        const fold = element("div", "weaker" + (state.showWeaker ? " open" : "") + (state.selection === WEAKER ? " selected" : ""));
+        let fold = extraNodes.get("weaker");
+        if (!fold) { fold = element("div", "weaker"); fold.innerHTML = ICONS.chevron; fold.label = element("span"); fold.append(fold.label); extraNodes.set("weaker", fold); }
+        fold.classList.toggle("open", state.showWeaker); fold.classList.toggle("selected", state.selection === WEAKER);
         fold.setAttribute("role", "option"); fold.setAttribute("aria-selected", String(state.selection === WEAKER));
-        fold.innerHTML = ICONS.chevron;
-        fold.append(state.showWeaker ? "Weaker matches" : weaker.length + " weaker matches");
-        fold.onclick = toggleWeaker; node.append(fold);
-        if (state.showWeaker) for (const hit of weaker) node.append(row(hit));
+        fold.label.textContent = state.showWeaker ? "Weaker matches" : weaker.length + " weaker matches";
+        fold.onclick = toggleWeaker; group.nodes.push(fold);
+        if (state.showWeaker) for (const hit of weaker) group.nodes.push(row(hit));
       }
     }
   }
-  if (applicationSearch.active && applicationSearch.total > layout.rows.filter(isApp).length) {
-    const more = element("button", "app-more", "Show all " + applicationSearch.total + " matching apps…");
-    more.onclick = () => openInWindow("apps"); $list.append(more);
-  }
-  if (settingsSearch.active && settingsSearch.total > layout.rows.filter(isSetting).length) {
-    const more = element("button", "app-more", "Show all matching Windows settings");
-    more.onclick = () => openInWindow("settings"); $list.append(more);
-  }
+  if (applicationSearch.active && applicationSearch.total > layout.rows.filter(isApp).length)
+    more.push(extra("apps", "Show all " + applicationSearch.total + " matching apps", () => openInWindow("apps")));
+  if (settingsSearch.active && settingsSearch.total > layout.rows.filter(isSetting).length)
+    more.push(extra("settings", "Show all matching Windows settings", () => openInWindow("settings")));
+  for (const {section, nodes} of groups) reconcile(section, nodes);
+  reconcile($list, sections); reconcile($moreResults, more); $moreResults.hidden = !more.length;
   $list.scrollTop = scroll;
   if (state.navigated) $list.querySelector(".selected")?.scrollIntoView({block: "nearest"});
 }
@@ -321,24 +383,35 @@ function row(hit) {
 
 /// A picture of the file for its row: the picture itself, a video's frame at the moment, a PDF's page; else its
 /// kind's icon. All come small from the helper (a full-size photo per row would cost the web view hundreds of MB).
+const thumbnailObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) if (entry.isIntersecting) {
+    thumbnailObserver.unobserve(entry.target); entry.target.loadThumbnail?.();
+  }
+}, {root: $list, rootMargin: "60px"});
 function thumbnail(hit) {
   const pixels = Math.round(36 * (window.devicePixelRatio || 1));
   const what = renderOf(hit);
   if (!what) return kindIcon(hit.kind);
   const image = element("img", "thumb");
   image.alt = "";
-  rendered(hit.path, what[0], what[1], pixels)
-    .then((path) => { image.src = fileURL(path); })
+  image.loading = "lazy"; image.decoding = "async";
+  thumbnailObserver.observe(image);
+  image.loadThumbnail = () => rendered(hit.path, what[0], what[1], pixels)
+    .then(path => { image.src = fileURL(path); })
     .catch(() => image.replaceWith(kindIcon(hit.kind)));
   return image;
 }
 
 let previewSignature=null;
 function renderPreview() {
-  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps]);
+  const hasResults = rowIDs().length > 0;
+  $preview.hidden = hasResults;
+  if (hasResults) return;
+  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps,state.waitingVisible,state.error,state.indexing]);
   if(signature===previewSignature)return;
   previewSignature=signature;
   $preview.replaceChildren();
+  if (state.error) { $preview.append(message("Search needs attention", "Open Activity for details. Available app and settings matches remain usable.")); return; }
   if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length && !settingsSearch.visible().length) {
     if(state.isSettings){$preview.append(message("Windows settings",settingsSearch.status()));return;}
     if (state.isApps) {
@@ -353,12 +426,12 @@ function renderPreview() {
     } else if (state.phase === "words") {
       // The words are in and the meaning results on their way (as on the Mac): no verdict yet.
       const box = element("div", "message");
-      box.append(element("span", "", "Searching…"));
+      box.append(element("span", "", state.waitingVisible ? "Searching…" : ""));
       $preview.append(box);
     } else if (state.indexing) {
       const { done, total } = state.indexing;
-      $preview.append(message("Nothing yet", `Still indexing (${done} of ${total} files). Until a file is read, `
-        + "DigUp finds it only by its name."));
+      $preview.append(message("Nothing yet", Number.isFinite(total) ? `Still indexing (${done} of ${total} files). Until a file is read, `
+        + "DigUp finds it only by its name." : "Files are still being prepared. App names and Windows settings are available."));
     } else if (state.isCode) {
       $preview.append(message("No good matches in your code", "Try saying what the code does, or a name that's in it."));
     } else {
@@ -464,7 +537,7 @@ function renderFooter() {
   else if(state.isSettings)summary=settingsSearch.status();
   else if (state.isApps) summary = applicationSearch.status();
   else if (state.phase === "words") {
-    summary = state.encoder === "starting" ? "Matching words; meaning search is warming up…" : "Matching words…";
+    summary = !state.waitingVisible ? "" : state.encoder === "starting" ? "Loading purpose and content search…" : "Searching contents…";
   } else if (state.phase === "wordsOnly") summary = "Words only: meaning search isn't available";
   else if (state.phase === "codeHint") summary = "Searching your code";
   // Results while indexing (or before the model is in) may be missing some: that, where they're counted.
@@ -480,6 +553,15 @@ function renderFooter() {
     }
   }
   $summary.textContent = summary;
+  const hit = selectedHit();
+  $primary.hidden = !hit; $details.hidden = !hit;
+  $primary.textContent = isSetting(hit) ? "Open settings" : isLauncher(hit) ? "Launch" : "Open";
+  $primary.setAttribute("aria-label", hit ? $primary.textContent + " " + titleOf(hit) : "Open selected result");
+  $primary.disabled = isLauncher(hit) && Apps.launching.has(hit.id);
+  $details.textContent = !$big.hidden ? "Back" : isLauncher(hit) ? "Details" : "Preview";
+  $activity.hidden = !(state.error || state.caveat || state.activityBadge || state.phase === "wordsOnly");
+  $activity.classList.toggle("has-problem", Boolean(state.error || state.phase === "wordsOnly"));
+  $activity.title = state.error || state.caveat || state.activityLine || "Open Activity and diagnostics";
   $keys.textContent = isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
 }
 
@@ -492,7 +574,7 @@ document.getElementById("panel").append($big);
 /// Space, once a result is chosen with the arrows or a click: the panel at its tallest with the result over all of
 /// it, a video playing from its moment. Space or Esc puts it away; the arrows go on through the results under it.
 function toggleBig() {
-  if (isLauncher(selectedHit())) return;
+  if (!selectedHit()) return;
   if (!$big.hidden) return closeBig();
   $big.hidden = false;
   renderBig();
@@ -503,19 +585,22 @@ function closeBig() {
   if ($big.hidden) return;
   $big.hidden = true;
   $big.replaceChildren();   // its video or sound stops with it
+  $query.focus({preventScroll:true});
   render();
 }
 
 function renderBig() {
   const hit = selectedHit();
-  if (isLauncher(hit)) return closeBig();
   if (!hit) return closeBig();
   const head = element("div", "head");
-  head.append(element("span", "name", nameOf(hit.path)));
-  const place = placeOf(hit);
+  const back = element("button", "preview-back", "Back"); back.type = "button"; back.onclick = closeBig;
+  head.append(back, element("span", "name", titleOf(hit)));
+  const place = isLauncher(hit) ? "" : placeOf(hit);
   if (place) head.append(element("span", "place", place));
   let view;
-  if (hit.kind === "video") {
+  if (isLauncher(hit)) {
+    view = Apps.details(hit, failed);
+  } else if (hit.kind === "video") {
     view = element("video");
     view.src = `${fileURL(hit.path)}#t=${hit.loc ?? 0}`;
     view.controls = true;
@@ -588,16 +673,21 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-tauri.event.listen("panel-shown", () => {
+tauri.event.listen("panel-shown", ({payload}) => {
   closeBig();
   // Like Spotlight: the last query, selected.
   $query.focus();
   $query.select();
+  invoke("panel_config").then(reply => { acceptConfig(reply); scheduleFit(); }).catch(() => {});
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (payload?.requestId && document.activeElement === $query)
+      invoke("panel_ready", {requestId: payload.requestId}).catch(() => {});
+  }));
   if($query.value.trim()&&!applicationSearch.active)queryChanged();
   if (!state.isApps && !state.isSettings) ask({ op: "prewarm" }).catch(() => {});
 });
 tauri.event.listen("panel-hidden",()=>{
-  clearTimeout(state.timer);cancelAnimationFrame(state.frame);applicationSearch.suspend();settingsSearch.suspend();
+  clearTimeout(state.timer); clearTimeout(statusTimer); clearTimeout(announceTimer); cancelAnimationFrame(state.frame); applicationSearch.suspend();settingsSearch.suspend();
   ask({op:"cancel",generation:++state.generation}).catch(()=>{});
 });
 
@@ -615,24 +705,18 @@ tauri.event.listen("model", ({ payload }) => {
   if (payload.state === "ready" && !state.isApps && !state.isSettings) ask({ op: "prewarm" }).catch(() => {});
 });
 
-/// Indexing and the model, from the shell: a badge beside the field while results may be incomplete ("Indexing 42%"),
-/// as the Mac's panel has, with its progress as a ring.
 function showState(app) {
   state.indexing = app.indexing || null;
   state.hasCode = app.hasCode !== false;
   state.caveat = app.caveat || null;
-  $activity.hidden = !app.badge;
-  if (app.badge) {
-    const length = 2 * Math.PI * 4.6, done = Math.max(0.02, Math.min(1, app.progress ?? 0));
-    $activity.innerHTML = app.progress == null ? "" : `<svg viewBox="0 0 12 12"><circle class="track" cx="6" cy="6" `
-      + `r="4.6"/><circle class="done" cx="6" cy="6" r="4.6" stroke-dasharray="${(length * done).toFixed(2)} ${length.toFixed(2)}"/></svg>`;
-    $activity.append(app.badge);
-    $activity.title = app.line || "";
-  }
-  if (state.phase === "empty") return;
-  renderFooter();
-  if (!state.strong.length && !state.weaker.length) renderPreview();   // "Nothing yet": still indexing
+  state.activityBadge = app.badge || null;
+  state.activityLine = app.line || "";
+  if (state.phase !== "empty") { renderFooter(); renderPreview(); scheduleFit(); }
 }
+$("expand-search").onclick = () => openInWindow();
+$primary.onclick = openSelected;
+$details.onclick = toggleBig;
+$activity.onclick = () => invoke("open_settings", {tab:"activity"}).catch(failed);
 
 tauri.event.listen("state", ({ payload }) => showState(payload));
 invoke("app_state").then(showState).catch(() => {});

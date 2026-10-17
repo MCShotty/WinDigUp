@@ -46,6 +46,7 @@ window.AppearanceUI = (() => {
       for (const id of ids) { const input = document.getElementById(id); if (input) input.disabled = false; }
     }
   }
+  apply("system");
   if (window.__TAURI__) {
     window.__TAURI__.event.listen("appearance", ({payload}) => snapshot(payload));
     window.__TAURI__.event.listen("panel-appearance", ({payload}) => applyPanel(payload));
