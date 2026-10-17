@@ -69,6 +69,7 @@ $background.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
 $background.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 $background.Bounds = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 $background.ShowInTaskbar = $false
+$background.TopMost = $true
 $background.BackColor = [System.Drawing.Color]::FromArgb(47,101,147)
 $background.Show()
 [System.Windows.Forms.Application]::DoEvents()
@@ -82,12 +83,22 @@ function Test-PaintedCorners([uint32]$ProcessId, [string]$Name) {
     try {
         $graphics.CopyFromScreen($rect.left-16,$rect.top-16,0,0,$bitmap.Size)
         $backgroundColor = $background.BackColor
-        $reference = $bitmap.GetPixel(0,0)
+        # Verify capture away from the panel, where a backdrop or shadow cannot hide a regression.
+        $control = [System.Drawing.Bitmap]::new(1,1)
+        $controlGraphics = [System.Drawing.Graphics]::FromImage($control)
+        try {
+            $controlGraphics.CopyFromScreen($background.Left+8,$background.Top+8,0,0,$control.Size)
+            $reference = $control.GetPixel(0,0)
+        } finally { $controlGraphics.Dispose(); $control.Dispose() }
         $available = [Math]::Abs($reference.R-$backgroundColor.R) -le 3 -and
             [Math]::Abs($reference.G-$backgroundColor.G) -le 3 -and
             [Math]::Abs($reference.B-$backgroundColor.B) -le 3
         $path = Join-Path $evidence ($Name+'.png')
         $bitmap.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)
+        if ($env:DIGUP_PANEL_SCREENSHOT_LOG -eq '1' -and $Name -eq 'dark-solid-empty') {
+            Write-Output ('NATIVE_PANEL_CAPTURE_AVAILABLE '+$available)
+            Write-Output ('NATIVE_PANEL_SCREENSHOT_BASE64 '+[Convert]::ToBase64String([IO.File]::ReadAllBytes($path)))
+        }
         if (-not $available) {
             Write-Output "UNVALIDATED: desktop pixel capture is unavailable in this session ($Name). Native geometry checks still run."
             return
@@ -107,9 +118,6 @@ function Test-PaintedCorners([uint32]$ProcessId, [string]$Name) {
             throw "Pixel capture did not show painted WebView2 content ($Name)"
         }
         Write-Output "PASS: painted native capsule corners and surrounding desktop ($Name)."
-        if ($env:DIGUP_PANEL_SCREENSHOT_LOG -eq '1' -and $Name -eq 'dark-solid-empty') {
-            Write-Output ('NATIVE_PANEL_SCREENSHOT_BASE64 '+[Convert]::ToBase64String([IO.File]::ReadAllBytes($path)))
-        }
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
 }
 
