@@ -78,7 +78,7 @@ const DiscoverySettings = {
     const legacy=[p.phase||"Waiting",Number.isFinite(p.records)?this.n(p.records)+" records checked":"",
       Number.isFinite(p.candidates)?this.n(p.candidates)+" executable candidates":"",
       Number.isFinite(p.accepted)?this.n(p.accepted)+" accepted":"",p.message||""].filter(Boolean).join(" · ");
-    this.text("drive-status",d.version===2?(!d.options?.enabled?"Drive discovery off":d.options.paused?"Drive discovery paused":d.running?"Scanning selected drives":"Waiting for executable changes"):legacy);
+    this.text("drive-status",d.catalogEnabled===false?"Application search is off":d.version===2?(!d.options?.enabled?"Drive discovery off":d.options.paused?"Drive discovery paused":d.running?"Scanning selected drives":"Waiting for executable changes"):legacy);
     this.driveList.update(d);
     this.el("win-settings-enabled").checked=Boolean(w.enabled);
     this.el("win-settings-purpose").checked=Boolean(w.semanticEnabled);this.el("win-settings-ordinary").checked=Boolean(w.ordinarySearches);

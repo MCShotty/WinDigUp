@@ -107,7 +107,7 @@ window.PipelineUI = (() => {
       let empty = this.host.querySelector(".pipeline-drive-empty");
       if (!items.length) {
         if (!empty) { empty = create("p", "pipeline-drive-empty"); this.host.append(empty); }
-        text(empty, discovery.options?.enabled ? "Choose drives in Apps settings to start discovery." : "Drive discovery is off. Installed applications remain available.");
+        text(empty, discovery.catalogEnabled === false ? "Application search is off. Enable installed applications to resume drive discovery." : discovery.options?.enabled ? "Choose drives in Apps settings to start discovery." : "Drive discovery is off. Installed applications remain available.");
       } else empty?.remove();
     }
   }
