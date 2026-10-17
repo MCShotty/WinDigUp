@@ -591,7 +591,11 @@ function fail(error) {
 // MARK: Start
 
 async function refresh() {
-  info = await invoke("settings_info");
+  const fresh = await invoke("settings_info"), previousDiscovery = info.discovery;
+  info = fresh;
+  if (previousDiscovery && fresh.discovery) {
+    info.discovery = previousDiscovery; DiscoverySettings.accept("discovery", fresh.discovery);
+  }
   renderGeneral();
   renderStatus();
   renderFolders();

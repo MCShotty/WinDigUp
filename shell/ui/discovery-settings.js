@@ -35,8 +35,18 @@ const DiscoverySettings = {
     this.el("descriptions-clear").onclick=()=>this.action("enrichment","clear_app_descriptions",{},"enrichment","Online fetching disabled. Clearing saved descriptions.");
   },
   accept(key,payload){
-    if(key==="discovery"&&Number.isFinite(payload?.options?.revision)&&Number.isFinite(info.discovery?.options?.revision)&&
-      payload.options.revision<info.discovery.options.revision)return false;
+    const current=info[key];
+    if(key==="discovery"&&Number.isFinite(payload?.options?.revision)&&Number.isFinite(current?.options?.revision)&&
+      payload.options.revision<current.options.revision){
+      if(Number.isFinite(payload?.volumeCatalog?.revision)&&
+        payload.volumeCatalog.revision>(current.volumeCatalog?.revision??-1)){
+        info[key]={...current,volumes:payload.volumes,volumeCatalog:payload.volumeCatalog};return true;
+      }
+      return false;
+    }
+    if(key==="discovery"&&Number.isFinite(payload?.volumeCatalog?.revision)&&Number.isFinite(current?.volumeCatalog?.revision)&&
+      payload.volumeCatalog.revision<current.volumeCatalog.revision)
+      payload={...payload,volumes:current.volumes,volumeCatalog:current.volumeCatalog};
     info[key]=payload;return true;
   },
   message(source,value){

@@ -15,19 +15,21 @@ let browser;
     window.drive = {version: 2, supported: true, catalogEnabled: false, options: {enabled: false, paused: false, revision: 1,
       volumes: [], included: ["exe:existing"], hidden: ["exe:hidden"]}, volumes: [], volumeCatalog: {state: "unavailable"},
       progress: {phase: "disabled"}, byVolume: {}};
-    window.fileFolders = ["C:\\Users\\Test\\Documents"]; window.inventoryBlocked = true; window.inventoryWaiters = []; window.inventoryFailure = false;
+    window.fileFolders = ["C:\\Users\\Test\\Documents"]; window.inventoryBlocked = true; window.inventoryWaiters = []; window.inventoryFailure = false; window.volumeRevision = 0; window.staleInventoryResponse = false;
     window.releaseInventory = () => {window.inventoryBlocked = false; window.inventoryWaiters.splice(0).forEach(resolve => resolve());};
     window.__TAURI__.core.invoke = async (command, args = {}) => {
       if (command === "settings_info") return {...await old(command, args), discovery: window.drive, folders: window.fileFolders};
       if (command === "refresh_discovery_volumes") {
         window.calls.push({command, args});
         if (window.inventoryFailure) throw new Error("Fixture Windows inventory unavailable");
-        window.drive.volumeCatalog = {state: "loading"};
+        window.drive.volumeCatalog = {state: "loading", revision: ++window.volumeRevision};
+        const loading = structuredClone(window.drive);
         (async () => {
           if (window.inventoryBlocked) await new Promise(resolve => window.inventoryWaiters.push(resolve));
-          window.drive = {...window.drive, volumes: structuredClone(window.availableDrives), volumeCatalog: {state: "ready"}};
+          window.drive = {...window.drive, volumes: structuredClone(window.availableDrives), volumeCatalog: {state: "ready", revision: ++window.volumeRevision}};
           window.emit("discovery", window.drive);
         })();
+        if (window.staleInventoryResponse) {await new Promise(resolve => setTimeout(resolve, 80)); return loading;}
         return structuredClone(window.drive);
       }
       if (command === "set_discovery_options" || command === "set_drive_choices") {
@@ -69,8 +71,12 @@ let browser;
     window.availableDrives[0].paths = ["D:\\"];
     window.availableDrives.push({id: "volume-c", paths: ["F:\\"], name: "Fixture new drive", filesystem: "NTFS", available: true});
   });
+  await page.evaluate(() => {window.staleInventoryResponse = true;});
   await page.locator("#drive-list-refresh").click();
   await page.waitForFunction(() => document.querySelectorAll("#drive-volumes input[data-source=applications]").length === 3);
+  await page.waitForTimeout(120);
+  assert.equal(await page.locator("#drive-list-refresh").isEnabled(), true, "A delayed inventory reply reverted a completed refresh");
+  await page.evaluate(() => {window.staleInventoryResponse = false;});
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await page.waitForTimeout(100);
   assert.equal(await page.locator("#drive-enabled").isChecked(), true);

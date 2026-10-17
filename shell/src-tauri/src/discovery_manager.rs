@@ -22,7 +22,7 @@ impl Manager {
         let phase=if !options.enabled{"disabled"}else if options.paused{"paused"}else{"waiting"};
         let manager=Arc::new(Self{configuring:Mutex::new(()),last_notification:Mutex::new(Instant::now()-Duration::from_secs(1)),root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
             source_errors:RwLock::new(std::collections::BTreeMap::new()),by_volume:RwLock::new(std::collections::BTreeMap::new()),
-            volume_catalog:RwLock::new(json!({"state":"unavailable"})),volume_refreshing:AtomicBool::new(false),volume_enumeration:Mutex::new(()),
+            volume_catalog:RwLock::new(json!({"state":"unavailable","revision":0})),volume_refreshing:AtomicBool::new(false),volume_enumeration:Mutex::new(()),
             #[cfg(windows)]metadata_gate:discovery::scheduler::Gate::new(discovery::scheduler::Mode::Metadata),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
             running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
             renewing:AtomicBool::new(false),dirty_options:AtomicBool::new(true),failed:AtomicBool::new(false),
@@ -50,7 +50,9 @@ impl Manager {
     }
     pub fn request_volumes(self:&Arc<Self>){
         if self.volume_refreshing.swap(true,Ordering::SeqCst){return}
-        *self.volume_catalog.write().unwrap()=json!({"state":"loading"});
+        {let mut catalog=self.volume_catalog.write().unwrap();
+            let revision=catalog["revision"].as_u64().unwrap_or(0).saturating_add(1);
+            *catalog=json!({"state":"loading","revision":revision});}
         (self.notify)(self.info());
         let weak=Arc::downgrade(self);
         std::thread::spawn(move||{
@@ -69,12 +71,13 @@ impl Manager {
     }
     fn publish_volume_result(&self,result:Result<Vec<Value>,String>){
         let captured=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
-        match result{
-            Ok(rows)=>{
-                *self.volumes.write().unwrap()=rows;
-                *self.volume_catalog.write().unwrap()=json!({"state":"ready","capturedAt":captured});
-            },
-            Err(message)=>*self.volume_catalog.write().unwrap()=json!({"state":"failed","message":message,"capturedAt":captured}),
+        let mut status=match result{
+            Ok(rows)=>{*self.volumes.write().unwrap()=rows;json!({"state":"ready","capturedAt":captured})},
+            Err(message)=>json!({"state":"failed","message":message,"capturedAt":captured}),
+        };
+        {let mut catalog=self.volume_catalog.write().unwrap();
+            status["revision"]=json!(catalog["revision"].as_u64().unwrap_or(0).saturating_add(1));
+            *catalog=status;
         }
         (self.notify)(self.info());
     }
@@ -568,6 +571,7 @@ mod volume_catalog_tests{
         assert_eq!(after["volumes"],before["volumes"]);
         assert_eq!(after["options"],before["options"]);
         assert_eq!(after["volumeCatalog"]["state"],"failed");
+        assert!(after["volumeCatalog"]["revision"].as_u64().unwrap()>before["volumeCatalog"]["revision"].as_u64().unwrap());
         assert_eq!(after["running"],false);
     }
 }
