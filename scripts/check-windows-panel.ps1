@@ -95,9 +95,9 @@ function Test-PaintedCorners([uint32]$ProcessId, [string]$Name) {
             [Math]::Abs($reference.B-$backgroundColor.B) -le 3
         $path = Join-Path $evidence ($Name+'.png')
         $bitmap.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)
-        if ($env:DIGUP_PANEL_SCREENSHOT_LOG -eq '1' -and $Name -eq 'dark-solid-empty') {
-            Write-Output ('NATIVE_PANEL_CAPTURE_AVAILABLE '+$available)
-            Write-Output ('NATIVE_PANEL_SCREENSHOT_BASE64 '+[Convert]::ToBase64String([IO.File]::ReadAllBytes($path)))
+        if ($env:DIGUP_PANEL_SCREENSHOT_LOG -eq '1' -and $Name -in @('system-solid-empty','system-automatic-empty','dark-solid-empty')) {
+            Write-Output ('NATIVE_PANEL_CAPTURE '+$Name+' available='+$available+' reference='+$reference)
+            Write-Output ('NATIVE_PANEL_SCREENSHOT_BASE64 '+$Name+' '+[Convert]::ToBase64String([IO.File]::ReadAllBytes($path)))
         }
         if (-not $available) {
             Write-Output "UNVALIDATED: desktop pixel capture is unavailable in this session ($Name). Native geometry checks still run."
@@ -108,7 +108,7 @@ function Test-PaintedCorners([uint32]$ProcessId, [string]$Name) {
             if ([Math]::Abs($pixel.R-$backgroundColor.R) -gt 3 -or
                 [Math]::Abs($pixel.G-$backgroundColor.G) -gt 3 -or
                 [Math]::Abs($pixel.B-$backgroundColor.B) -gt 3) {
-                throw "A native backdrop is painted outside the capsule ($Name, pixel $($point[0]),$($point[1])). Screenshot: $path"
+                throw "A native backdrop is painted outside the capsule ($Name, pixel $($point[0]),$($point[1]), actual $pixel, expected $backgroundColor). Screenshot: $path"
             }
         }
         $center=$bitmap.GetPixel([int]($width/2)+16,48)
@@ -126,7 +126,7 @@ try {
     $creation = Start-Process -FilePath $fixture -ArgumentList $creationArgs -Wait -PassThru
     if ($creation.ExitCode -ne 0) { throw 'Could not register the disposable panel fixture shortcut' }
     foreach ($theme in @('system','light','dark')) {
-        foreach ($material in @('automatic','solid')) {
+        foreach ($material in @('solid','automatic')) {
             foreach ($shape in @('empty','results')) {
                 $name = "$theme-$material-$shape"
                 $settings = Join-Path $work ($name+'.json')
