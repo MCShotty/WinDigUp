@@ -147,6 +147,7 @@ public final class Indexer {
     @discardableResult
     public func run(limit: Int? = nil, only ids: Set<Int64>? = nil, shouldStop: () -> Bool = { false },
                     onEvent: (Event) -> Void = { _ in }) throws -> [String: Int] {
+        lastPipeline = nil
         let queue = try store.pending(limit: limit, only: ids)
         var states: [String: Int] = [:]
         var done = 0
@@ -182,6 +183,7 @@ public final class Indexer {
     @discardableResult
     public func finishLongFiles(shouldStop: () -> Bool = { false }, onStep: (Step) -> Void = { _ in }) throws
         -> [String: Int] {
+        lastPipeline = nil
         var jobs: [Job] = []
         for file in try store.unfinished() {
             let info = try store.info(of: file.id)
@@ -250,7 +252,9 @@ public final class Indexer {
                 pipeline.release(item, commitMs: (ProcessInfo.processInfo.systemUptime - start) * 1000, committed: didCommit)
             }
             guard !skip(item.input) else { return }
-            let results = try self.publish(item.value, computed: computed)
+            let results: [(String, String?)]
+            do { results = try self.publish(item.value, computed: computed) }
+            catch { pipeline.stop(); throw error }
             didCommit = true
             let seconds = (item.preparationMs + inferenceMs) / 1000
             measure(item.value, seconds: seconds)

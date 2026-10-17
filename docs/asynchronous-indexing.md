@@ -36,6 +36,22 @@ Inference-call time includes admission, foreground holds, IPC and model executio
 
 Tests block the oldest inference, hold the database consumer, overlap preparation, stop work with pending results, fail an encoder and check scratch cleanup. Actual Indexer tests retain stale-source rejection, vector validation, ordered publication, nested rollback and long-file resume.
 
-The workflow compares the actual base and changed Indexer on the same macOS runner using 96 short documents, five trials, three delayed synthetic embedding owners, a fresh SQLite index and warm source-file cache. The workload introduces an occasional slow inference and a slow publication observer. Raw per-trial times, inference counts and completion gaps are uploaded alongside the comparison. Results are pending until the workflow completes.
+The workflow compares the actual base and changed Indexer on the same macOS runner using 96 short documents, five trials, three delayed synthetic embedding owners, a fresh SQLite index and warm source-file cache. The workload introduces an occasional slow inference and a slow publication observer. Raw per-trial times, inference counts and completion gaps are uploaded alongside the comparison. At 41465d4, the hosted macOS 15 runner (three logical processors, 7 GiB RAM) measured:
+
+| Measurement | Base ecaf1a6 | Asynchronous pipeline |
+| --- | ---: | ---: |
+| Median elapsed time, 96 files | 5,281.54 ms | 3,168.45 ms |
+| Median throughput | 18.18 files/s | 30.30 files/s |
+| p95 gap between completed files | 215.09 ms | 103.43 ms |
+| Inference calls per trial | 96 | 96 |
+| Peak active inference calls | 3 | 3 |
+
+Elapsed time fell 40.0% in this scheduling fixture. Both versions used three inference owners and produced the same number of vectors. This comparison does not predict the improvement on a physical GPU.
+
+[Raw five-trial evidence](https://github.com/MCShotty/WinDigUp/actions/runs/39036122789/artifacts/12101889979); [53 shared-engine regressions and the comparison](https://github.com/MCShotty/WinDigUp/actions/runs/39036122789). GPU admission, accelerator policy, native Windows catalog tests and browser regressions passed separately. The full Windows installer checks are still running.
 
 These fixtures measure scheduling and persistence overhead. They do not measure physical GPU throughput, dedicated memory, media decoding speed or end-to-end foreground latency. Physical RX 7900 XTX, CUDA and Intel NPU checks remain required.
+
+## Code review
+
+Anti Slop code-comment check: PASS. New comments explain ownership, the admission bound and cleanup order; they do not narrate individual statements. No UI styling, interaction or visual assets changed. Performance claims above cite the retained fixture, with its synthetic-inference scope stated explicitly.
