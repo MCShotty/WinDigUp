@@ -23,7 +23,7 @@ struct PendingQueueTests {
         func plan(_ sql: String) throws -> [String] {
             var result: [String] = []
             try store.db.query("EXPLAIN QUERY PLAN " + sql, [.int(0), .text("pending"), .int(128)]) {
-                result.append($0.text(3))
+                result.append(try #require($0.text(3)))
             }
             return result
         }
