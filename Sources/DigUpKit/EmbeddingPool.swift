@@ -18,6 +18,8 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
     private let batches = DispatchQueue(label: "DigUp.text-batches", qos: .utility)
     private var texts: [TextCall] = []
     private var batchesRunning = 0
+    private let textQueues=(0..<3).map{DispatchQueue(label:"DigUp.text-inference-\($0)",qos:.utility)}
+    private var availableTextQueues=Set(0..<3)
     private var flushScheduled = false
     public let info: WorkerInfo
 
@@ -108,7 +110,8 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
         return output
     }
     private func flush() {
-        guard !texts.isEmpty,batchesRunning<maximumParallelJobs else{return}
+        guard !texts.isEmpty,batchesRunning<maximumParallelJobs,let lane=availableTextQueues.min()else{return}
+        availableTextQueues.remove(lane)
         var calls:[TextCall]=[]
         var inputs:[String]=[]
         var characters=0
@@ -119,7 +122,7 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
         }
         batchesRunning+=1
         let work=TextBatch(calls:calls,inputs:inputs)
-        DispatchQueue.global(qos:.utility).async { [self] in
+        textQueues[lane].async { [self] in
             do {
                 let vectors=try using{try $0.embedTexts(work.inputs)}
                 guard vectors.count==work.inputs.count else{throw WorkerError.failed("Text batch returned the wrong number of vectors")}
@@ -129,7 +132,7 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
                     offset+=call.inputs.count
                 }
             } catch { for call in work.calls{call.complete(.failure(error))} }
-            batches.async { [self] in batchesRunning-=1;flush() }
+            batches.async { [self] in batchesRunning-=1;availableTextQueues.insert(lane);flush() }
         }
         flush()
     }

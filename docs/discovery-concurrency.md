@@ -65,7 +65,7 @@ Each child owns its context and scratch memory. Text requests can join a two-mil
 
 ## Prepare, infer, commit
 
-File extraction stays ahead of inference on its existing owner. Prepared jobs can infer concurrently. Only immutable results cross back to the single database owner, which commits in original order.
+File extraction stays ahead of inference on its existing owner. Prepared GPU jobs use three owned serial execution lanes instead of blocking a shared executor pool. Single-owner embedders keep synchronous inference. Only immutable results cross back to the single database owner, which commits in original order.
 
 Before publication, commits recheck source size, modification time, known physical file identity, the current database row, and the vector fingerprint. Changed sources stay pending for resynchronization. Incompatible configuration changes cannot publish old vectors. A failed later job does not erase already committed work, and long-document cursors advance only with their transaction.
 

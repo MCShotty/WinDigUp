@@ -287,11 +287,13 @@ public final class Indexer {
             let future=InferenceResult()
             let owner=InferenceOwner(model)
             if let model {
-                DispatchQueue.global(qos:.utility).async {
+                let infer:@Sendable ()->Void={
                     do{future.fulfill(.success(try ComputedEmbedding(calls:calls,worker:owner.model!)))}
                     catch{future.fulfill(.failure(error))}
                 }
-                _ = model
+                if ((model as? any ParallelEmbedding)?.maximumParallelJobs ?? 1)>1 {
+                    inferenceQueues[index%inferenceQueues.count].async(execute:infer)
+                }else{infer()}
             }else{future.fulfill(.success(nil))}
             pending.append(InferredJob(index:index,job:job,prepared:prepared,result:future,
                 started:started,modelWasRunning:modelWasRunning))
@@ -472,6 +474,7 @@ public final class Indexer {
         }
     }
 
+    private let inferenceQueues=(0..<3).map{DispatchQueue(label:"DigUp.infer-\($0)",qos:.utility)}
     private let preparing = DispatchQueue(label: "DigUp.prepare", qos: .utility)
     private var jobsPrepared = 0   // names the scratch folders
 
