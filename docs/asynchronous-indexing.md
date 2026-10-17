@@ -2,6 +2,8 @@
 
 This change depends on PR #12 and starts from ecaf1a6. It leaves models, device selection, GPU admission, text/media profiles, prompts and vector fingerprints unchanged. Existing vectors remain compatible.
 
+The service-level 24-file turn limit and ready-dispatch stall are addressed by [continuous indexing](continuous-indexing.md), which also documents schema 2 measurements and current validation.
+
 ## Why additional model owners could sit idle
 
 The previous Indexer prepared one batch ahead, submitted up to the model width, then waited for the oldest result and committed it before submitting more work. A slow first job or commit prevented otherwise free inference lanes from receiving prepared inputs.

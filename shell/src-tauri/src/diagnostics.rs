@@ -24,11 +24,24 @@ impl Diagnostics {
         if event["event"] == "file" && matches!(event["state"].as_str(), Some("failed" | "error")) { important = true; }
         {
             let mut runtime = self.runtime.lock().unwrap();
-            if source == "index" && event["event"] == "index_pipeline" && event["pipeline"]["schemaVersion"] == 1 {
+            if source == "index" && event["event"] == "index_pipeline"
+                && matches!(event["pipeline"]["schemaVersion"].as_u64(), Some(1 | 2)) {
                 if !runtime["indexPipeline"].is_object() { runtime["indexPipeline"] = json!({}); }
+                if !runtime["indexPipelineHistory"].is_object() { runtime["indexPipelineHistory"] = json!({}); }
                 let key = if event["code"] == true { "code" } else { "files" };
-                runtime["indexPipeline"][key] = event["pipeline"].clone();
-                runtime["indexPipeline"][key]["capturedAt"] = json!(time);
+                let previous = &runtime["indexPipeline"][key];
+                let mut row = event["pipeline"].clone();
+                row["receivedAt"] = json!(time);
+                if !row["capturedAt"].is_number() { row["capturedAt"] = json!(time); }
+                let progress = ["preparedJobs", "inferredJobs", "committedJobs"].iter().any(|field|
+                    row[*field].as_u64().unwrap_or(0) > 0
+                        && (row["epoch"] != previous["epoch"] || row[*field] != previous[*field]));
+                row["lastProgressAt"] = if progress { json!(time) } else { previous["lastProgressAt"].clone() };
+                runtime["indexPipeline"][key] = row.clone();
+                if !runtime["indexPipelineHistory"][key].is_array() { runtime["indexPipelineHistory"][key] = json!([]); }
+                let history = runtime["indexPipelineHistory"][key].as_array_mut().unwrap();
+                if history.len() >= 120 { history.remove(0); }
+                history.push(row);
             }
             if event["event"]=="inference_activity" && event["activity"]["schemaVersion"]==1 {
                 let value=&event["activity"];
@@ -72,7 +85,8 @@ impl Diagnostics {
                 && event["device"].as_str().is_some_and(|device| !device.is_empty())
                 && event.get("error").is_none()
                 && ((source == "speed" && event["measured"] == true)
-                    || (source == "search" && event["event"] == "encoder" && event["state"] == "ready" && event["inference_verified"] == true));
+                    || (source == "search" && event["event"] == "encoder" && event["state"] == "ready" && event["inference_verified"] == true)
+                    || (source == "index" && event["event"] == "inference_verified" && event["inference_verified"] == true));
             if verified {
                 runtime["verified"] = json!({"device":event["device"],"executionPolicy":"accelerator-only","at":time,"source":source});
                 for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity", "model", "revision", "runtime", "dtype", "dim"] {
@@ -80,6 +94,7 @@ impl Diagnostics {
                 }
             }
         }
+        if event["event"] == "index_pipeline" { return }
         if event["event"]=="inference_activity" && event["activity"]["phase"]!="limited"{return}
         let entry = json!({"time": time, "source": source, "event": event});
         if important {
@@ -286,4 +301,37 @@ mod index_pipeline_tests {
         assert_eq!(d.significant().as_array().unwrap().len(), 1);
         assert_eq!(d.significant()[0]["event"]["message"], "Fixture model failure");
     }
+    #[test]
+    fn streaming_history_is_bounded_and_never_claims_inference_verification() {
+        let d = Diagnostics::new(&std::env::temp_dir().join("digup-streaming-diagnostics-absent"));
+        d.record("index", json!({"event":"error","message":"retained fixture failure"}));
+        for n in 0..145 {
+            d.record("index", json!({"event":"index_pipeline","pipeline":{
+                "schemaVersion":2,"epoch":"fixture","capturedAt":50,"preparedJobs":n,
+                "inferredJobs":n,"committedJobs":n,"blockedBy":"publication_backpressure","capacity":8
+            }}));
+        }
+        let before = d.runtime()["indexPipeline"]["files"]["lastProgressAt"].clone();
+        d.record("index", json!({"event":"index_pipeline","pipeline":{
+            "schemaVersion":2,"epoch":"fixture","preparedJobs":144,"inferredJobs":144,"committedJobs":144
+        }}));
+        let runtime = d.runtime();
+        assert_eq!(runtime["indexPipelineHistory"]["files"].as_array().unwrap().len(),120);
+        assert_eq!(runtime["indexPipeline"]["files"]["lastProgressAt"],before);
+        assert!(runtime["verified"].is_null());
+        assert_eq!(d.significant().as_array().unwrap().len(),1);
+        assert_eq!(d.recent().as_array().unwrap().len(),1);
+    }
+
+    #[test]
+    fn indexing_device_is_verified_only_after_a_successful_inference_receipt() {
+        let d = Diagnostics::new(&std::env::temp_dir().join("digup-index-receipt-absent"));
+        d.record("index",json!({"event":"inference_activity","activity":{"schemaVersion":1,"phase":"running","workerID":17}}));
+        assert!(d.runtime()["verified"].is_null());
+        d.record("index",json!({"event":"inference_verified","inference_verified":true,"execution_policy":"accelerator-only",
+            "device":"RX 7900 XTX","backend":"amd-vulkan","device_id":"fixture-stable-device"}));
+        assert_eq!(d.runtime()["verified"]["device"],"RX 7900 XTX");
+        assert_eq!(d.runtime()["verified"]["source"],"index");
+    }
+
 }

@@ -20,8 +20,8 @@ permissions:
 
 concurrency:
   group: packages-${{ github.event.pull_request.number || github.ref }}
-  # Finish a running installer build; retain only the latest pending commit.
-  cancel-in-progress: false
+  # Build the latest installer; native dependencies are cached independently.
+  cancel-in-progress: true
 
 jobs:
   linux:
@@ -287,8 +287,16 @@ jobs:
         shell: pwsh
         run: scripts/check-windows-applications.ps1
       - name: Installed compact search panel
+        env:
+          DIGUP_PANEL_SCREENSHOT_LOG: "1"
         shell: pwsh
         run: scripts/check-windows-panel.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: installed-panel-evidence
+          path: ${{ runner.temp }}/native-panel-evidence
+          if-no-files-found: ignore
       - name: Installed Windows settings activation
         shell: pwsh
         run: scripts/check-windows-settings.ps1
@@ -332,7 +340,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter 'AccelerationTests|ApplicationStoreTests|WindowsSettingsStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|WorkerDeadlineTests|IndexConcurrencyTests|IndexPipelineTests|LongFilesTests'
+          swift test --filter 'AccelerationTests|ApplicationStoreTests|WindowsSettingsStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|WorkerDeadlineTests|IndexConcurrencyTests|IndexPipelineTests|ReadyDispatchTests|PendingQueueTests|ServiceSchedulingTests|LongFilesTests'
           for attempt in 1 2 3; do
             swift test --skip-build --filter IndexConcurrencyTests
           done

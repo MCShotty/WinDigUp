@@ -143,9 +143,69 @@ window.PipelineUI = (() => {
       text(this.capacity, (inference.capacity?.backgroundWorkers ? "Background preparation: " + inference.capacity.backgroundWorkers + " workers. " : "") + (inference.capacity?.reason || "").replace(/^(?:worker error:\s*)?capacity_limited:\s*/i,""));
     }
   }
+  const indexingReasons = {
+    waiting_for_input:"Waiting for prepared input", preparing:"Preparing file contents", running:"Inference requests in progress",
+    publication_backpressure:"Waiting for earlier results to be saved", cancelled:"Indexing stopped at a safe boundary",
+    failed:"Indexing needs attention", idle:"Queue completed",
+  };
+  function indexingSample(files = {}) {
+    return Object.values(files.pipeline || {}).filter(value => value?.schemaVersion === 2)
+      .sort((a,b) => (b.receivedAt || b.capturedAt || 0) - (a.receivedAt || a.capturedAt || 0))[0];
+  }
+  function indexSummary(files = {}) {
+    const sample = indexingSample(files);
+    if (!sample) return "";
+    return "Indexing pipeline: " + (indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
+      "; " + sample.readyJobs + " ready; " + sample.runningJobs + " inference requests; " +
+      sample.completedJobs + " awaiting publication; admission capacity " + sample.capacity;
+  }
+  class IndexingView {
+    constructor(host) {
+      this.host = host;
+      this.state = create("p");
+      this.counts = create("p", "pipeline-drive-counts");
+      this.note = create("p", "pipeline-drive-note");
+      this.details = create("details", "pipeline-drive-details");
+      this.table = create("dl", "pipeline-timings");
+      this.details.append(create("summary", "", "Indexing stage measurements"), this.table,
+        create("p", "pipeline-drive-note", "Worker durations overlap. Inference requests include admission and runtime waits."));
+      this.fields = new Map();
+      for (const [key,label] of [
+        ["queueBuildMs","Queue preparation"],["queueFetchMs","Metadata pages"],["preparationMs","File preparation"],
+        ["inferenceInputWaitMs","Inference lanes waiting for input"],["inferenceMs","Inference calls"],
+        ["commitMs","Publication"],["cleanupMs","Scratch cleanup"],["notificationMs","Progress notifications"],
+        ["queueRows","Metadata records loaded"],["peakBufferedRecords","Peak buffered metadata records"],
+        ["peakResidentJobs","Peak retained jobs"],["peakPreparedBytes","Peak prepared text/path payload"],
+        ["peakScratchBytes","Peak prepared scratch files"],
+      ]) {
+        const row=create("div"),value=create("dd");
+        row.append(create("dt","",label),value);this.table.append(row);this.fields.set(key,value);
+      }
+      host.append(create("h3","","Indexing pipeline"),this.state,this.counts,this.note,this.details);
+    }
+    update(files = {}, inference = {}) {
+      const sample=indexingSample(files);this.host.hidden=!sample;
+      if(!sample)return;
+      const phase=files.paused?"Indexing paused":files.phase==="scheduled"?"Waiting for the indexing schedule":
+        indexingReasons[sample.blockedBy] || "Pipeline status unavailable";
+      text(this.state,phase);
+      text(this.counts,sample.readyJobs+" ready · "+sample.runningJobs+" inference requests · "+
+        sample.completedJobs+" awaiting publication");
+      text(this.note,"Admission capacity "+sample.capacity+" jobs · "+sample.preparationWorkers+
+        " preparation workers · Up to "+sample.inferenceWorkers+" inference requests. "+
+        (inference.error ? "See the inference error below." : ""));
+      for(const [key,element] of this.fields){
+        const value=sample[key];
+        const label=!Number.isFinite(value)?"Not reported":key.endsWith("Ms")?
+          (value<1000?Math.round(value)+" ms":(value/1000).toFixed(2)+" s"):
+          key.endsWith("Bytes")?(value/1048576).toFixed(1)+" MiB":value.toLocaleString();
+        text(element,label);
+      }
+    }
+  }
   function summary(discovery = {}) {
     return entries(discovery).map(({ volume, progress }) =>
       "Volume: " + label(volume) + "\nActivity: " + phase(discovery, progress) + "; " + metrics(progress)).join("\n");
   }
-  return { DriveList, InferenceView, summary, entries, phase, metrics };
+  return { DriveList, InferenceView, IndexingView, indexSummary, summary, entries, phase, metrics };
 })();

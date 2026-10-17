@@ -742,10 +742,11 @@ invoke("app_state").then(showState).catch(() => {});
 // Debug runs (--debug-query): type the query in, and once the meaning results and their pictures are in, report
 // what the panel shows.
 function debugSearch(query) {
-  if (!query) return;
+  if (typeof query !== "string") return;
   debugPending = true;
   $query.value = query;
   queryChanged();
+  if (!query.trim()) report();
 }
 invoke("debug_query").then(debugSearch);
 tauri.event.listen("debug-query", ({ payload }) => debugSearch(payload));   // after setup's first index

@@ -39,17 +39,19 @@ It is saved through the existing isolated atomic settings path. It does not chan
 accelerator settings, annotations, folder or drive choices.
 
 On Windows, the native service checks contrast mode, transparency, composition and Remote Desktop
-before asking window-vibrancy 0.8.1 for Acrylic. The dependency is already present in the pinned Tauri
-lockfile; the shell now calls it directly to receive its real success/error result. A failed request
-keeps the page solid and provides a readable reason. There is no CSS claim that native blur succeeded.
+before reporting native material availability. Both whole-window Acrylic paths painted beyond the
+custom capsule region in the native Windows pixel regression. The shaped panel therefore uses a
+Solid fallback and reports why Automatic could not enable transparency. Both system and accent
+backdrops are cleared. There is no CSS claim that native blur succeeded.
 
 A rounded native window region excludes the invisible corners. Region ownership follows Win32:
-Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates are
-cached before API submission to prevent repeated resize/region notifications from feeding back.
-The native shadow still belongs to the desktop compositor.
+Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates use a reentrancy guard and cache only successful API submissions. Windows omits the native shadow/frame inset, uses a transparent native/WebView background, and reapplies clipping after a material change. The field focus edge stays one pixel.
 
 Automatic follows OS restrictions each time the panel opens. Explicit appearance changes update native window themes and refresh
 material on the main thread. Material/status events are separate from model and indexing progress.
+The document root keeps a normal color scheme so WebView2 can preserve its transparent canvas;
+controls inside the panel follow the selected Light/Dark/System appearance. Browser tests inspect
+rendered alpha pixels as well as computed CSS backgrounds.
 Other desktops retain a usable solid surface and their existing hotkey/Wayland behaviour.
 
 The previously defined appearance and set_appearance commands are now registered in Tauri, and
@@ -89,7 +91,7 @@ The Activity workflow runs:
 
 The Packages workflow builds an installer and runs scripts/check-windows-panel.ps1 after installation.
 That script exercises a real WebView2 compact panel with OS catalog results, both material preferences,
-saved Dark appearance, bounded geometry and a native rounded hit region. It does not load a neural
+System/Light/Dark appearance, empty and expanded geometry, no non-client frame and a native rounded hit region. It captures the full window over a controlled desktop color and samples painted corners and surrounding pixels when the hosted session supports screen capture. Unsupported pixel capture is explicitly UNVALIDATED, not a passing visual check. PNG evidence is retained. It does not load a neural
 model, require an accelerator or prove visual Acrylic quality. Remote or restricted hosted sessions
 are expected to use Solid.
 

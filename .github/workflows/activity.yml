@@ -45,6 +45,7 @@ jobs:
           node tests/ui/acceleration.cjs
           node tests/ui/applications.cjs
           node tests/ui/activity.cjs
+          node tests/ui/indexing-pipeline.cjs
           node tests/ui/apps-editor.cjs
           node tests/ui/bug-regressions.cjs
           export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
@@ -89,10 +90,18 @@ jobs:
           cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "$env:RUNNER_TEMP/app-launch-fixture.res" "/Fe:$env:RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Real WebView2 panel with unavailable helper (no inference)
+        env:
+          DIGUP_PANEL_SCREENSHOT_LOG: "1"
         shell: pwsh
         run: |
           $missing = Join-Path $env:RUNNER_TEMP ('missing-helper-' + [Guid]::NewGuid().ToString('N') + '.exe')
           scripts/check-windows-panel.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Helper $missing
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: native-panel-evidence
+          path: ${{ runner.temp }}/native-panel-evidence
+          if-no-files-found: ignore
       - name: Real WebView2 portable-app discovery and launch (no inference)
         shell: pwsh
         run: scripts/check-windows-discovery.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Component "$PWD/shell/src-tauri/target/debug/digup-discovery.exe"

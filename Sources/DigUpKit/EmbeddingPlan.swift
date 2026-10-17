@@ -11,6 +11,7 @@ final class ComputedEmbedding: Embedder, @unchecked Sendable {
     let info: WorkerInfo
     private struct Key: Hashable { let kind: String;let budget:Int;let input:Data }
     private let values: [Key: Embedding]
+    var hasVectors: Bool { values.values.contains { $0.vector != nil } }
     init(calls:[EmbeddingCall],worker:any Embedder)throws {
         info=worker.info
         var values:[Key:Embedding]=[:]

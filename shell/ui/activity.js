@@ -138,6 +138,7 @@ window.ActivityUI = (() => {
       snapshot.discovery?.supported && snapshot.discovery.version!==2 ? `Drive discovery: ${snapshot.discovery.progress?.phase||"unknown"}; ${number(snapshot.discovery.progress?.records)} records; ${number(snapshot.discovery.progress?.candidates)} candidates; ${number(snapshot.discovery.progress?.accepted)} accepted` : "",
       snapshot.enrichment ? `Online descriptions: ${snapshot.enrichment.options?.enabled?"on":"off"}; ${number(snapshot.enrichment.progress?.enriched)} apps enhanced; ${snapshot.enrichment.progress?.message||""}` : "",
       snapshot.discovery?.version===2 ? PipelineUI.summary(snapshot.discovery) : "",
+      PipelineUI.indexSummary(f),
       `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`,
       snapshot.search?.last ? `Last search (${snapshot.search.last.phase}): ${Math.round(snapshot.search.last.total||0)} ms input to render; ${searchBreakdown(snapshot.search.last)}` : ""].filter(Boolean).join("\n");
   }
@@ -173,6 +174,7 @@ window.ActivityUI = (() => {
               <dl><div><dt>Searchable files</dt><dd data-key="searchable"></dd></div><div><dt>Queued files</dt><dd data-key="pending"></dd></div>
               <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
           </section>
+          <section class="activity-section" data-key="indexing-work" hidden></section>
           <section class="activity-section"><h3>Last search</h3><p data-key="search-total">No search timing reported yet.</p>
             <p data-key="search-breakdown" class="activity-muted"></p><p class="activity-muted">Local timings; inference and cached queries are measured separately.</p></section>
           <section class="activity-section" data-key="apps-section"><h3>Applications</h3><dl>
@@ -210,6 +212,7 @@ window.ActivityUI = (() => {
       this.get = key => host.querySelector(`[data-key="${key}"]`);
       this.driveList=new PipelineUI.DriveList(this.get("drive-list"));
       this.inferenceView=new PipelineUI.InferenceView(this.get("gpu-work"));
+      this.indexingView=new PipelineUI.IndexingView(this.get("indexing-work"));
       this.get("drive-settings").onclick=()=>options.onSettings ? options.onSettings("drives") : invoke("open_settings",{tab:"drives"});
       this.get("source-settings").onclick=()=>options.onSettings ? options.onSettings("apps") : invoke("open_settings",{tab:"apps"});
       this.get("close").hidden = !options.onClose;
@@ -343,6 +346,7 @@ window.ActivityUI = (() => {
       this.get("discovery-section").hidden=this.get("discovery-health").hidden=!drive.supported;
       this.driveList.update(drive);this.get("drive-list").hidden=drive.version!==2;
       this.inferenceView.update(inference);
+      this.indexingView.update(f,inference);
       const driveSummary=drive.version===2 ? (!drive.options?.enabled ? "Drive discovery off" :
         PipelineUI.entries(drive).length+" selected drives"+(drive.running?" · Discovery running":"")) : driveStatus;
       put("settings-status",settingsStatus);put("drive-status",driveSummary);put("description-status",descriptionStatus);

@@ -19,22 +19,19 @@ pub fn apply(window: &WebviewWindow, appearance: &Appearance, preference: &Panel
         Appearance::Dark => true,
         Appearance::System => matches!(window.theme(), Ok(tauri::Theme::Dark)),
     };
+    let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
     let mut status = MaterialStatus { supported: cfg!(windows), material: "solid".into(), dark, reason: String::new() };
     #[cfg(windows)]
     {
         status.reason = if *preference == PanelMaterial::Solid { "Solid panel selected.".into() }
-            else { windows::material_restriction().unwrap_or_default() };
-        if status.reason.is_empty() { status.material = "acrylic".into(); }
-        if previous == Some(&status) { return status; }
-        if status.material == "acrylic" {
-            let tint = if dark { (28, 31, 29, 220) } else { (246, 248, 245, 220) };
-            if let Err(error) = window_vibrancy::apply_acrylic(window, Some(tint)) {
-                status.material = "solid".into();
-                status.reason = format!("Windows transparency is unavailable: {error}");
-                let _ = window_vibrancy::clear_acrylic(window);
-            }
-        } else {
+            else { windows::material_restriction().unwrap_or_else(||
+                "Windows native transparency cannot follow this panel's rounded shape. Using Solid.".into()) };
+        if previous.map(|value| value.material.as_str()) != Some("solid") {
             let _ = window_vibrancy::clear_acrylic(window);
+            let _ = window_vibrancy::clear_blur(window);
+        }
+        if !windows::shape(window, true) {
+            status.reason = "Windows rounded clipping is unavailable; using a solid panel.".into();
         }
     }
     #[cfg(not(windows))]
@@ -47,7 +44,7 @@ pub fn apply(window: &WebviewWindow, appearance: &Appearance, preference: &Panel
 
 pub fn shape(window: &WebviewWindow) {
     #[cfg(windows)]
-    windows::shape(window);
+    { windows::shape(window, false); }
     #[cfg(not(windows))]
     let _ = window;
 }
@@ -57,7 +54,10 @@ mod windows {
     use super::*;
     use std::ffi::c_void;
     use std::sync::{Mutex, OnceLock};
-    static SHAPE: OnceLock<Mutex<Option<(isize, u32, u32, u64, i32, i32)>>> = OnceLock::new();
+    type ShapeKey = (isize, u32, u32, u64, i32, i32);
+    #[derive(Default)]
+    struct ShapeState { applying: bool, applied: Option<ShapeKey> }
+    static SHAPE: OnceLock<Mutex<ShapeState>> = OnceLock::new();
     use windows_sys::Win32::{
         Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
         Graphics::Dwm::DwmIsCompositionEnabled,
@@ -99,28 +99,34 @@ mod windows {
         None
     }
 
-    pub fn shape(window: &WebviewWindow) {
-        let (Ok(hwnd), Ok(size), Ok(scale)) = (window.hwnd(), window.inner_size(), window.scale_factor()) else { return };
+    pub fn shape(window: &WebviewWindow, force: bool) -> bool {
+        let (Ok(hwnd), Ok(size), Ok(scale)) = (window.hwnd(), window.inner_size(), window.scale_factor()) else { return false };
         let (left, top) = match (window.inner_position(), window.outer_position()) {
             (Ok(inner), Ok(outer)) => (inner.x - outer.x, inner.y - outer.y),
-            _ => (0, 0),
+            _ => return false,
         };
         let key = (hwnd.0 as isize, size.width, size.height, scale.to_bits(), left, top);
-        let cached = SHAPE.get_or_init(|| Mutex::new(None));
+        let cached = SHAPE.get_or_init(|| Mutex::new(ShapeState::default()));
         {
-            let mut previous = cached.lock().unwrap();
-            if *previous == Some(key) { return; }
-            *previous = Some(key);
+            let mut state = cached.lock().unwrap();
+            if state.applying { return state.applied == Some(key); }
+            if !force && state.applied == Some(key) { return true; }
+            state.applying = true;
         }
         let radius = if size.height as f64 / scale <= crate::panel_geometry::FIELD_HEIGHT + 1.0 { 32.0 } else { 22.0 };
         let diameter = (radius * 2.0 * scale).round() as i32;
-        unsafe {
+        let applied = unsafe {
             let region = CreateRoundRectRgn(left, top, left + size.width as i32 + 1, top + size.height as i32 + 1, diameter, diameter);
-            if !region.is_null() && SetWindowRgn(hwnd.0, region, 1) == 0 {
-                // SetWindowRgn owns a successful region; only release a rejected one.
+            if region.is_null() { false }
+            else if SetWindowRgn(hwnd.0, region, 1) == 0 {
+                // Windows owns accepted regions.
                 DeleteObject(region);
-                *cached.lock().unwrap() = None;
-            }
-        }
+                false
+            } else { true }
+        };
+        let mut state = cached.lock().unwrap();
+        state.applying = false;
+        state.applied = if applied { Some(key) } else { None };
+        applied
     }
 }

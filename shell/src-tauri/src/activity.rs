@@ -62,7 +62,7 @@ pub fn snapshot(input: Input) -> Value {
     json!({
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
         "search":{"schemaVersion":1,"last":runtime["lastSearch"],"index":runtime["searchIndex"]},
-        "files":{"schemaVersion":1,"phase":phase,"line":state["line"],"pipeline":runtime["indexPipeline"],
+        "files":{"schemaVersion":1,"phase":phase,"line":state["line"],"pipeline":runtime["indexPipeline"],"pipelineHistory":runtime["indexPipelineHistory"],
             "searchable":state["searchable"],"knownFiles":state["files"],"pending":state["pending"],"unfinished":state["unfinished"],
             "done":done,"total":total,"entriesChecked":scan["visited"],"candidates":scan["candidates"],
             "candidatesFinal":scan["event"] == "sync","root":scan["root"],"path":scan["path"],
