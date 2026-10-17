@@ -44,7 +44,7 @@ struct PendingQueueTests {
         defer { queue.close() }
         try store.finish(2, state: "done")
         try store.delete(3)
-        let first = try #require(queue.take())
+        let first = try #require(try queue.take())
         #expect(first.file.id == 39)
         #expect(first.priority == 0)
         var seen: [Int64] = [39]
