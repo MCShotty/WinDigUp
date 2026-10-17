@@ -48,8 +48,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Check physical-validation harness protocol without model inference
         run: |
-          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py
+          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py scripts/benchmark-index-service.py
           python3 -m unittest discover -s tests/native -p 'test_worker_protocol.py'
+          python3 -m unittest discover -s tests/native -p 'test_index_service_benchmark.py'
       - name: Build and run real admission and pool contracts without model weights
         run: |
           clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o

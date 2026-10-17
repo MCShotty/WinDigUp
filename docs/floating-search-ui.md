@@ -44,9 +44,7 @@ lockfile; the shell now calls it directly to receive its real success/error resu
 keeps the page solid and provides a readable reason. There is no CSS claim that native blur succeeded.
 
 A rounded native window region excludes the invisible corners. Region ownership follows Win32:
-Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates are
-cached before API submission to prevent repeated resize/region notifications from feeding back.
-The native shadow still belongs to the desktop compositor.
+Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates use a reentrancy guard and cache only successful API submissions. Windows omits the native shadow/frame inset, uses a transparent native/WebView background, and reapplies clipping after a material change. Acrylic overlays leave more of the native material visible; the field focus edge stays one pixel.
 
 Automatic follows OS restrictions each time the panel opens. Explicit appearance changes update native window themes and refresh
 material on the main thread. Material/status events are separate from model and indexing progress.
@@ -89,7 +87,7 @@ The Activity workflow runs:
 
 The Packages workflow builds an installer and runs scripts/check-windows-panel.ps1 after installation.
 That script exercises a real WebView2 compact panel with OS catalog results, both material preferences,
-saved Dark appearance, bounded geometry and a native rounded hit region. It does not load a neural
+System/Light/Dark appearance, empty and expanded geometry, no non-client frame and a native rounded hit region. It captures the full window over a controlled desktop color and samples painted corners and surrounding pixels when the hosted session supports screen capture. Unsupported pixel capture is explicitly UNVALIDATED, not a passing visual check. PNG evidence is retained. It does not load a neural
 model, require an accelerator or prove visual Acrylic quality. Remote or restricted hosted sessions
 are expected to use Solid.
 

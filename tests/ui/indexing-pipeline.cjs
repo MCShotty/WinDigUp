@@ -73,7 +73,7 @@ let browser;
       const label=document.createElement("p");label.textContent="Synthetic UI fixture; no hardware measurements.";
       document.querySelector('[data-key="indexing-work"]').prepend(label);emit("state",{});
     });
-    await page.waitForFunction(()=>document.querySelector('[data-key="indexing-work"]').textContent.includes("Inference in progress"));
+    await page.waitForFunction(()=>document.querySelector('[data-key="indexing-work"]').textContent.includes("Inference requests in progress"));
     await section.scrollIntoViewIfNeeded();
     fs.mkdirSync(directory,{recursive:true});
     await section.screenshot({path:path.join(directory,"indexing-pipeline.png")});
