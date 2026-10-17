@@ -1,5 +1,5 @@
 # Installed compact WebView2 panel, with ordinary OS catalog data and no model required.
-param([string]$InstalledApp = (Join-Path $env:LOCALAPPDATA 'DigUp\DigUp.exe'))
+param([string]$InstalledApp = (Join-Path $env:LOCALAPPDATA 'DigUp\DigUp.exe'), [string]$Helper = '')
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System;
@@ -64,6 +64,7 @@ try {
         $stderr = Join-Path $work ($material + '-error.txt')
         $arguments = '--settings "' + $settings + '" --index "' + (Join-Path $work ($material+'-index')) +
             '" --debug-query "apps: ' + $fixtureName + '" --debug-show --debug-quit'
+        if ($Helper) { $arguments += ' --helper "' + $Helper + '"' }
         $process = Start-Process -FilePath $InstalledApp -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
         try {
             $deadline = [DateTime]::UtcNow.AddSeconds(60)
