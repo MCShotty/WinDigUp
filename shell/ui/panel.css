@@ -240,7 +240,7 @@ html, body { margin:0; height:100%; background:transparent; overflow:hidden; use
   .field:focus-within { box-shadow:none; outline:2px solid Highlight; outline-offset:-3px; }
 }
 
-/* Root color-scheme makes WebView2 paint an opaque canvas. Theme native controls inside the panel. */
+/* Keep the WebView2 canvas transparent; theme native controls inside the panel. */
 :root { color-scheme:normal !important; }
 .panel { color-scheme:light; }
 :root[data-theme="dark"] .panel { color-scheme:dark; }

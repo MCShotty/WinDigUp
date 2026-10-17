@@ -32,6 +32,9 @@ table captures eligible file IDs once, ordered by priority, kind, modification t
 128-record pages contain metadata only. The page size is not an inference cap. TEMP data uses
 file-backed storage and a bounded SQLite page cache; SQLite and the filesystem still have their own
 allocations. No durable schema or file state is added for the queue.
+Page queries keep the queue's rowid range as the outer loop and perform point lookups of files.
+Small priority-only requests start from their membership IDs. Query-plan tests reject file-state
+scans and temporary ordering on the page request path.
 
 Two preparation owners produce immutable inputs. Inference owners take the earliest ready input
 rather than waiting for an earlier extraction. Publication remains ordered on the coordinator.
@@ -95,11 +98,59 @@ Browser and native panel checks are described in floating-search-ui.md.
 Validation results and raw comparison artifacts are recorded in the PR when the workflows finish.
 No throughput improvement is claimed until those measurements pass.
 
+
+## Recorded validation
+
+At d9daec7, [run 39062311004](https://github.com/MCShotty/WinDigUp/actions/runs/39062311004)
+passed 15 scheduling/queue/service tests, three worker-deadline tests and 53 shared-engine regressions,
+then compared the actual service on macOS 15.7.9 (24G830), three logical processors and 7 GiB RAM.
+Each side used five trials, fresh indexes, warm fixture files and the same three delayed synthetic
+embedding owners. These are scheduling measurements, not physical accelerator throughput.
+
+| Workload | Median before | Median after | Inference calls per trial | Vectors per trial |
+| --- | ---: | ---: | ---: | ---: |
+| 96 images | 524.83 ms | 308.26 ms | 12 on both | 96 on both |
+| 192 short documents | 3,421.05 ms | 3,196.75 ms | 192 on both | 192 on both |
+| 32 images, 64 documents, 32 code files | 2,063.96 ms | 1,724.01 ms | 100 on both | 128 on both |
+
+Median elapsed time fell 41.3%, 6.6% and 16.5% in these fixtures. Peak active inference calls
+remained three. Raw distributions and completion gaps are retained in the
+[measurement artifact](https://github.com/MCShotty/WinDigUp/actions/runs/39062311004/artifacts/12112012418).
+Compiler/test-process RSS in that retained run cannot establish an isolated helper memory change.
+The workflow prebuilds both versions before subsequent timed RSS sampling; the envelope still
+includes SwiftPM/test subprocesses and is not dedicated GPU memory.
+
+The same run measured the disposable metadata queue:
+
+| Metadata records | Queue construction | Page fetch total | Pages | Peak buffered records |
+| --- | ---: | ---: | ---: | ---: |
+| 100,000 | 55.36 ms | 79.86 ms | 783 | 128 |
+| 1,000,000 | 577.98 ms | 780.93 ms | 7,814 | 128 |
+
+Selecting two priority IDs took 0.30 ms and 0.27 ms respectively. The query-plan check observed
+a file-state scan plus temporary ordering for an unconstrained join, and queue rowid ranges plus
+file primary-key lookups for the production page query. These measurements cover metadata only,
+not a million source files or vectors.
+
+[Windows/native/browser run 39062310972](https://github.com/MCShotty/WinDigUp/actions/runs/39062310972)
+passed the real WebView2 shell checks, application discovery/launch fixtures and browser regressions.
+All twelve native theme/material/layout cases passed painted-corner checks, with no unvalidated
+captures. Both native Acrylic APIs painted rectangles beyond the capsule in the regression;
+Automatic now reports a Solid fallback. Actual native and labelled browser captures are retained
+as that run's native-panel-evidence and activity-browser-evidence artifacts.
+
+Accelerator-policy, strict NPU/conversion and Windows application-provider checks passed in
+[run 39062310969](https://github.com/MCShotty/WinDigUp/actions/runs/39062310969).
+No physical GPU/NPU throughput, retained-reference agreement or installed-device latency is
+established by these hosted fixtures. Windows installer and final-commit validation are recorded
+in the PR.
+
 ## Physical-device protocol
 
 scripts/benchmark-index-service.py runs two installed helpers against the same unchanged input
 folders. It requires an explicit backend/device, at least five paired trials and a new disposable
 output directory outside every input root. It does not touch the user's existing index.
+Quit DigUp and other neural workloads for the paired baseline; measure foreground contention separately.
 Order alternates to reduce a consistent before/after bias. Content hashes detect changed inputs.
 Every trial warms source data, starts a cold model process and creates a fresh index.
 

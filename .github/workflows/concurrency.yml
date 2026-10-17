@@ -106,8 +106,10 @@ jobs:
           for name in llama llama.cpp llama-build; do
             ln -s "$GITHUB_WORKSPACE/Vendor/$name" "$base/Vendor/$name"
           done
-          /usr/bin/time -l swift test --package-path "$base" --filter ServiceIndexingBenchmark 2>&1 | tee service-before.txt
-          /usr/bin/time -l swift test --filter ServiceIndexingBenchmark 2>&1 | tee service-after.txt
+          swift build --package-path "$base" --build-tests
+          swift build --build-tests
+          /usr/bin/time -l swift test --skip-build --package-path "$base" --filter ServiceIndexingBenchmark 2>&1 | tee service-before.txt
+          /usr/bin/time -l swift test --skip-build --filter ServiceIndexingBenchmark 2>&1 | tee service-after.txt
           python3 scripts/compare-index-service.py service-before.txt service-after.txt > service-comparison.json
           cat service-comparison.json
       - name: Queue scale at 100,000 and one million metadata records
