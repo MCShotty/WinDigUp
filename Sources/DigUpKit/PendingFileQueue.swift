@@ -43,10 +43,11 @@ final class PendingFileQueue {
                     try store.db.run("INSERT INTO \(members)(file) VALUES(?)", [.int(id)])
                 }
                 let membership = "EXISTS(SELECT 1 FROM \(members) p WHERE p.file=files.id)"
+                let source = includePending ? "files" : "\(members) selected CROSS JOIN files ON files.id=selected.file"
                 try store.db.run("""
                     INSERT INTO \(table)(file,priority)
                     SELECT id,CASE WHEN \(membership) THEN 0 ELSE 1 END
-                    FROM files WHERE state=?\(scopeSQL)\(includePending ? "" : " AND \(membership)")
+                    FROM \(source) WHERE state=?\(scopeSQL)
                     ORDER BY 2,\(FileKind.indexingOrderSQL),mtime DESC,id ASC LIMIT ?
                     """, [.text(state)] + scopeValues + [.int(Int64(max(-1, limit ?? -1)))])
             }
@@ -124,7 +125,7 @@ final class PendingFileQueue {
     func remainingPriorityIDs() throws -> Set<Int64> {
         var result: Set<Int64> = []
         try store.db.query("""
-            SELECT f.id FROM files f JOIN \(members) p ON p.file=f.id
+            SELECT f.id FROM \(members) p CROSS JOIN files f ON f.id=p.file
             WHERE f.state=?\(scopeSQL)
             """, [.text(state)] + scopeValues) { result.insert($0.int(0)) }
         return result

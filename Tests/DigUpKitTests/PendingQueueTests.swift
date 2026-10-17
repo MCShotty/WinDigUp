@@ -122,6 +122,12 @@ struct PendingQueueTests {
                 INSERT INTO files(path,kind,size,mtime,inode,device)
                 SELECT printf('/queue-fixture/%08d.txt',x),'doc',100,1,x,1 FROM n;
                 """)
+            let selected = try store.pendingQueue(priorityIDs: [1, Int64(count)], includePending: false)
+            var selectedIDs: [Int64] = []
+            while let entry = try selected.take() { selectedIDs.append(entry.file.id) }
+            #expect(selectedIDs == [1, Int64(count)])
+            print("QUEUE_PRIORITY_SCALE: corpus=\(count) selected=2 buildMs=\(selected.buildMs)")
+            selected.close()
             let queue = try store.pendingQueue()
             defer { queue.close() }
             var received = 0
