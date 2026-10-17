@@ -10,11 +10,14 @@ public static class DigUpPanelProbe {
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumCallback callback, IntPtr data);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr hwnd, IntPtr region);
     [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left,int top,int right,int bottom);
     [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region,int x,int y);
     [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct Point { public int x,y; }
     public static bool HasRoundedPanel(uint pid) {
         bool found=false;
         EnumWindows((hwnd,data) => {
@@ -22,12 +25,18 @@ public static class DigUpPanelProbe {
             if(owner!=pid) return true;
             Rect rect;
             if(!GetWindowRect(hwnd,out rect)) return true;
-            int width=rect.right-rect.left, height=rect.bottom-rect.top;
+            Rect client; Point origin=new Point();
+            if(!GetClientRect(hwnd,out client) || !ClientToScreen(hwnd,ref origin)) return true;
+            int width=client.right-client.left, height=client.bottom-client.top;
             if(width<200 || height<60) return true;
+            int left=origin.x-rect.left, top=origin.y-rect.top;
             IntPtr region=CreateRectRgn(0,0,0,0);
             if(region==IntPtr.Zero) return true;
             try {
-                if(GetWindowRgn(hwnd,region)>0 && !PtInRegion(region,0,0) && PtInRegion(region,width/2,30))
+                if(GetWindowRgn(hwnd,region)>0 && !PtInRegion(region,left,top)
+                    && PtInRegion(region,left+width/2,top+height/2)
+                    && PtInRegion(region,left+width-1,top+height/2)
+                    && (left==0 || !PtInRegion(region,left-1,top+height/2)))
                     found=true;
             } finally { DeleteObject(region); }
             return !found;

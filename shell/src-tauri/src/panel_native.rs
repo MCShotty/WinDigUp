@@ -57,7 +57,7 @@ mod windows {
     use super::*;
     use std::ffi::c_void;
     use std::sync::{Mutex, OnceLock};
-    static SHAPE: OnceLock<Mutex<Option<(isize, u32, u32, u64)>>> = OnceLock::new();
+    static SHAPE: OnceLock<Mutex<Option<(isize, u32, u32, u64, i32, i32)>>> = OnceLock::new();
     use windows_sys::Win32::{
         Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
         Graphics::Dwm::DwmIsCompositionEnabled,
@@ -101,7 +101,11 @@ mod windows {
 
     pub fn shape(window: &WebviewWindow) {
         let (Ok(hwnd), Ok(size), Ok(scale)) = (window.hwnd(), window.inner_size(), window.scale_factor()) else { return };
-        let key = (hwnd.0 as isize, size.width, size.height, scale.to_bits());
+        let (left, top) = match (window.inner_position(), window.outer_position()) {
+            (Ok(inner), Ok(outer)) => (inner.x - outer.x, inner.y - outer.y),
+            _ => (0, 0),
+        };
+        let key = (hwnd.0 as isize, size.width, size.height, scale.to_bits(), left, top);
         let cached = SHAPE.get_or_init(|| Mutex::new(None));
         {
             let mut previous = cached.lock().unwrap();
@@ -111,7 +115,7 @@ mod windows {
         let radius = if size.height as f64 / scale <= crate::panel_geometry::FIELD_HEIGHT + 1.0 { 32.0 } else { 22.0 };
         let diameter = (radius * 2.0 * scale).round() as i32;
         unsafe {
-            let region = CreateRoundRectRgn(0, 0, size.width as i32 + 1, size.height as i32 + 1, diameter, diameter);
+            let region = CreateRoundRectRgn(left, top, left + size.width as i32 + 1, top + size.height as i32 + 1, diameter, diameter);
             if !region.is_null() && SetWindowRgn(hwnd.0, region, 1) == 0 {
                 // SetWindowRgn owns a successful region; only release a rejected one.
                 DeleteObject(region);
