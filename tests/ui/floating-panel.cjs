@@ -104,16 +104,31 @@ let browser;
     assert.equal(await page.locator("#panel").evaluate(node => Math.round(node.getBoundingClientRect().height)),64,
       "Background progress expanded an empty search");
     assert.equal(await page.locator("#activity").isVisible(),false);
-    for (const theme of ["light","dark"]) {
+    for (const theme of ["light","dark","system"]) {
       await page.evaluate(theme=>AppearanceUI.apply(theme),theme);
-      for (const material of ["solid","acrylic"]) {
-        await page.evaluate(material=>AppearanceUI.applyPanel({material,supported:true}),material);
-        for (const selector of ["html","body"]) {
-          assert.equal(await page.locator(selector).evaluate(node=>getComputedStyle(node).backgroundColor),"rgba(0, 0, 0, 0)",
-            "The web canvas outside the capsule became opaque");
+      for (const osScheme of ["light","dark"]) {
+        await page.emulateMedia({colorScheme:osScheme});
+        for (const material of ["solid","acrylic"]) {
+          await page.evaluate(material=>AppearanceUI.applyPanel({material,supported:true}),material);
+          for (const selector of ["html","body"]) {
+            assert.equal(await page.locator(selector).evaluate(node=>getComputedStyle(node).backgroundColor),"rgba(0, 0, 0, 0)",
+              "The web canvas outside the capsule became opaque");
+          }
+          const bitmap=await page.screenshot({omitBackground:true});
+          const alpha=await page.evaluate(async base64=>{
+            const image=new Image();image.src="data:image/png;base64,"+base64;await image.decode();
+            const canvas=document.createElement("canvas");canvas.width=image.width;canvas.height=image.height;
+            const context=canvas.getContext("2d");context.drawImage(image,0,0);
+            return [context.getImageData(1,1,1,1).data[3],context.getImageData(320,32,1,1).data[3]];
+          },bitmap.toString("base64"));
+          assert.equal(alpha[0],0,"Rendered canvas painted outside the rounded capsule ("+theme+", "+osScheme+", "+material+")");
+          assert.ok(alpha[1]>0,"The panel contents disappeared");
+          assert.equal(await page.locator("#panel").evaluate(node=>getComputedStyle(node).colorScheme),
+            theme==="system"?osScheme:theme,"Native controls lost the selected theme");
         }
       }
     }
+    await page.emulateMedia({colorScheme:"light"});
     await page.evaluate(()=>AppearanceUI.apply("system"));
     await capture(page,"capsule-light","#panel");
     await page.emulateMedia({colorScheme:"dark"});

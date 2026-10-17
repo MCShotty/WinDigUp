@@ -239,3 +239,11 @@ html, body { margin:0; height:100%; background:transparent; overflow:hidden; use
   .row.selected *, .panel .app-row.selected * { color:HighlightText; }
   .field:focus-within { box-shadow:none; outline:2px solid Highlight; outline-offset:-3px; }
 }
+
+/* Root color-scheme makes WebView2 paint an opaque canvas. Theme native controls inside the panel. */
+:root { color-scheme:normal !important; }
+.panel { color-scheme:light; }
+:root[data-theme="dark"] .panel { color-scheme:dark; }
+@media (prefers-color-scheme:dark) {
+  :root[data-theme="system"] .panel { color-scheme:dark; }
+}

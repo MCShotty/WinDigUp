@@ -39,15 +39,19 @@ It is saved through the existing isolated atomic settings path. It does not chan
 accelerator settings, annotations, folder or drive choices.
 
 On Windows, the native service checks contrast mode, transparency, composition and Remote Desktop
-before asking window-vibrancy 0.8.1 for Acrylic. The dependency is already present in the pinned Tauri
-lockfile; the shell now calls it directly to receive its real success/error result. A failed request
-keeps the page solid and provides a readable reason. There is no CSS claim that native blur succeeded.
+before enabling accent-policy Acrylic and checking the native API result. Windows 11's whole-window
+system backdrop paints beyond the capsule region, so this panel does not request it. Clearing the
+effect disables both the system backdrop and the accent policy. A failed request keeps the page solid
+and provides a readable reason. There is no CSS claim that native blur succeeded.
 
 A rounded native window region excludes the invisible corners. Region ownership follows Win32:
 Windows owns a region accepted by SetWindowRgn; rejected regions are released. Shape updates use a reentrancy guard and cache only successful API submissions. Windows omits the native shadow/frame inset, uses a transparent native/WebView background, and reapplies clipping after a material change. Acrylic overlays leave more of the native material visible; the field focus edge stays one pixel.
 
 Automatic follows OS restrictions each time the panel opens. Explicit appearance changes update native window themes and refresh
 material on the main thread. Material/status events are separate from model and indexing progress.
+The document root keeps a normal color scheme so WebView2 can preserve its transparent canvas;
+controls inside the panel follow the selected Light/Dark/System appearance. Browser tests inspect
+rendered alpha pixels as well as computed CSS backgrounds.
 Other desktops retain a usable solid surface and their existing hotkey/Wayland behaviour.
 
 The previously defined appearance and set_appearance commands are now registered in Tauri, and
