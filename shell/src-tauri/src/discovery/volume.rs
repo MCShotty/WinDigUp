@@ -255,6 +255,14 @@ pub fn topology(id:&str)->super::scheduler::Topology {
     let raw=unsafe{CreateFileW(wide(id.trim_end_matches('\\')).as_ptr(),0,7,std::ptr::null(),3,0,std::ptr::null_mut())};
     if raw==INVALID{return Topology::default()}let volume=Handle(raw);
     let Some(disks)=extents(volume.0)else{return Topology::default()};
+    if let Some(descriptor)=storage_property(volume.0,0).filter(|bytes|bytes.len()>=32){
+        let bus=u32::from_le_bytes(descriptor[28..32].try_into().unwrap());
+        if ![1,2,3,7,11,17,18,19].contains(&bus){return Topology::default()}
+        let media=match storage_property(volume.0,7).filter(|bytes|bytes.len()>=9){
+            Some(bytes)if bytes[8]==0=>MediaKind::Ssd,Some(_)=>MediaKind::Hdd,None=>MediaKind::Unknown,
+        };
+        return Topology{known:true,disks,media}
+    }
     let mut media=MediaKind::Ssd;
     for number in &disks {
         let path=format!(r"\\.\PhysicalDrive{number}");

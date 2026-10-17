@@ -178,7 +178,7 @@ window.ActivityUI = (() => {
           <section class="activity-section" data-key="apps-section"><h3>Applications</h3><dl>
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
-          <section class="activity-section" data-key="discovery-section" hidden><h3>Additional search sources</h3>
+          <section class="activity-section" data-key="discovery-section" hidden><h3>Application sources</h3>
             <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Application source settings</button>
             <p data-key="discovery-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="gpu-work"></section><section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>

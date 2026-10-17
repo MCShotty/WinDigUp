@@ -36,7 +36,7 @@ window.PipelineUI = (() => {
     return [
       Number.isFinite(progress.records) ? count(progress.records) + " entries checked" : "",
       Number.isFinite(progress.candidates) ? count(progress.candidates) + " executable candidates" : "",
-      Number.isFinite(progress.accepted) ? count(progress.accepted) + " available applications" : "",
+      Number.isFinite(progress.accepted) ? count(progress.accepted) + " accepted candidates" : "",
     ].filter(Boolean).join(" · ") || "Counts appear as discovery progresses.";
   }
   function addTimings(list, title, timings) {
@@ -139,12 +139,12 @@ window.PipelineUI = (() => {
         this.jobs.append(row);
       }
       this.capacity.hidden = !inference.capacity?.reason;
-      text(this.capacity, (inference.capacity?.reason || "").replace(/^(?:worker error:\\s*)?capacity_limited:\\s*/i,""));
+      text(this.capacity, (inference.capacity?.reason || "").replace(/^(?:worker error:\s*)?capacity_limited:\s*/i,""));
     }
   }
   function summary(discovery = {}) {
     return entries(discovery).map(({ volume, progress }) =>
-      "Volume: " + label(volume) + "\\nActivity: " + phase(discovery, progress) + "; " + metrics(progress)).join("\n");
+      "Volume: " + label(volume) + "\nActivity: " + phase(discovery, progress) + "; " + metrics(progress)).join("\n");
   }
   return { DriveList, InferenceView, summary, entries, phase, metrics };
 })();

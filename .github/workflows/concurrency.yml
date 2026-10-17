@@ -48,7 +48,8 @@ jobs:
           test -n "$selected"
           echo "DEVELOPER_DIR=$selected/Contents/Developer" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$selected/Contents/Developer" xcrun swift --version
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: native-cache
         with:
           path: |
             Vendor/llama
@@ -56,6 +57,15 @@ jobs:
             Vendor/llama-build
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Build the pinned native runtime
+        id: native-build
         run: bash scripts/build-llama.sh
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.native-build.outcome == 'success'
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Storage, prepared inference and worker contracts with synthetic embedders
         run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|WorkerDeadlineTests|AccelerationTests|SearchReadersTests'

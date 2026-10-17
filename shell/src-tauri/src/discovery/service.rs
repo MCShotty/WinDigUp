@@ -223,6 +223,14 @@ fn connection(pipe:&Pipe,shared:&Shared,root:&Path)->Result<(),String>{
     {let _client=ipc::Impersonation::client(pipe)?;}
     match request["op"].as_str(){
         Some("foreground")=>{*shared.held.lock().unwrap()=Instant::now()+Duration::from_secs(1);return pipe.send(&json!({"version":1,"kind":"ok"}))}
+        Some("topology")=>{
+            let ids=request["volumes"].as_array().ok_or("Select discovery volumes.")?;
+            if ids.len()>64 || ids.iter().any(|id|!id.as_str().is_some_and(crate::discovery::valid_volume)){
+                return Err("Select valid discovery volumes.".into())
+            }
+            let rows:Vec<_>=ids.iter().map(|id|json!({"id":id,"topology":volume::topology(id.as_str().unwrap())})).collect();
+            return pipe.send(&json!({"version":1,"kind":"topology","volumes":rows}))
+        },
         Some("status")=>return pipe.send(&json!({"version":1,"kind":"status","service":"ready","protocol":1})),
         Some("scan")=>{},
         _=>return Err("Unsupported discovery operation.".into()),

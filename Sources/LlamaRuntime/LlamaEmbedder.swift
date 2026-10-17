@@ -84,9 +84,13 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
             self.residency = resident
             var free = 0, total = 0
             ggml_backend_dev_memory(device, &free, &total)
-            let files = [models.text] + (textOnly ? [] : models.media.map { [$0] } ?? [])
-            let weights = files.reduce(Int64(0)) { sum, file in
-                sum + ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? 0)
+            var files:[URL]=[models.text]
+            if !textOnly,let mediaFile=models.media{files.append(mediaFile)}
+            var weights:Int64=0
+            for file in files{
+                let attributes=try? FileManager.default.attributesOfItem(atPath:file.path)
+                let bytes=(attributes?[.size] as? NSNumber)?.int64Value ?? 0
+                weights+=bytes
             }
             let reserve = max(Int64(512 * 1024 * 1024), weights * 2) + 256 * 1024 * 1024
                 + (!textOnly && !queryResident ? 1024 * 1024 * 1024 : 0)

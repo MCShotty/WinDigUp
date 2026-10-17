@@ -9,7 +9,7 @@ struct EmbeddingCall: Sendable {
 /// Immutable results cross the inference boundary; replay never invokes the model or owns a database.
 final class ComputedEmbedding: Embedder, @unchecked Sendable {
     let info: WorkerInfo
-    private struct Key: Hashable { let kind: String;let budget:Int;let input:String }
+    private struct Key: Hashable { let kind: String;let budget:Int;let input:Data }
     private let values: [Key: Embedding]
     init(calls:[EmbeddingCall],worker:any Embedder)throws {
         info=worker.info
@@ -29,14 +29,14 @@ final class ComputedEmbedding: Embedder, @unchecked Sendable {
                         throw WorkerError.failed("Prepared inference returned an invalid vector")
                     }
                 }
-                values[Key(kind:call.kind.rawValue,budget:call.budget,input:input)]=embedding
+                values[Key(kind:call.kind.rawValue,budget:call.budget,input:Data(input.utf8))]=embedding
             }
         }
         self.values=values
     }
     private func read(_ kind:EmbeddingCall.Kind,_ inputs:[String],budget:Int=0)throws->[Embedding] {
         try inputs.map{input in
-            guard let value=values[Key(kind:kind.rawValue,budget:budget,input:input)] else{
+            guard let value=values[Key(kind:kind.rawValue,budget:budget,input:Data(input.utf8))] else{
                 throw WorkerError.failed("Commit requested an input absent from its prepared embedding plan")
             }
             return value

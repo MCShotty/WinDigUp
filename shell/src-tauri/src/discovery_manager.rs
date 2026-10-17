@@ -142,6 +142,29 @@ impl Manager {
         let db=CandidateStore::recovering(&self.root.join("discovery.sqlite"))?;
         if self.dirty_options.swap(false,Ordering::SeqCst){for volume in &options.volumes{db.set_revision(volume,"")?;}}
         self.publish_cached(&db,options)?;
+        if let Ok(pipe)=discovery::ipc::Pipe::connect(cancel.clone()){
+            if pipe.send(&json!({"version":1,"op":"topology","volumes":options.volumes})).is_ok(){
+                if let Ok(reply)=pipe.receive(){
+                    if reply["version"]==1&&reply["kind"]=="topology"{
+                        if let Some(rows)=reply["volumes"].as_array(){
+                            let mut volumes=self.volumes.write().unwrap();
+                            for row in rows.iter().take(64){
+                                let Some(id)=row["id"].as_str()else{continue};
+                                if !options.volumes.iter().any(|selected|selected==id){continue}
+                                if let Ok(mut topology)=serde_json::from_value::<discovery::scheduler::Topology>(row["topology"].clone()){
+                                    if topology.disks.len()>128{continue}
+                                    topology.disks.sort_unstable();topology.disks.dedup();
+                                    if topology.disks.is_empty(){topology.known=false;}
+                                    if let Some(volume)=volumes.iter_mut().find(|value|value["id"]==id){
+                                        volume["topology"]=serde_json::to_value(topology).unwrap();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let gate=Gate::new(Mode::Scan);
         let mut waiting=vec![];
         let mut passes=BTreeMap::<String,Pass>::new();
