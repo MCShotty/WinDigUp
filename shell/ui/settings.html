@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="activity.css">
   <link rel="stylesheet" href="appearance.css">
   <link rel="stylesheet" href="pipeline.css">
+  <link rel="stylesheet" href="desktop.css">
   <script src="appearance.js"></script>
 </head>
 <body>
@@ -56,6 +57,14 @@
       <label for="appearance">Appearance</label>
       <select class="field" id="appearance"><option value="system">Follow Windows or system appearance</option><option value="light">Light</option><option value="dark">Dark</option></select>
       <p id="appearance-message" class="note" role="status"></p>
+      <div id="panel-material-option" class="appearance-option" hidden>
+        <label for="panel-material">Search panel appearance</label>
+        <select class="field" id="panel-material" aria-describedby="panel-material-note">
+          <option value="automatic">Automatic · Windows transparency</option>
+          <option value="solid">Solid</option>
+        </select>
+        <p id="panel-material-note" class="note"></p>
+      </div>
       <h3>Model acceleration</h3>
       <label for="accelerator">Inference device</label>
       <select class="field" id="accelerator">

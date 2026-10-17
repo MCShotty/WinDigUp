@@ -24,8 +24,18 @@ jobs:
           npm install --prefix /tmp/digup-ui --no-audit --no-fund playwright@1.61.1
           python3 -m http.server 8765 --bind 127.0.0.1 --directory shell/ui > /tmp/ui-server.log 2>&1 &
           server=$!
-          trap 'kill "$server"' EXIT
+          baseline_dir="$RUNNER_TEMP/floating-baseline"
+          mkdir -p "$baseline_dir"
+          git fetch --depth=1 origin 147d377b3b3b4207530bff4832ba606551207d12
+          git archive 147d377b3b3b4207530bff4832ba606551207d12 shell/ui | tar -x -C "$baseline_dir"
+          python3 -m http.server 8766 --bind 127.0.0.1 --directory "$baseline_dir/shell/ui" > /tmp/baseline-ui-server.log 2>&1 &
+          baseline_server=$!
+          trap 'kill "$server" "$baseline_server"' EXIT
           export NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome
+          node --check shell/ui/panel.js
+          export DIGUP_FLOATING_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/floating"
+          DIGUP_UI_URL=http://127.0.0.1:8766 node tests/ui/floating-panel.cjs --baseline
+          DIGUP_FLOATING_SCREENSHOT_LOG=1 node tests/ui/floating-panel.cjs
           node --check shell/ui/activity.js
           node --check shell/ui/applications-settings.js
           node tests/ui/mixed-ordering-contract.cjs
@@ -61,8 +71,31 @@ jobs:
       - name: Pinned Tauri CLI without npm PATH shims
         shell: bash
         run: bash scripts/tauri-cli.sh --version
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            shell/src-tauri/target
+          key: floating-shell-${{ runner.os }}-${{ hashFiles('shell/src-tauri/Cargo.lock') }}
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
+      - name: Build the real native shell without model libraries
+        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
+      - name: Build the disposable Shell shortcut fixture
+        shell: pwsh
+        run: |
+          rc.exe /nologo "/fo$env:RUNNER_TEMP/app-launch-fixture.res" tests/windows/app-launch-fixture.rc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "$env:RUNNER_TEMP/app-launch-fixture.res" "/Fe:$env:RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Real WebView2 panel with unavailable helper (no inference)
+        shell: pwsh
+        run: |
+          $missing = Join-Path $env:RUNNER_TEMP ('missing-helper-' + [Guid]::NewGuid().ToString('N') + '.exe')
+          scripts/check-windows-panel.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Helper $missing
+      - name: Real WebView2 portable-app discovery and launch (no inference)
+        shell: pwsh
+        run: scripts/check-windows-discovery.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Component "$PWD/shell/src-tauri/target/debug/digup-discovery.exe"
       - name: Compile portable search-vector conversion for Windows x64
         run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"
 
