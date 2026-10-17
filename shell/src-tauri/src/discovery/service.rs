@@ -186,7 +186,7 @@ pub fn uninstall()->Result<(),String>{
     if unsafe{DeleteService(service.0)}==0{return Err(volume::error())}
     Ok(())
 }
-struct Shared {stop:Arc<AtomicBool>,held:Mutex<Instant>,volumes:Mutex<HashSet<String>>,clients:AtomicUsize}
+struct Shared {stop:Arc<AtomicBool>,held:Mutex<Instant>,disks:Arc<crate::discovery::scheduler::Gate>,clients:AtomicUsize}
 impl Shared {
     fn quiet(&self)->Result<(),String>{
         while Instant::now()<*self.held.lock().unwrap(){
@@ -198,7 +198,7 @@ impl Shared {
 }
 fn serve(stop:Arc<AtomicBool>)->Result<(),String>{
     let root=known_folder(false)?;secure_directory(&root,false)?;
-    let shared=Arc::new(Shared{stop:stop.clone(),held:Mutex::new(Instant::now()),volumes:Mutex::new(HashSet::new()),clients:AtomicUsize::new(0)});
+    let shared=Arc::new(Shared{stop:stop.clone(),held:Mutex::new(Instant::now()),disks:crate::discovery::scheduler::Gate::new(crate::discovery::scheduler::Mode::Scan),clients:AtomicUsize::new(0)});
     report(4);let mut first=true;let mut last_client=Instant::now();
     while !stop.load(Ordering::SeqCst){
         let pipe=match ipc::listener(first,stop.clone()){Ok(pipe)=>pipe,Err(_)if stop.load(Ordering::SeqCst)=>break,
@@ -222,24 +222,40 @@ fn connection(pipe:&Pipe,shared:&Shared,root:&Path)->Result<(),String>{
     // This also establishes a valid local user token before any volume operation.
     {let _client=ipc::Impersonation::client(pipe)?;}
     match request["op"].as_str(){
-        Some("foreground")=>{*shared.held.lock().unwrap()=Instant::now()+Duration::from_secs(2);return pipe.send(&json!({"version":1,"kind":"ok"}))}
-        Some("status")=>return pipe.send(&json!({"version":1,"kind":"status","service":"ready","protocol":1})),
+        Some("foreground")=>{*shared.held.lock().unwrap()=Instant::now()+Duration::from_secs(1);return pipe.send(&json!({"version":1,"kind":"ok"}))}
+        Some("topology")=>{
+            let ids=request["volumes"].as_array().ok_or("Select discovery volumes.")?;
+            if ids.len()>64 || ids.iter().any(|id|!id.as_str().is_some_and(crate::discovery::valid_volume)){
+                return Err("Select valid discovery volumes.".into())
+            }
+            let rows:Vec<_>=ids.iter().map(|id|json!({"id":id,"topology":volume::topology(id.as_str().unwrap())})).collect();
+            return pipe.send(&json!({"version":1,"kind":"topology","schedulerVersion":1,"volumes":rows}))
+        },
+        Some("status")=>return pipe.send(&json!({"version":1,"kind":"status","service":"ready","protocol":1,"diskSchedulerVersion":1})),
         Some("scan")=>{},
         _=>return Err("Unsupported discovery operation.".into()),
     }
     let id=request["volume"].as_str().ok_or("Choose a discovery volume.")?;
     if !crate::discovery::valid_volume(id){return Err("Invalid discovery volume.".into())}
-    let started=Instant::now();
-    loop{
-        if shared.volumes.lock().unwrap().insert(id.into()){break}
+    use crate::discovery::scheduler::Resource;
+    let topology=volume::topology(id);
+    let ticket=shared.disks.request(Resource{volume:id.into(),topology});
+    let started=Instant::now();let mut last=Instant::now()-Duration::from_secs(1);
+    let _lease=loop{
         shared.quiet()?;
-        if started.elapsed()>Duration::from_secs(60){return Err("Another discovery pass is still running; retry later.".into())}
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let result=scan(pipe,shared,root,id,request["full"].as_bool().unwrap_or(false),request["knownRevision"].as_str().unwrap_or(""));
-    shared.volumes.lock().unwrap().remove(id);result
+        if let Some(lease)=ticket.try_start(){break lease}
+        if started.elapsed()>Duration::from_secs(60){return Err("Another scan is still using this physical disk. Retry later.".into())}
+        if last.elapsed()>Duration::from_millis(500){
+            pipe.send(&json!({"version":1,"kind":"progress","phase":"waiting","total":null,
+                "message":"Waiting for another scan on this physical disk."}))?;last=Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    scan(pipe,shared,root,id,request["full"].as_bool().unwrap_or(false),request["knownRevision"].as_str().unwrap_or(""))
+
 }
 fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Result<(),String>{
+    let mut timings=crate::discovery::metrics::Timings::default();
     let volume=volume::Volume::open(id)?;let journal=volume.journal()?;
     let name=format!("{:x}.sqlite",Sha256::digest(id.as_bytes()));let file=root.join(name);
     for suffix in ["","-wal","-shm"]{verify_inventory_file(&PathBuf::from(format!("{}{suffix}",file.display())))?;}
@@ -259,10 +275,13 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
         store.clear()?;let mut start=0;
         loop{
             shared.quiet()?;
-            let Some((next,batch))=volume.enumerate(start)?else{break};
+            let measured=Instant::now();
+            let next_batch=volume.enumerate(start)?;timings.record("enumeration",measured,next_batch.as_ref().map_or(0,|(_,b)|b.len()as u64));
+            let Some((next,batch))=next_batch else{break};
             if next<=start{return Err("NTFS enumeration did not advance.".into())}
-            store.apply(&batch,false)?;records+=batch.len()as u64;start=next;
-            pipe.send(&json!({"version":1,"kind":"progress","phase":"enumerating","records":records,"total":null}))?;
+            let measured=Instant::now();store.apply(&batch,false)?;timings.record("databaseCommit",measured,batch.len()as u64);
+            records+=batch.len()as u64;start=next;
+            pipe.send(&json!({"version":1,"kind":"progress","phase":"enumerating","records":records,"total":null,"timings":timings}))?;
         }
     }
     // Replay from the checkpoint taken BEFORE enumeration, covering changes made during the baseline.
@@ -271,11 +290,12 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
         shared.quiet()?;let current=volume.journal()?;
         if current.id!=journal.id||cursor<current.first||cursor<current.lowest{return Err("NTFS journal history changed; a new reconciliation is required.".into())}
         if cursor>=current.next{break}
-        let(next,batch)=volume.changes(cursor,journal.id)?;
+        let measured=Instant::now();let(next,batch)=volume.changes(cursor,journal.id)?;
+        timings.record("enumeration",measured,batch.len()as u64);
         if next<=cursor{return Err("NTFS journal did not advance.".into())}
         relevant|=batch.iter().any(|r|r.executable()||r.reason&0x10000!=0
             ||(r.directory()&&r.reason&(0x100|0x200|0x800|0x1000|0x2000|0x100000)!=0));
-        store.apply(&batch,true)?;
+        let measured=Instant::now();store.apply(&batch,true)?;timings.record("databaseCommit",measured,batch.len()as u64);
         // Unlinking one hard link must not remove the remaining application's file identity.
         for record in batch.iter().filter(|r|r.reason&(0x200|0x10000)!=0){
             if let Some(live)=volume.live_record(record){
@@ -285,7 +305,7 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
         }
         records+=batch.len()as u64;cursor=next;rounds+=1;
         if rounds>100_000{return Err("NTFS journal is changing too quickly; retry when the volume is quieter.".into())}
-        pipe.send(&json!({"version":1,"kind":"progress","phase":"reconciling","records":records,"total":null}))?;
+        pipe.send(&json!({"version":1,"kind":"progress","phase":"reconciling","records":records,"total":null,"timings":timings}))?;
     }
     store.put("journal",&journal.id.to_string())?;store.put("cursor",&cursor.to_string())?;
     store.put("serial",&volume.serial.to_string())?;store.put("complete","true")?;
@@ -293,15 +313,17 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
     if relevant||store.get("application_revision")?.is_none(){store.put("application_revision",&cursor.to_string())?;}
     let application_revision=store.get("application_revision")?.unwrap_or_else(||cursor.to_string());
     let revision=format!("{}-{}-{}",volume.serial,journal.id,application_revision);
-    if !fresh&&revision==known{return pipe.send(&json!({"version":1,"kind":"complete","revision":revision,"unchanged":true,"records":records}))}
+    if !fresh&&revision==known{return pipe.send(&json!({"version":1,"kind":"complete","revision":revision,"unchanged":true,"records":records,"timings":timings}))}
     let mut after=String::new();let mut candidates=0u64;
     loop{
         let ids=store.executable_ids(&after,256)?;if ids.is_empty(){break}
         for file_id in ids{
             shared.quiet()?;after=file_id.clone();
-            let Some(path)=store.path(&file_id,id,&volume.root.text())?else{continue};
+            let measured=Instant::now();let path=store.path(&file_id,id,&volume.root.text())?;
+            timings.record("pathResolution",measured,1);
+            let Some(path)=path else{continue};
             // Permission checks and hard-link name retrieval run as the requesting user, never SYSTEM.
-            let permitted={
+            let measured=Instant::now();let permitted={
                 let _client=ipc::Impersonation::client(pipe)?;
                 match volume::file_info(&path){
                     Ok(info)if info.id().text()==file_id=>{
@@ -311,6 +333,7 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
                     _=>vec![],
                 }
             };
+            timings.record("permissionChecks",measured,permitted.len()as u64);
             for(path,stamp)in permitted{
                 let parent=Path::new(&path).parent().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default();
                 let parent_id={let _client=ipc::Impersonation::client(pipe)?;
@@ -325,9 +348,9 @@ fn scan(pipe:&Pipe,shared:&Shared,root:&Path,id:&str,full:bool,known:&str)->Resu
                     "fileId":file_id,"path":path,"fileStamp":stamp}}))?;
             }
         }
-        pipe.send(&json!({"version":1,"kind":"progress","phase":"resolving","records":records,"candidates":candidates,"total":null}))?;
+        pipe.send(&json!({"version":1,"kind":"progress","phase":"resolving","records":records,"candidates":candidates,"total":null,"timings":timings}))?;
     }
-    pipe.send(&json!({"version":1,"kind":"complete","revision":revision,"unchanged":false,"records":records,"candidates":candidates}))
+    pipe.send(&json!({"version":1,"kind":"complete","revision":revision,"unchanged":false,"records":records,"candidates":candidates,"timings":timings}))
 }
 fn probe()->Result<(),String>{
     let args=std::env::args().collect::<Vec<_>>();
@@ -354,7 +377,7 @@ fn probe()->Result<(),String>{
             Some("complete")=>{
                 println!("{}",json!({"ok":true,"kind":"probe","candidates":candidates,"foundExpected":found,
                     "progressEvents":progress,"expectedId":expected_id,"forbiddenFound":forbidden,"records":response["records"],"revision":response["revision"],
-                    "elapsedMs":started.elapsed().as_secs_f64()*1000.0}));
+                    "elapsedMs":started.elapsed().as_secs_f64()*1000.0,"timings":response["timings"]}));
                 if forbidden{return Err("Discovery returned an executable denied to this user.".into())}
                 if expected.is_some()&&!found{return Err("The expected executable was not discovered for this user.".into())}return Ok(())
             },

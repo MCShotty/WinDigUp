@@ -1,5 +1,8 @@
 //! Executable inventory is separate from the accepted, embeddable application catalog.
 pub mod ntfs;
+pub mod metrics;
+pub mod scheduler;
+#[cfg(test)]mod benchmark;
 pub mod db;
 pub mod store;
 #[cfg(windows)]pub mod volume;
@@ -15,6 +18,7 @@ pub const MAX_FRAME_BYTES: usize = 1_048_576;
 #[serde(default, rename_all="camelCase")]
 pub struct Options {
     pub enabled: bool,
+    pub revision: u64,
     /// Stable volume GUIDs; drive letters are presentation only.
     pub volumes: Vec<String>,
     pub paused: bool,

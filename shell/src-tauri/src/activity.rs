@@ -71,7 +71,7 @@ pub fn snapshot(input: Input) -> Value {
             "lastEventAt":state["lastEventAt"],"lastProgressAt":state["lastProgressAt"],"phaseStartedAt":state["phaseStartedAt"],
             "scheduledAt":state["heldUntil"],"blockedBy":blocked_by,"paused":state["paused"],"canIndexNow":has_folders && state["busy"] == false},
         "applications":{"schemaVersion":1,"catalog":catalog,"purpose":purpose,"lastProgressAt":runtime["applicationUpdatedAt"]},
-        "inference":{"schemaVersion":1,"configured":configured,"verified":verified,"encoder":encoder,
+        "inference":{"schemaVersion":2,"configured":configured,"verified":verified,"encoder":encoder,"jobs":runtime["inferenceJobs"],"capacity":runtime["inferenceCapacity"],
             "encoderUpdatedAt":runtime["encoder"]["updatedAt"],"error":inference_error,
             "model":state["model"],"checking":state["measuring"] == true},
         "helpers":{"schemaVersion":1,"index":helpers["index"],"search":helpers["search"]},"events":events,

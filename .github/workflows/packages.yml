@@ -297,7 +297,7 @@ jobs:
         run: |
           $destination = Join-Path $env:RUNNER_TEMP 'cuda-validation'
           New-Item -ItemType Directory -Force $destination | Out-Null
-          Copy-Item scripts/check-cuda-hardware.ps1,scripts/check-cuda-reference.py,scripts/check-windows-applications.ps1,docs/cuda-validation.md $destination
+          Copy-Item scripts/check-cuda-hardware.ps1,scripts/check-cuda-reference.py,scripts/benchmark-gpu-concurrency.py,scripts/check-windows-applications.ps1,docs/cuda-validation.md,docs/discovery-concurrency.md $destination
           Copy-Item (Join-Path $env:RUNNER_TEMP 'cuda-policy-check.exe'),(Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe') $destination
           Copy-Item -Recurse Tests/LlamaRuntimeTests/Reference (Join-Path $destination 'Reference')
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -326,7 +326,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
           export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
-          swift test --filter 'AccelerationTests|ApplicationStoreTests|WindowsSettingsStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|WorkerDeadlineTests'
+          swift test --filter 'AccelerationTests|ApplicationStoreTests|WindowsSettingsStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|WorkerDeadlineTests|IndexConcurrencyTests|LongFilesTests'
           cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked

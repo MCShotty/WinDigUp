@@ -135,8 +135,9 @@ window.ActivityUI = (() => {
       inference.verified?.build_identity ? `Native build: ${inference.verified.build_identity}` : "",
       inference.verified?.runtime_version ? `CUDA runtime API: ${inference.verified.runtime_version}; driver API: ${inference.verified.driver_version || "unknown"}` : "",
       snapshot.windowsSettings?.catalog ? `Windows settings: ${number(snapshot.windowsSettings.catalog.count)} destinations; ${snapshot.windowsSettings.purpose?.state||"names ready"}` : "",
-      snapshot.discovery?.supported ? `Drive discovery: ${snapshot.discovery.progress?.phase||"unknown"}; ${number(snapshot.discovery.progress?.records)} records; ${number(snapshot.discovery.progress?.candidates)} candidates; ${number(snapshot.discovery.progress?.accepted)} accepted` : "",
+      snapshot.discovery?.supported && snapshot.discovery.version!==2 ? `Drive discovery: ${snapshot.discovery.progress?.phase||"unknown"}; ${number(snapshot.discovery.progress?.records)} records; ${number(snapshot.discovery.progress?.candidates)} candidates; ${number(snapshot.discovery.progress?.accepted)} accepted` : "",
       snapshot.enrichment ? `Online descriptions: ${snapshot.enrichment.options?.enabled?"on":"off"}; ${number(snapshot.enrichment.progress?.enriched)} apps enhanced; ${snapshot.enrichment.progress?.message||""}` : "",
+      snapshot.discovery?.version===2 ? PipelineUI.summary(snapshot.discovery) : "",
       `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`,
       snapshot.search?.last ? `Last search (${snapshot.search.last.phase}): ${Math.round(snapshot.search.last.total||0)} ms input to render; ${searchBreakdown(snapshot.search.last)}` : ""].filter(Boolean).join("\n");
   }
@@ -177,10 +178,10 @@ window.ActivityUI = (() => {
           <section class="activity-section" data-key="apps-section"><h3>Applications</h3><dl>
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
-          <section class="activity-section" data-key="discovery-section" hidden><h3>Additional search sources</h3>
-            <p data-key="settings-status"></p><p data-key="drive-status"></p><p data-key="description-status"></p>
+          <section class="activity-section" data-key="discovery-section" hidden><h3>Application sources</h3>
+            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Application source settings</button>
             <p data-key="discovery-note" class="activity-muted"></p></section>
-          <section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
+          <section class="activity-section" data-key="gpu-work"></section><section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
             <p data-key="runtime" class="activity-muted" hidden></p>
             <p data-key="verification" class="activity-verification"></p></section>
@@ -207,6 +208,9 @@ window.ActivityUI = (() => {
           <button data-key="diagnostics" type="button">Open diagnostics</button></div><div data-key="message" role="status" class="activity-muted"></div>
         <span data-key="announcement" class="visually-hidden" role="status" aria-live="polite"></span>`;
       this.get = key => host.querySelector(`[data-key="${key}"]`);
+      this.driveList=new PipelineUI.DriveList(this.get("drive-list"));
+      this.inferenceView=new PipelineUI.InferenceView(this.get("gpu-work"));
+      this.get("source-settings").onclick=()=>options.onSettings ? options.onSettings("apps") : invoke("open_settings",{tab:"apps"});
       this.get("close").hidden = !options.onClose;
       this.get("close").onclick = () => options.onClose?.();
       const prefix=`activity-view-${++viewId}`;
@@ -336,8 +340,12 @@ window.ActivityUI = (() => {
       const driveStatus=!drive.options?.enabled?"Drive discovery off":`${dp.phase||"Waiting"}${dp.records!=null?` · ${number(dp.records)} records checked`:""}${dp.candidates!=null?` · ${number(dp.candidates)} executable candidates`:""}${dp.accepted!=null?` · ${number(dp.accepted)} accepted`:""}`;
       const descriptionStatus=`${enrichment.options?.enabled?(ep.state||"Waiting"):"Online descriptions off"}${ep.enriched!=null?` · ${number(ep.enriched)} apps enhanced`:""}`;
       this.get("discovery-section").hidden=this.get("discovery-health").hidden=!drive.supported;
-      put("settings-status",settingsStatus);put("drive-status",driveStatus);put("description-status",descriptionStatus);
-      put("health-settings",settingsStatus);put("health-drives",driveStatus);put("health-descriptions",descriptionStatus);
+      this.driveList.update(drive);this.get("drive-list").hidden=drive.version!==2;
+      this.inferenceView.update(inference);
+      const driveSummary=drive.version===2 ? (!drive.options?.enabled ? "Drive discovery off" :
+        PipelineUI.entries(drive).length+" selected drives"+(drive.running?" · Discovery running":"")) : driveStatus;
+      put("settings-status",settingsStatus);put("drive-status",driveSummary);put("description-status",descriptionStatus);
+      put("health-settings",settingsStatus);put("health-drives",driveSummary);put("health-descriptions",descriptionStatus);
       put("discovery-note",[dp.message,ep.message,settings.purpose?.message,dp.mode==="directory"?"Using directory fallback. Fast NTFS discovery is optional in Apps settings.":""].filter(Boolean).join(" · "));
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
       put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),
@@ -348,7 +356,7 @@ window.ActivityUI = (() => {
       this.get("prepare").disabled = Boolean(this.busy) || !catalog.enabled || !catalog.semanticEnabled || inference.model?.state !== "ready" || complete;
       this.get("prepare").hidden = catalog.supported === false;
       this.renderEvents(snapshot.events || []);
-      const phaseSignature=JSON.stringify([f.phase,drive.supported?dp.phase:null,drive.supported?ep.state:null]);
+      const phaseSignature=JSON.stringify([f.phase,drive.supported?dp.phase:null,drive.supported?ep.state:null,...PipelineUI.entries(drive).map(item=>item.progress.phase)]);
       if(this.lastPhase!==phaseSignature){this.lastPhase=phaseSignature;put("announcement",title+(drive.supported?` · Drive discovery ${dp.phase||"off"} · Online descriptions ${ep.state||"off"}`:""));}
     }
     renderEvents(events) {

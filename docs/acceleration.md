@@ -138,3 +138,11 @@ folder on upgrades and reports a runtime-in-use error rather than mixing old and
 Physical CUDA execution, full-model parity, throughput, memory requirements and purpose relevance require the
 hardware acceptance procedure in [CUDA validation](cuda-validation.md). Compilation and mocked-device tests are
 not hardware validation. RTX 20-series is the required minimum-generation acceptance target.
+
+## GPU work limits
+
+General settings offers Automatic or 1, 2, or 3 GPU jobs through Apply and Restart. CUDA and non-NVIDIA Vulkan use
+shared per-device admission, foreground priority, and memory checks before creating extra model owners. Automatic
+means an upper bound of three, not a measured threefold speedup. OpenVINO and Metal retain their current ownership.
+The CLI equivalent is `DIGUP_GPU_JOBS=0|1|2|3`. This does not change vector compatibility or permit another adapter,
+backend, CPU arithmetic, or a weaker CUDA precision profile. See [concurrency contracts and hardware checks](discovery-concurrency.md).

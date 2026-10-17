@@ -10,6 +10,7 @@ pub struct Acceleration {
     pub version: u32,
     pub backend: String,
     pub gpu: String,
+    pub jobs: u8,
     pub python: String,
     pub models: String,
     pub selection_required: bool,
@@ -23,7 +24,7 @@ pub struct Acceleration {
 impl Default for Acceleration {
     fn default() -> Self {
         Self { version: SCHEMA, backend: if cfg!(target_os = "macos") { "metal" } else { "vulkan" }.into(),
-            gpu: String::new(), python: String::new(), models: String::new(), selection_required: false,
+            gpu: String::new(), jobs:0, python: String::new(), models: String::new(), selection_required: false,
             discovery_pending: !cfg!(target_os = "macos"), discovery_error: None, legacy_vulkan_automatic: false, migration_notice: None }
     }
 }
@@ -60,6 +61,7 @@ impl Acceleration {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.jobs>3{return Err("Concurrent GPU jobs must be automatic, 1, 2, or 3.".into())}
         if self.version > SCHEMA { return Err("These accelerator settings require a newer DigUp.".into()); }
         if self.backend == "nvidia-vulkan" {
             return Err("NVIDIA Vulkan has been removed. Select NVIDIA CUDA for RTX 20-series and newer.".into());
@@ -89,7 +91,7 @@ impl Acceleration {
     }
 
     pub fn environment(&self) -> Vec<(String, String)> {
-        vec![("DIGUP_ACCELERATOR".into(), self.backend.clone()), ("DIGUP_GPU".into(), self.gpu.clone()),
+        vec![("DIGUP_GPU_JOBS".into(),self.jobs.to_string()),("DIGUP_ACCELERATOR".into(), self.backend.clone()), ("DIGUP_GPU".into(), self.gpu.clone()),
             ("DIGUP_OPENVINO_PYTHON".into(), self.python.clone()), ("DIGUP_OPENVINO_MODELS".into(), self.models.clone()),
             ("DIGUP_GPU_SELECTION_REQUIRED".into(), if self.selection_required { "1" } else { "0" }.into()),
             ("DIGUP_ACCELERATOR_DISCOVERY_PENDING".into(), if self.discovery_pending { "1" } else { "0" }.into()),

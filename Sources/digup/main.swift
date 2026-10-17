@@ -54,7 +54,8 @@ let usage = """
 
     The model: EmbeddingGemma 2 on llama.cpp, from $DIGUP_MODELS (only there, when set), else
     ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_ACCELERATOR chooses vulkan,
-    amd-vulkan, nvidia-cuda or openvino-npu. CPU inference and unverified worker overrides are disabled.
+    amd-vulkan, nvidia-cuda or openvino-npu. DIGUP_GPU_JOBS is 0 (automatic), 1, 2, or 3.
+    CPU inference and unverified worker overrides are disabled.
     """
 
 struct CLIError: Error, CustomStringConvertible {
@@ -69,7 +70,7 @@ struct Arguments {
     var flags: Set<String> = []
     static let valued: Set<String> = ["--index", "--limit", "--kind", "-n", "--zgate", "--word-weight", "--new-limit",
                                       "--linger", "--shot-tokens", "--code-stretch", "--encoder-idle", "--to",
-                                      "--memory-limit", "--time-limit", "--tries", "--when-quiet"]
+                                      "--memory-limit", "--time-limit", "--tries", "--when-quiet", "--worker-log"]
     static let repeated: Set<String> = ["--exclude", "--exclude-ext", "--code-root", "--code-exclude"]
 
     init(_ raw: ArraySlice<String>) throws {
@@ -211,6 +212,19 @@ func skippedLine(_ skipped: [String: Int]) -> String {
 
 // MARK: Commands
 
+private final class WorkerLogs: @unchecked Sendable {
+    private let lock=NSLock()
+    private let base:URL
+    private var number=0
+    init(_ base:URL){self.base=base}
+    func next()->URL{
+        lock.withLock{
+            number+=1
+            return number==1 ? base : base.deletingPathExtension().appendingPathExtension("gpu-\(number).log")
+        }
+    }
+}
+
 /// Strict GPU llama.cpp, or the worker that verifies every OpenVINO graph on Intel NPU.
 func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) throws -> any Embedder {
     try FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -224,7 +238,43 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
         }
         return worker
     }
-    return try LlamaEmbedder(models: try LlamaModels.locate(), textOnly: textOnly, log: log)
+    #if !os(macOS)
+    let command=CommandLine.arguments.dropFirst().first ?? ""
+    if !textOnly && command != "worker" {
+        let selected=try LlamaEmbedder.verifyDevice()
+        let maximum=selected.stableID.isEmpty ? 1 : GPUAdmission.configuredMaximum
+        let executable=Bundle.main.executableURL ?? URL(fileURLWithPath:CommandLine.arguments[0])
+        let raw=CommandLine.arguments
+        let custom=raw.indices.first(where:{raw[$0]=="--index" && $0+1<raw.count}).map{raw[$0+1]}
+        let base=custom.map{URL(fileURLWithPath:$0)} ?? AppPaths.defaultIndex
+        var config=WorkerConfig.helper(executable)
+        config.arguments += ["--index",base.path]
+        config.environment["DIGUP_GPU"]=selected.stableID.isEmpty ? selected.id : selected.stableID
+        config.log=log
+        config.qos=qos
+        config.startupTimeout=180
+        config.requestTimeout=180
+        if command=="index-service" {
+            config.onInferenceActivity={activity in emitInference(activity)}
+        }
+        let workerConfig=config
+        let logs=WorkerLogs(log)
+        let pool=try EmbeddingPool(maximum:maximum){
+            var next=workerConfig
+            next.log=logs.next()
+            next.arguments += ["--worker-log",next.log!.path]
+            return try EmbeddingWorker(next,textOnly:false)
+        }
+        if command=="index-service"{pool.onCapacity={emitInference($0)}}
+        return pool
+    }
+    #endif
+    let callback:(@Sendable (InferenceActivity)->Void)? = CommandLine.arguments.dropFirst().first=="worker" ? { @Sendable activity in emitInference(activity) } : nil
+    let model=try LlamaEmbedder(models:try LlamaModels.locate(),textOnly:textOnly,log:log,onActivity:callback)
+    if CommandLine.arguments.dropFirst().first=="worker" {
+        model.onInferenceActivity={activity in emitInference(activity)}
+    }
+    return model
 }
 
 /// `makeEmbedder`'s vector source when it's known without starting it: llama.cpp's always is.

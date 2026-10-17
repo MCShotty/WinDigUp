@@ -15,12 +15,8 @@ import WinSDK
 ///   stdout: {"event": "missing" | "pruned" | "sync" | "file" | "rest" | "summary" | "waiting" | "idle" | "error" |
 ///            "exit", ...}; events about the code index say "code": true
 ///
-/// The loop: sync, index what the sync just queued (if it's a few files: new files go first, on any power source),
-/// then the backfill if allowed; then the code index the same way (`--code-root`: its own sync, asked for with
-/// "sync code"; its folders are crawled with the first sync, so their counts show at once); then the rest of long
-/// files (`Indexer.finishLongFiles`) under the same rules. Between batches it yields to stop and to "backfill off" at
-/// once, and to a new sync once indexing has had about as long as the last sync took (`yieldAt`). When it's done it
-/// keeps a warm worker for `linger` seconds (screenshots come in bursts), then exits.
+/// New file/code demand uses bounded turns before optional backfill and long-file completion.
+/// Sync, stop, schedules, and foreground holds are checked between complete inference batches.
 ///
 /// Before the model has downloaded it only syncs (file names are searchable at once), says it's "waiting", and exits.
 /// Folders that aren't there (an unplugged drive) or can't be read are skipped, and what was indexed from them stays.
@@ -114,12 +110,12 @@ final class IndexService: @unchecked Sendable {
         Thread.detachNewThread { [self] in readCommands() }
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var codeCounted = code == nil
+        var preferCode=false
         while true {
             if lock.withLock({ () -> Bool in defer { syncRequested = false }; return syncRequested }) {
                 sync(main, into: &newFiles)
             }
-            // The code folders are crawled with the first sync, so their counts show from the start (a big first pass
-            // of the main index takes hours); their files are read once the main index has nothing waiting, below.
+            // Count code folders immediately; bounded turns keep new code from waiting behind the file backlog.
             if !codeCounted, let code {
                 codeCounted = true
                 if lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
@@ -132,18 +128,22 @@ final class IndexService: @unchecked Sendable {
                 emitCounts("waiting", ["for": "model"])
                 break
             }
+            if let code,!newCode.isEmpty && (preferCode || newFiles.isEmpty) {
+                guard run(code,only:newCode)else{break}
+                newCode=left(code,of:newCode);preferCode=false;continue
+            }
             if !newFiles.isEmpty {
                 guard run(main, only: newFiles) else { break }
                 newFiles = left(main, of: newFiles)
+                preferCode=true
                 continue
             }
             if (try? main.store.pendingCount()) ?? 0 > 0, lock.withLock({ backfillAllowed }) {
                 guard run(main, only: nil) else { break }
                 if lock.withLock({ syncRequested }) { continue }
             }
-            // The code index once the main one has nothing waiting: its own sync (code changes come in a while after
-            // they settle), what it just queued at once, the rest under the backfill's rules.
-            if let code, (try? main.store.pendingCount()) ?? 1 == 0 || !lock.withLock({ backfillAllowed }) {
+            // New code bypasses optional backfill; each turn returns to sync and foreground checks.
+            if let code {
                 if lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
                     sync(code, into: &newCode)
                 }
@@ -164,6 +164,7 @@ final class IndexService: @unchecked Sendable {
                 if lock.withLock({ syncRequested || codeSyncRequested }) { continue }
             }
             if code != nil, lock.withLock({ codeSyncRequested }) { continue }
+            if lock.withLock({backfillAllowed}),parts.contains(where:{((try? $0.store.pendingCount()) ?? 0)>0}){continue}
             emitCounts("idle")
             // Nothing warm to keep around: leave now. Else wait a little for more work.
             guard model.isRunning, waitForWork() else { break }
@@ -178,11 +179,9 @@ final class IndexService: @unchecked Sendable {
         model.close()
     }
 
-    /// New files a run stopped before (a sync or stop came first): kept for the next round. Done: anything still
-    /// pending joins the backfill.
+    /// Keep unfinished new demand across bounded turns, independent of optional backfill.
     private func left(_ part: Part, of files: Set<Int64>) -> Set<Int64> {
-        let yielded = lock.withLock { syncRequested || stopRequested || (part.code && codeSyncRequested) }
-        return yielded ? Set((try? part.store.pending(limit: nil, only: files).map(\.id)) ?? []) : []
+        Set((try? part.store.pending(limit:nil,only:files).map(\.id)) ?? [])
     }
 
     /// Scratch folders ($TMPDIR/DigUp-<pid>) of indexing processes that are gone (killed mid-batch).
@@ -261,12 +260,13 @@ final class IndexService: @unchecked Sendable {
         let started = Date()
         let isNew = ids != nil
         do {
-            let states = try part.indexer.run(only: ids, shouldStop: { [self] in
+            let states = try part.indexer.run(limit:24,only: ids, shouldStop: { [self] in
                 lock.withLock {
                     stopRequested || (!isNew && !backfillAllowed)
                         || Date() >= yieldAt && (syncRequested || part.code && codeSyncRequested)
                 }
-            }, onEvent: { event in
+            }, onEvent: { [self] event in
+                if event.note=="source_changed" {lock.withLock { if part.code {codeSyncRequested=true}else{syncRequested=true};yieldAt = .distantPast }}
                 emit(["event": "file", "new": isNew, "done": event.done, "total": event.total, "path": event.path,
                       "kind": event.kind.rawValue, "state": event.state, "seconds": event.seconds,
                       "note": event.note ?? "", "code": part.code])
@@ -292,7 +292,8 @@ final class IndexService: @unchecked Sendable {
                     stopRequested || !backfillAllowed
                         || Date() >= yieldAt && (syncRequested || codeSyncRequested && code != nil)
                 }
-            }, onStep: { step in
+            }, onStep: { [self] step in
+                if step.note=="source_changed" {lock.withLock {syncRequested=true;yieldAt = .distantPast}}
                 emit(["event": "rest", "done": step.done, "total": step.total, "files": step.files, "path": step.path,
                       "kind": step.kind.rawValue, "state": step.state, "seconds": step.seconds, "note": step.note ?? ""])
             })
@@ -333,7 +334,7 @@ final class IndexService: @unchecked Sendable {
                 case "stop": stopRequested = true
                 case "backfill on": backfillAllowed = true
                 case "backfill off": backfillAllowed = false
-                case "foreground": foregroundUntil = ProcessInfo.processInfo.systemUptime + 2
+                case "foreground": foregroundUntil = ProcessInfo.processInfo.systemUptime + 1
                 default: break
                 }
             }
@@ -368,8 +369,7 @@ final class IndexService: @unchecked Sendable {
     }
 }
 
-/// One model for both indexes, started when the first file needs it and closed when the helper is done. The indexers
-/// get it as an `Embedder` whose `close` leaves it be, since the other may be using it.
+/// Both indexes share one lazy provider, which can own a GPU worker pool. Only the service closes it.
 final class SharedEmbedder: @unchecked Sendable {
     var beforeInference: (() -> Void)?
     private let make: () throws -> any Embedder
@@ -391,7 +391,9 @@ final class SharedEmbedder: @unchecked Sendable {
         model = nil
     }
 
-    private final class Kept: Embedder {
+    private final class Kept: ParallelEmbedding, InferenceReporting {
+        var maximumParallelJobs: Int { (model as? any ParallelEmbedding)?.maximumParallelJobs ?? 1 }
+        var inferenceActivity: InferenceActivity? { (model as? any InferenceReporting)?.inferenceActivity }
         let model: any Embedder
         let before: (() -> Void)?
         init(_ model: any Embedder, _ before: (() -> Void)?) { self.model = model; self.before = before }
@@ -408,7 +410,12 @@ final class SharedEmbedder: @unchecked Sendable {
 /// One JSON object per line on stdout, written straight to the file descriptor (print() would buffer in a pipe).
 /// The app may be gone by now (it quit while this helper lingered): a closed pipe is an error to ignore here, not the
 /// exception that `write(_:)` raises, which used to crash the helper on its way out.
+private enum ProtocolOutput { static let lock=NSLock() }
+func emitInference(_ activity: InferenceActivity) {
+    guard let data=try? JSONEncoder().encode(activity),let fields=try? JSONSerialization.jsonObject(with:data) else{return}
+    emit(["event":"inference_activity","activity":fields])
+}
 func emit(_ fields: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) else { return }
-    try? FileHandle.standardOutput.write(contentsOf: data + [0x0A])
+    ProtocolOutput.lock.withLock { try? FileHandle.standardOutput.write(contentsOf: data + [0x0A]) }
 }

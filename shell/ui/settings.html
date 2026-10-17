@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="settings.css">
   <link rel="stylesheet" href="applications.css">
   <link rel="stylesheet" href="activity.css">
+  <link rel="stylesheet" href="appearance.css">
+  <link rel="stylesheet" href="pipeline.css">
+  <script src="appearance.js"></script>
 </head>
 <body>
   <nav class="tabs" id="tabs" role="tablist">
@@ -49,13 +52,16 @@
         </span>
       </label>
 
+      <label for="appearance">Appearance</label>
+      <select class="field" id="appearance"><option value="system">Follow Windows or system appearance</option><option value="light">Light</option><option value="dark">Dark</option></select>
+      <p id="appearance-message" class="note" role="status"></p>
       <h3>Model acceleration</h3>
       <label for="accelerator">Inference device</label>
       <select class="field" id="accelerator">
-        <option value="vulkan">Vulkan GPU — non-NVIDIA hardware</option>
-        <option value="amd-vulkan">AMD Vulkan — RDNA1 / RX 5000 and newer</option>
-        <option value="nvidia-cuda">NVIDIA CUDA — RTX 20-series and newer</option>
-        <option value="openvino-npu">Intel NPU — OpenVINO</option>
+        <option value="vulkan">Vulkan GPU · non-NVIDIA hardware</option>
+        <option value="amd-vulkan">AMD Vulkan · RDNA1 / RX 5000 and newer</option>
+        <option value="nvidia-cuda">NVIDIA CUDA · RTX 20-series and newer</option>
+        <option value="openvino-npu">Intel NPU · OpenVINO</option>
         <option value="metal">Apple Metal</option>
       </select>
       <div id="gpu-options">
@@ -64,6 +70,11 @@
         <datalist id="gpu-devices"></datalist>
         <button id="refresh-gpus" type="button">Refresh devices</button>
         <p id="gpu-discovery" class="note" role="status"></p>
+      </div>
+      <div id="gpu-jobs-control" class="gpu-jobs-control">
+        <label for="gpu-jobs">Concurrent GPU jobs</label>
+        <select id="gpu-jobs" class="field"><option value="0">Automatic, up to 3</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+        <p class="note">Text requests are batched automatically. Available GPU memory can reduce the effective limit. Activity shows worker states and any capacity restriction.</p>
       </div>
       <p id="accelerator-migration" class="note" role="status" hidden></p>
       <div id="npu-options" hidden>
@@ -182,6 +193,7 @@
           <label class="option"><input id="win-settings-purpose" type="checkbox"><span>Match settings by purpose on the selected accelerator</span></label>
           <label class="option"><input id="win-settings-ordinary" type="checkbox"><span>Show settings in ordinary searches</span></label>
           <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-prepare">Prepare settings purpose matching</button>
+          <p id="source-message-windows" class="source-message" role="status"></p>
         </details>
         <details class="source-section"><summary>Find applications on drives</summary>
           <p class="note">Discover unregistered desktop apps on selected drives. Windows shortcuts remain the preferred launch targets. Installers, internal helpers and uncertain executables stay in review.</p>
@@ -190,12 +202,13 @@
           <div id="drive-volumes" class="source-volumes" aria-label="Drives to scan"></div>
           <p id="drive-draft" class="note" role="status"></p>
           <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan drives</button></div>
-          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p>
+          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p><div id="drive-progress-list"></div>
           <button id="drive-install">Install or update fast NTFS discovery…</button>
           <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
           <label for="drive-filter">Review discovered executables</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
           <label for="drive-visibility">Candidates</label><select id="drive-visibility" class="field"><option value="review">Needs review</option><option value="accepted">Included</option><option value="hidden">Hidden</option><option value="excluded">Excluded</option><option value="all">All</option></select>
-          <div id="drive-candidates" aria-label="Discovered executable candidates"></div><button id="drive-more" hidden>Show more executables</button><p id="drive-count" class="note"></p>
+          <p id="drive-list-state" class="note" role="status"></p><button id="drive-retry-list" type="button" hidden>Retry catalog</button><div id="drive-candidates" aria-label="Discovered executable candidates"></div><button id="drive-more" hidden>Show more executables</button><p id="drive-count" class="note"></p>
+          <p id="source-message-discovery" class="source-message" role="status"></p>
         </details>
         <details class="source-section"><summary>Enhance app descriptions online</summary>
           <p class="note">Optional. Reads installed product IDs and versions through WinGet, then requests matching manifests from Microsoft's community catalog on GitHub. If allowed, it may fetch the publisher page listed there. Those services see the requested product and your IP address. Search queries, documents and local file paths are never sent.</p>
@@ -204,6 +217,7 @@
           <p class="note">Only exact product and publisher matches are used. Saved descriptions work offline. Your own purpose descriptions always take priority.</p>
           <p id="descriptions-status" class="note" aria-label="Description preparation"></p>
           <div class="apps-settings-actions"><button id="descriptions-refresh">Refresh descriptions</button><button id="descriptions-clear">Turn off and clear saved descriptions</button></div>
+          <p id="source-message-enrichment" class="source-message" role="status"></p>
         </details>
         <p id="source-message" class="note" role="status"></p><span id="sources-announcement" class="visually-hidden" role="status"></span>
       </div>
@@ -238,6 +252,7 @@
     <p class="note problem" id="problem" hidden></p>
   </main>
   <script src="shortcut.js"></script>
+  <script src="pipeline.js"></script>
   <script src="activity.js"></script>
   <script src="applications-settings.js"></script>
   <script src="discovery-settings.js"></script>

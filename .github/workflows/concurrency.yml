@@ -1,0 +1,92 @@
+name: Discovery and inference concurrency
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: concurrency-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Exercise native Windows admission and crash cleanup
+        shell: pwsh
+        run: |
+          cl.exe /nologo /W4 /std:c17 /I Sources/CGPUAdmission/include tests/native/admission-windows.c Sources/CGPUAdmission/lease.c "/Fe:$env:RUNNER_TEMP/admission-windows.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/admission-windows.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Record reference machine and storage fixture
+        shell: pwsh
+        run: |
+          $machine = [ordered]@{
+            os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber
+            cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors)
+            disks = @(Get-Disk | Select-Object Number, FriendlyName, BusType, Size)
+            commit = $env:GITHUB_SHA
+          }
+          $machine | ConvertTo-Json -Depth 5 | Tee-Object -FilePath reference-machine.json
+          cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml --lib discovery::benchmark::baseline -- --ignored --nocapture 2>&1 | Tee-Object -FilePath discovery-baseline.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: discovery-concurrency-measurements
+          path: |
+            reference-machine.json
+            discovery-baseline.txt
+
+  inference-contracts:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check physical-validation harness protocol without model inference
+        run: |
+          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py
+          python3 -m unittest discover -s tests/native -p 'test_worker_protocol.py'
+      - name: Build and run real admission and pool contracts without model weights
+        run: |
+          clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o
+          swiftc -swift-version 6 -I Sources/CGPUAdmission/include Sources/DigUpKit/GPUAdmission.swift Sources/DigUpKit/EmbeddingPool.swift Sources/DigUpKit/EmbeddingPlan.swift tests/native/inference-contracts.swift /tmp/digup-lease.o -o /tmp/digup-inference-contracts
+          /tmp/digup-inference-contracts
+
+  shared-engine:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Select an installed Swift 6.2 or newer toolchain
+        run: |
+          selected=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -print | sort | tail -1)
+          test -n "$selected"
+          echo "DEVELOPER_DIR=$selected/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$selected/Contents/Developer" xcrun swift --version
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: native-cache
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Build the pinned native runtime
+        id: native-build
+        run: bash scripts/build-llama.sh
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.native-build.outcome == 'success'
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Bounded worker startup and response deadlines
+        run: swift test --filter 'WorkerDeadlineTests'
+      - name: Storage, prepared inference and long-file contracts with synthetic embedders
+        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|LongFilesTests'

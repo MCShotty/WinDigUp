@@ -39,7 +39,7 @@ impl FileInfo {
 }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct VolumeInfo {pub id:String,pub name:String,pub paths:Vec<String>,pub filesystem:String,pub fixed:bool,pub available:bool}
+pub struct VolumeInfo {pub id:String,pub name:String,pub paths:Vec<String>,pub filesystem:String,pub fixed:bool,pub available:bool,#[serde(default)]pub topology:super::scheduler::Topology}
 pub fn volumes()->Vec<VolumeInfo>{
     struct ErrorMode(u32,bool);impl Drop for ErrorMode{fn drop(&mut self){if self.1{unsafe{SetThreadErrorMode(self.0,std::ptr::null_mut());}}}}
     let mut old_mode=0;let changed=unsafe{SetThreadErrorMode(0x8001,&mut old_mode)}!=0;let _mode=ErrorMode(old_mode,changed);
@@ -56,7 +56,7 @@ pub fn volumes()->Vec<VolumeInfo>{
             let available=unsafe{GetVolumeInformationW(wide(&id).as_ptr(),label.as_mut_ptr(),label.len()as u32,&mut serial,std::ptr::null_mut(),std::ptr::null_mut(),fs.as_mut_ptr(),fs.len()as u32)}!=0;
             let text=|v:&[u16]|String::from_utf16_lossy(&v[..v.iter().position(|c|*c==0).unwrap_or(v.len())]);
             let fixed=unsafe{GetDriveTypeW(wide(&id).as_ptr())}==3;
-            if !paths.is_empty(){results.push(VolumeInfo{id,name:text(&label),paths,filesystem:text(&fs),fixed,available});}
+            if !paths.is_empty(){results.push(VolumeInfo{id:id.clone(),name:text(&label),paths,filesystem:text(&fs),fixed,available,topology:topology(&id)});}
         }
         name.fill(0);if unsafe{FindNextVolumeW(handle,name.as_mut_ptr(),name.len()as u32)}==0{break}
     }
@@ -122,12 +122,8 @@ impl Volume {
         if unsafe{GetFileInformationByHandle(parent_handle.0,&mut parent_info)}==0{return None}
         Some(Record{id:record.id,parent:parent_info.id(),name,attributes:info.attrs,usn:record.usn,reason:0})
     }
-    pub fn disk_numbers(&self)->Vec<u32>{
-        let Ok(bytes)=self.ioctl(0x00560000,std::ptr::null(),0)else{return vec![]};
-        if bytes.len()<8{return vec![]}
-        let count=u32::from_le_bytes(bytes[..4].try_into().unwrap())as usize;
-        (0..count.min(128)).filter_map(|i|{let p=8+i*24;(p+4<=bytes.len()).then(||u32::from_le_bytes(bytes[p..p+4].try_into().unwrap()))}).collect()
-    }
+    pub fn disk_numbers(&self)->Vec<u32>{extents(self.handle.0).unwrap_or_default()}
+
 }
 pub fn file_info(path:&str)->Result<FileInfo,String>{
     let handle=unsafe{CreateFileW(wide(path).as_ptr(),0x80000000,7,std::ptr::null(),3,0x00200000,std::ptr::null_mut())};
@@ -226,4 +222,61 @@ pub fn directory_info(path:&str)->Result<FileInfo,String>{
     if unsafe{GetFileInformationByHandle(handle.0,&mut info)}==0{return Err(error())}
     if info.attrs&0x10==0||info.attrs&(0x400|0x1000)!=0{return Err("Application directory is redirected or offline.".into())}
     Ok(info)
+}
+
+fn extents(handle:HandleValue)->Option<Vec<u32>> {
+    let mut capacity=32usize;
+    loop {
+        let mut bytes=vec![0u8;capacity];let mut returned=0;
+        let ok=unsafe{DeviceIoControl(handle,0x00560000,std::ptr::null(),0,bytes.as_mut_ptr().cast(),
+            bytes.len()as u32,&mut returned,std::ptr::null_mut())}!=0;
+        if !ok {
+            let code=std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if ![122,234].contains(&code)||capacity>=65536{return None}
+            capacity=(capacity*2).min(65536);continue;
+        }
+        bytes.truncate((returned as usize).min(bytes.len()));
+        if bytes.len()<8{return None}
+        let count=u32::from_le_bytes(bytes[..4].try_into().ok()?)as usize;
+        if count==0||count>128||8usize.checked_add(count.checked_mul(24)?)?>bytes.len(){return None}
+        let mut disks:Vec<_>=(0..count).map(|index|u32::from_le_bytes(bytes[8+index*24..12+index*24].try_into().unwrap())).collect();
+        disks.sort_unstable();disks.dedup();return Some(disks);
+    }
+}
+fn storage_property(handle:HandleValue,property:u32)->Option<Vec<u8>> {
+    let request=[property,0,0];let mut bytes=vec![0u8;4096];let mut returned=0;
+    if unsafe{DeviceIoControl(handle,0x002d1400,request.as_ptr().cast(),12,bytes.as_mut_ptr().cast(),
+        bytes.len()as u32,&mut returned,std::ptr::null_mut())}==0{return None}
+    bytes.truncate((returned as usize).min(bytes.len()));Some(bytes)
+}
+pub fn topology(id:&str)->super::scheduler::Topology {
+    use super::scheduler::{Topology,MediaKind};
+    if !valid_volume(id){return Topology::default()}
+    let raw=unsafe{CreateFileW(wide(id.trim_end_matches('\\')).as_ptr(),0,7,std::ptr::null(),3,0,std::ptr::null_mut())};
+    if raw==INVALID{return Topology::default()}let volume=Handle(raw);
+    let Some(disks)=extents(volume.0)else{return Topology::default()};
+    if let Some(descriptor)=storage_property(volume.0,0).filter(|bytes|bytes.len()>=32){
+        let bus=u32::from_le_bytes(descriptor[28..32].try_into().unwrap());
+        if ![1,2,3,7,11,17,18,19].contains(&bus){return Topology::default()}
+        let media=match storage_property(volume.0,7).filter(|bytes|bytes.len()>=9){
+            Some(bytes)if bytes[8]==0=>MediaKind::Ssd,Some(_)=>MediaKind::Hdd,None=>MediaKind::Unknown,
+        };
+        return Topology{known:true,disks,media}
+    }
+    let mut media=MediaKind::Ssd;
+    for number in &disks {
+        let path=format!(r"\\.\PhysicalDrive{number}");
+        let raw=unsafe{CreateFileW(wide(&path).as_ptr(),0,7,std::ptr::null(),3,0,std::ptr::null_mut())};
+        if raw==INVALID{return Topology::default()}let disk=Handle(raw);
+        let Some(descriptor)=storage_property(disk.0,0)else{return Topology::default()};
+        if descriptor.len()<32{return Topology::default()}
+        let bus=u32::from_le_bytes(descriptor[28..32].try_into().unwrap());
+        if ![1,2,3,7,11,17,18,19].contains(&bus){return Topology::default()}
+        match storage_property(disk.0,7).filter(|bytes|bytes.len()>=9) {
+            Some(bytes)if bytes[8]==0=>{},
+            Some(_)=>media=MediaKind::Hdd,
+            None=>media=MediaKind::Unknown,
+        }
+    }
+    Topology{known:true,disks,media}
 }

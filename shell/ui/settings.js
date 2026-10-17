@@ -59,6 +59,7 @@ function renderGeneral() {
     gpuDrafts.set(displayedBackend, $("gpu-device").value);
     $("npu-python").value = acceleration.python || "";
     $("npu-models").value = acceleration.models || "";
+    $("gpu-jobs").value=String(acceleration.jobs||0);
   }
   $("accelerator").querySelector('option[value="metal"]').hidden = !/Mac/.test(navigator.platform);
   showAcceleratorOptions();
@@ -87,6 +88,7 @@ function showAcceleratorOptions() {
   const npu = $("accelerator").value === "openvino-npu";
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
+  $("gpu-jobs-control").hidden=npu||$("accelerator").value==="metal";
   $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
   renderGPUDevices();
 }
@@ -130,13 +132,13 @@ $("refresh-gpus").onclick = refreshGPUDevices;
 window.__TAURI__.event.listen("acceleration", ({ payload }) => {
   if (!accelerationDirty && info.shortcut) { info.acceleration = payload; renderGeneral(); }
 });
-for (const id of ["gpu-device", "npu-python", "npu-models"]) $(id).oninput = () => { accelerationDirty = true; };
+for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs"]) $(id).oninput = () => { accelerationDirty = true; };
 $("apply-accelerator").onclick = async () => {
   $("problem").hidden = true;
   $("apply-accelerator").disabled = true;
   try {
     await invoke("set_acceleration", { acceleration: {
-      backend: $("accelerator").value, gpu: $("gpu-device").value.trim(),
+      backend: $("accelerator").value, gpu: $("gpu-device").value.trim(), jobs:Number($("gpu-jobs").value),
       python: $("npu-python").value.trim(), models: $("npu-models").value.trim(),
     } });
   } catch (error) {

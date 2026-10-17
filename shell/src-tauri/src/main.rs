@@ -1319,6 +1319,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         "openAtLogin": shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false),
         "canOpenAtLogin": shell.opens_at_login(),
         "acceleration": settings.acceleration,
+        "appearance":settings.appearance,
         "centered": shell.settings.lock().unwrap().center_panel,
         // Windows' tray reports clicks (Linux's open the menu, a Mac's too).
         "canChooseTrayClick": cfg!(windows),
@@ -1424,7 +1425,7 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&shell.logs.join(name), 24_576)));
         }
         if let Some(index) = shell.index_folder() {
-            for name in ["worker.log", "worker-query.log"] {
+            for name in ["worker.log", "worker.gpu-2.log", "worker.gpu-3.log", "worker-query.log"] {
                 text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&index.join(name), 12_288)));
             }
         }
@@ -1702,6 +1703,21 @@ fn discover_initial_accelerator(app: &AppHandle, shell: &Arc<Shell>) {
         let _=app.emit("acceleration",shell.settings.lock().unwrap().acceleration.clone());
         changed(&app);
     });
+}
+
+#[tauri::command]
+fn appearance(shell:State<'_,Arc<Shell>>)->Value {
+    json!({"schemaVersion":1,"appearance":shell.settings.lock().unwrap().appearance})
+}
+#[tauri::command]
+fn set_appearance(app:AppHandle,shell:State<'_,Arc<Shell>>,appearance:settings::Appearance)->Result<Value,String>{
+    let mut current=shell.settings.lock().unwrap();let mut next=current.clone();
+    next.appearance=appearance;next.save(&shell.settings_path).map_err(|e|e.to_string())?;
+    *current=next;
+    let value=json!({"schemaVersion":1,"appearance":current.appearance});
+    drop(current);
+    let _=app.emit("appearance",&value);
+    Ok(value)
 }
 
 /// Applying an inference configuration restarts all helpers together so query and index vectors cannot mix runtimes.

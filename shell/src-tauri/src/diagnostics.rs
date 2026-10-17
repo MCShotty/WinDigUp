@@ -20,10 +20,32 @@ impl Diagnostics {
 
     pub fn record(&self, source: &str, event: Value) {
         let time = now();
-        let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress"));
+        let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress" | "inference_activity"));
         if event["event"] == "file" && matches!(event["state"].as_str(), Some("failed" | "error")) { important = true; }
         {
             let mut runtime = self.runtime.lock().unwrap();
+            if event["event"]=="inference_activity" && event["activity"]["schemaVersion"]==1 {
+                let value=&event["activity"];
+                if let Some(worker)=value["workerID"].as_i64() {
+                    let key=format!("{worker}");
+                    if !runtime["inferenceJobs"].is_object(){runtime["inferenceJobs"]=json!({});}
+                    let mut row=value.clone();row["source"]=json!(source);row["updatedAt"]=json!(time);
+                    if runtime["inferenceJobs"].as_object().unwrap().len()>=12 && runtime["inferenceJobs"].get(&key).is_none(){
+                        let oldest=runtime["inferenceJobs"].as_object().unwrap().iter()
+                            .min_by(|a,b|a.1["updatedAt"].as_f64().unwrap_or(0.0).total_cmp(&b.1["updatedAt"].as_f64().unwrap_or(0.0))).map(|(id,_)|id.clone());
+                        if let Some(oldest)=oldest{runtime["inferenceJobs"].as_object_mut().unwrap().remove(&oldest);}
+                    }
+                    runtime["inferenceJobs"][&key]=row;
+                    if value["phase"]=="limited"{runtime["inferenceCapacity"]=value.clone();runtime["inferenceCapacity"]["source"]=json!(source);}
+                }
+            }
+            if event["fatal"]==true || matches!(event["event"].as_str(),Some("exit"|"stopped"|"ended")) ||
+                event["event"]=="encoder" && matches!(event["state"].as_str(),Some("stopped"|"unavailable")){
+                if runtime["inferenceCapacity"]["source"]==source{runtime["inferenceCapacity"]=Value::Null;}
+                if let Some(jobs)=runtime["inferenceJobs"].as_object_mut(){
+                    for value in jobs.values_mut().filter(|v|v["source"]==source){value["phase"]=json!("stopped");value["activeJobs"]=Value::Null;}
+                }
+            }
             if source == "applications" {
                 runtime["applicationUpdatedAt"] = json!(time);
                 let state=json!({"state":event["state"],"encoder":event["encoder"],"message":event["message"]});
@@ -52,6 +74,7 @@ impl Diagnostics {
                 }
             }
         }
+        if event["event"]=="inference_activity" && event["activity"]["phase"]!="limited"{return}
         let entry = json!({"time": time, "source": source, "event": event});
         if important {
             let mut significant=self.significant.lock().unwrap();

@@ -3,8 +3,11 @@ use crate::{applications::{self,Catalog,Record,Target},discovery::{self,Candidat
 use serde_json::{json,Value};
 use std::{collections::HashSet,path::PathBuf,sync::{Arc,Mutex,RwLock,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 pub struct Manager {
+    configuring:Mutex<()>,last_notification:Mutex<Instant>,
     root:PathBuf,apps:Arc<Catalog>,options:RwLock<Options>,progress:RwLock<Value>,volumes:RwLock<Vec<Value>>,
     source_errors:RwLock<std::collections::BTreeMap<String,String>>,
+    by_volume:RwLock<std::collections::BTreeMap<String,Value>>,
+    #[cfg(windows)]metadata_gate:Arc<discovery::scheduler::Gate>,
     cancel:Mutex<Option<Arc<AtomicBool>>>,wake:AtomicBool,full:AtomicBool,running:AtomicBool,
     last_foreground:Mutex<Instant>,renewing:AtomicBool,
     #[cfg(windows)]metadata_pool:Mutex<Option<std::sync::mpsc::SyncSender<MetadataJob>>>,
@@ -16,8 +19,9 @@ pub struct Manager {
 impl Manager {
     pub fn new(root:PathBuf,options:Options,apps:Arc<Catalog>,notify:impl Fn(Value)+Send+Sync+'static)->Arc<Self>{
         let phase=if !options.enabled{"disabled"}else if options.paused{"paused"}else{"waiting"};
-        let manager=Arc::new(Self{root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
-            source_errors:RwLock::new(std::collections::BTreeMap::new()),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
+        let manager=Arc::new(Self{configuring:Mutex::new(()),last_notification:Mutex::new(Instant::now()-Duration::from_secs(1)),root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
+            source_errors:RwLock::new(std::collections::BTreeMap::new()),by_volume:RwLock::new(std::collections::BTreeMap::new()),
+            #[cfg(windows)]metadata_gate:discovery::scheduler::Gate::new(discovery::scheduler::Mode::Metadata),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
             running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
             renewing:AtomicBool::new(false),dirty_options:AtomicBool::new(true),failed:AtomicBool::new(false),
             #[cfg(windows)]metadata_pool:Mutex::new(None),
@@ -37,17 +41,28 @@ impl Manager {
     }
     pub fn root(&self)->PathBuf{self.root.clone()}
     pub fn info(&self)->Value{
-        json!({"version":1,"supported":cfg!(windows),"options":self.options.read().unwrap().clone(),
-            "progress":self.progress.read().unwrap().clone(),"volumes":self.volumes.read().unwrap().clone(),
+        json!({"version":2,"supported":cfg!(windows),"catalogEnabled":self.apps.enabled(),"options":self.options.read().unwrap().clone(),
+            "progress":self.progress.read().unwrap().clone(),"byVolume":self.by_volume.read().unwrap().clone(),"volumes":self.volumes.read().unwrap().clone(),
             "sourceErrors":self.source_errors.read().unwrap().clone(),"running":self.running.load(Ordering::SeqCst)})
     }
     fn update(&self,mut value:Value){
         let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
         value["capturedAt"]=json!(now);value["lastProgressAt"]=json!(now);
-        *self.progress.write().unwrap()=value;(self.notify)(self.info());
+        if let Some(volume)=value["volume"].as_str().map(str::to_owned){
+            let mut rows=self.by_volume.write().unwrap();
+            let mut row=rows.get(&volume).cloned().unwrap_or_else(||json!({}));
+            if let(Some(old),Some(next))=(row.as_object_mut(),value.as_object()){for(key,value)in next{old.insert(key.clone(),value.clone());}}
+            rows.insert(volume,row);
+        }
+        let urgent=matches!(value["phase"].as_str(),Some("failed"|"unavailable"|"paused"|"disabled"|"watching"));
+        *self.progress.write().unwrap()=value;
+        let send={let mut last=self.last_notification.lock().unwrap();if urgent||last.elapsed()>=Duration::from_millis(250){*last=Instant::now();true}else{false}};
+        if send{(self.notify)(self.info());}
     }
     pub fn configure(&self,options:Options){
-        self.stop();self.source_errors.write().unwrap().retain(|id,_|options.volumes.contains(id));
+        let _serial=self.configuring.lock().unwrap();
+        if options.revision<self.options.read().unwrap().revision{return}
+        self.stop();self.by_volume.write().unwrap().retain(|id,_|options.volumes.contains(id));self.source_errors.write().unwrap().retain(|id,_|options.volumes.contains(id));
         self.dirty_options.store(true,Ordering::SeqCst);*self.options.write().unwrap()=options;self.apply_sources();self.schedule(false);
     }
     pub fn stop(&self){if let Some(cancel)=self.cancel.lock().unwrap().as_ref(){cancel.store(true,Ordering::SeqCst);}}
@@ -121,103 +136,197 @@ impl Manager {
     }
     #[cfg(windows)]
     fn run_pass(self:&Arc<Self>,options:&Options,full:bool,requested:bool,cancel:Arc<AtomicBool>)->Result<(),String>{
-        use discovery::{store::CandidateStore,volume,ipc::Pipe};
+        use discovery::{store::CandidateStore,scheduler::{Gate,Mode,Resource}};
+        use std::{collections::BTreeMap,sync::mpsc};
         std::fs::create_dir_all(&self.root).map_err(|e|e.to_string())?;
         let db=CandidateStore::recovering(&self.root.join("discovery.sqlite"))?;
         if self.dirty_options.swap(false,Ordering::SeqCst){for volume in &options.volumes{db.set_revision(volume,"")?;}}
         self.publish_cached(&db,options)?;
-        let mut failures=vec![];
-        for selected in &options.volumes {
-            self.quiet(&cancel)?;
-            let volume=self.volumes.read().unwrap().iter().find(|v|v["id"]==selected.as_str()).cloned()
-                ;
-            let Some(volume)=volume else{
-                let message="This volume is disconnected or unavailable.".to_string();
-                self.source_errors.write().unwrap().insert(selected.clone(),message.clone());failures.push(message);
-                self.update(json!({"version":1,"phase":"unavailable","volume":selected,"message":"This volume is disconnected or unavailable.","total":null}));continue
-            };
-            if volume["filesystem"]!="NTFS" {
-                if requested||full||self.fallback_due(selected){
-                    match self.fallback(&db,selected,&volume,options,&cancel){
-                        Ok(())=>{self.source_errors.write().unwrap().remove(selected);},
-                        Err(error)=>{self.source_errors.write().unwrap().insert(selected.clone(),error.clone());failures.push(error);}
-                    }
-                }
-                continue;
-            }
-            let result=(||{
-                let pipe=Pipe::connect(cancel.clone())?;
-                pipe.send(&json!({"version":1,"op":"scan","volume":selected,"full":full,"knownRevision":db.revision(selected)?}))?;
-                let revision=format!("pass-{}",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
-                let mut seen=0;let mut finished=0;
-                let (results,received)=std::sync::mpsc::sync_channel(128);
-                let pool=self.metadata_sender();let job_options=Arc::new(options.clone());
-                let mut last_publish=Instant::now();
-                loop{
-                    self.quiet(&cancel)?;
-                    let response=pipe.receive()?;
-                    match response["kind"].as_str(){
-                        Some("progress")=>{
-                            let mut state=response.clone();state["volume"]=json!(selected);
-                            state["accepted"]=json!(self.apps.records().iter().filter(|r|r.source==Self::source(selected)).count());
-                            self.update(state);
-                        },
-                        Some("candidate")=>{
-                            let mut candidate:Candidate=serde_json::from_value(response["candidate"].clone()).map_err(|e|e.to_string())?;
-                            if !discovery::valid_candidate_id(&candidate.id)||candidate.file_id.len()!=32||!candidate.file_id.bytes().all(|b|b.is_ascii_hexdigit())||candidate.volume!=*selected
-                                ||candidate.path.len()>32768||!candidate.path.starts_with(selected){return Err("Invalid executable identity from the discovery service.".into())}
-                            Self::drain_metadata(&db,&received,&revision,&mut finished)?;
-                            let old=db.get(&candidate.id)?;
-                            let mut job=MetadataJob{wire:candidate,old,options:job_options.clone(),cancel:cancel.clone(),reply:results.clone()};
-                            let deadline=Instant::now()+Duration::from_secs(60);
-                            loop{
-                                self.quiet(&cancel)?;
-                                match pool.try_send(job){
-                                    Ok(())=>{seen+=1;break},
-                                    Err(std::sync::mpsc::TrySendError::Full(pending))=>{
-                                        job=pending;Self::drain_metadata(&db,&received,&revision,&mut finished)?;
-                                        if Instant::now()>=deadline{return Err("Executable metadata workers stopped making progress. Retry discovery explicitly.".into())}
-                                        std::thread::sleep(Duration::from_millis(10));
-                                    },
-                                    Err(_)=>return Err("Executable metadata workers stopped.".into()),
+        if let Ok(pipe)=discovery::ipc::Pipe::connect(cancel.clone()){
+            if pipe.send(&json!({"version":1,"op":"topology","volumes":options.volumes})).is_ok(){
+                if let Ok(reply)=pipe.receive(){
+                    if reply["version"]==1&&reply["kind"]=="topology"&&reply["schedulerVersion"]==1{
+                        if let Some(rows)=reply["volumes"].as_array(){
+                            let mut volumes=self.volumes.write().unwrap();
+                            for row in rows.iter().take(64){
+                                let Some(id)=row["id"].as_str()else{continue};
+                                if !options.volumes.iter().any(|selected|selected==id){continue}
+                                if let Ok(mut topology)=serde_json::from_value::<discovery::scheduler::Topology>(row["topology"].clone()){
+                                    if topology.disks.len()>128{continue}
+                                    topology.disks.sort_unstable();topology.disks.dedup();
+                                    if topology.disks.is_empty(){topology.known=false;}
+                                    if let Some(volume)=volumes.iter_mut().find(|value|value["id"]==id){
+                                        volume["topology"]=serde_json::to_value(topology).unwrap();volume["ntfsSchedulerReady"]=json!(true);
+                                    }
                                 }
                             }
-                            if last_publish.elapsed()>Duration::from_millis(500){self.publish_cached(&db,options)?;last_publish=Instant::now();}
-                        },
-                        Some("complete")=>{
-                            let deadline=Instant::now()+Duration::from_secs(60);
-                            while finished<seen{
-                                self.quiet(&cancel)?;
-                                Self::drain_metadata(&db,&received,&revision,&mut finished)?;
-                                if finished>=seen{break}
-                                if Instant::now()>=deadline{return Err("Executable metadata workers stopped making progress. Retry discovery explicitly.".into())}
-                                std::thread::sleep(Duration::from_millis(10));
-                            }
-                            if response["unchanged"]!=true{db.finish(selected,&revision)?;}
-                            db.set_revision(selected,response["revision"].as_str().unwrap_or_default())?;
-                            self.publish_cached(&db,options)?;
-                            self.update(json!({"version":1,"phase":"watching","volume":selected,"records":response["records"],
-                                "candidates":response["candidates"].as_u64().unwrap_or(seen),"accepted":self.apps.records().iter().filter(|r|r.source==Self::source(selected)).count(),
-                                "total":null,"revision":response["revision"],"mode":"ntfs"}));return Ok(())
-                        },
-                        Some("error")=>return Err(response["message"].as_str().unwrap_or("NTFS discovery failed.").into()),
-                        _=>return Err("Unexpected discovery response.".into()),
-                    }
-                }
-            })();
-            if result.is_ok(){self.source_errors.write().unwrap().remove(selected);}
-            if let Err(error)=result {
-                if cancel.load(Ordering::SeqCst){return Err(error)}
-                self.update(json!({"version":1,"phase":"waiting","volume":selected,"message":format!("{error} Using directory discovery."),"total":null}));
-                if requested||full||self.fallback_due(selected){
-                    match self.fallback(&db,selected,&volume,options,&cancel){
-                        Ok(())=>{self.source_errors.write().unwrap().remove(selected);},
-                        Err(error)=>{self.source_errors.write().unwrap().insert(selected.clone(),error.clone());failures.push(error);}
+                        }
                     }
                 }
             }
         }
-        if failures.is_empty(){Ok(())}else{Err(failures.join("; "))}
+        let gate=Gate::new(Mode::Scan);
+        let mut waiting=vec![];
+        let mut passes=BTreeMap::<String,Pass>::new();
+        let mut failures=vec![];
+        for selected in &options.volumes {
+            let volume=self.volumes.read().unwrap().iter().find(|v|v["id"]==selected.as_str()).cloned();
+            let Some(volume)=volume else{
+                let message="This volume is disconnected or unavailable.".to_string();
+                self.source_errors.write().unwrap().insert(selected.clone(),message.clone());failures.push(message.clone());
+                self.update(json!({"version":2,"phase":"unavailable","volume":selected,"message":message,"total":null}));continue
+            };
+            if (volume["filesystem"]!="NTFS"||volume["ntfsSchedulerReady"]!=true)&&!requested&&!full&&!self.fallback_due(selected){continue}
+            let topology=serde_json::from_value(volume["topology"].clone()).unwrap_or_default();
+            let ticket=gate.request(Resource{volume:selected.clone(),topology});
+            self.update(json!({"version":2,"phase":"waiting","volume":selected,"records":null,"candidates":null,
+                "message":"Waiting for discovery capacity on this physical disk.","total":null,"topology":volume["topology"],"timings":null,"serviceTimings":null,"metadataDone":null,"metadataQueued":null}));
+            waiting.push((selected.clone(),volume,ticket));
+        }
+        let (events,received)=mpsc::sync_channel::<ScanEvent>(128);
+        let (results,metadata)=mpsc::sync_channel::<MetadataResult>(128);
+        let pool=self.metadata_sender();let mut threads=vec![];
+        let job_options=Arc::new(options.clone());
+        let result=(||{
+            let mut last_publish=Instant::now();let mut dirty=false;
+            while !waiting.is_empty()||!passes.is_empty(){
+                self.quiet(&cancel)?;
+                let mut index=0;
+                while index<waiting.len(){
+                    let Some(lease)=waiting[index].2.try_start()else{index+=1;continue};
+                    let(selected,volume,_ticket)=waiting.remove(index);
+                    let revision=format!("pass-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+                    let known=db.revision(&selected)?;
+                    let topology=serde_json::from_value(volume["topology"].clone()).unwrap_or_default();
+                    passes.insert(selected.clone(),Pass{revision,seen:0,finished:0,complete:None,error:None,pending:vec![],
+                        timings:Default::default(),topology,_lease:lease});
+                    let sender=events.clone();let manager=self.clone();let cancel=cancel.clone();
+                    threads.push(std::thread::spawn(move||{
+                        let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||manager.stream_volume(&selected,&volume,full,&known,cancel,&sender)));
+                        match outcome{
+                            Ok(Ok(complete))=>{let _=sender.send(ScanEvent::Complete(selected,complete));},
+                            Ok(Err(message))=>{let _=sender.send(ScanEvent::Failed(selected,message));},
+                            Err(_)=>{let _=sender.send(ScanEvent::Failed(selected,"The discovery worker stopped unexpectedly. Retry explicitly.".into()));}
+                        }
+                    }));
+                }
+                dirty|=Self::drain_metadata(&db,&metadata,&mut passes)?;
+                match received.recv_timeout(Duration::from_millis(20)){
+                    Ok(ScanEvent::Progress(id,mut state))=>{
+                        state["volume"]=json!(id);state["version"]=json!(2);
+                        if let Some(timings)=state.get("timings").cloned(){state["serviceTimings"]=timings;state.as_object_mut().unwrap().remove("timings");}
+                        if let Some(pass)=passes.get(&id){state["timings"]=serde_json::to_value(&pass.timings).unwrap();}
+                        self.update(state);
+                    },
+                    Ok(ScanEvent::Candidate(id,candidate))=>{
+                        let old=db.get(&candidate.id)?;
+                        let pass=passes.get_mut(&id).ok_or("Discovery returned an obsolete volume.")?;
+                        pass.seen+=1;
+                        let mut job=MetadataJob{wire:candidate,old,options:job_options.clone(),cancel:cancel.clone(),
+                            topology:pass.topology.clone(),enqueued:Instant::now(),reply:results.clone()};
+                        let mut progress=Instant::now();
+                        loop{
+                            self.quiet(&cancel)?;
+                            match pool.try_send(job){
+                                Ok(())=>break,
+                                Err(mpsc::TrySendError::Full(pending))=>{
+                                    job=pending;
+                                    if Self::drain_metadata(&db,&metadata,&mut passes)?{dirty=true;progress=Instant::now();}
+                                    if progress.elapsed()>Duration::from_secs(60){return Err("Executable metadata workers stopped making progress. Retry explicitly.".into())}
+                                    std::thread::sleep(Duration::from_millis(5));
+                                },
+                                Err(_)=>return Err("Executable metadata workers stopped.".into())
+                            }
+                        }
+                    },
+                    Ok(ScanEvent::Complete(id,value))=>{if let Some(pass)=passes.get_mut(&id){pass.complete=Some(value);}},
+                    Ok(ScanEvent::Failed(id,message))=>{if let Some(pass)=passes.get_mut(&id){pass.error=Some(message);pass.complete=Some(json!({"partial":true}));}},
+                    Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                    Err(_)=>return Err("Discovery workers stopped.".into())
+                }
+                let finished:Vec<_>=passes.iter().filter(|(_,pass)|pass.complete.is_some()&&pass.finished==pass.seen).map(|(id,_)|id.clone()).collect();
+                for id in finished{
+                    let mut pass=passes.remove(&id).unwrap();
+                    Self::flush_metadata(&db,&mut pass)?;
+                    let complete=pass.complete.as_ref().unwrap();
+                    if let Some(message)=pass.error{
+                        self.source_errors.write().unwrap().insert(id.clone(),message.clone());failures.push(message.clone());
+                        self.update(json!({"version":2,"phase":"failed","volume":id,"message":message,"total":null,"timings":pass.timings}));
+                    }else{
+                        let measured=Instant::now();
+                        if complete["unchanged"]!=true&&complete["partial"]!=true{db.finish(&id,&pass.revision)?;}
+                        if let Some(revision)=complete["revision"].as_str(){db.set_revision(&id,revision)?;}
+                        pass.timings.record("databaseCommit",measured,0);
+                        self.source_errors.write().unwrap().remove(&id);
+                        self.update(json!({"version":2,"phase":"watching","volume":id,"message":null,"records":complete["records"],
+                            "candidates":complete["candidates"].as_u64().unwrap_or(pass.seen),"accepted":db.accepted_for(&id)?.len(),
+                            "skipped":complete["skipped"],"partial":complete["partial"],"mode":complete["mode"],
+                            "total":null,"timings":pass.timings,"serviceTimings":complete["timings"]}));
+                    }
+                    dirty=true;
+                }
+                if dirty&&last_publish.elapsed()>=Duration::from_millis(500){
+                    for pass in passes.values_mut(){Self::flush_metadata(&db,pass)?;}
+                    let measured=Instant::now();self.publish_cached(&db,options)?;
+                    for (id,pass) in &mut passes{
+                        pass.timings.record("catalogPublication",measured,0);
+                        let phase=if pass.complete.is_some(){"metadata"}else{
+                            let rows=self.by_volume.read().unwrap();
+                            match rows.get(id).and_then(|row|row["phase"].as_str()){
+                                Some("resolving")=>"resolving",Some("reconciling")=>"reconciling",_=>"enumerating"
+                            }
+                        };
+                        self.update(json!({"version":2,"phase":phase,"volume":id,"timings":pass.timings,
+                            "metadataDone":pass.finished,"metadataQueued":pass.seen,"accepted":db.accepted_for(id)?.len(),"total":null}));
+                    }
+                    dirty=false;last_publish=Instant::now();
+                }
+            }
+            self.publish_cached(&db,options)?;
+            if failures.is_empty(){Ok(())}else{Err(failures.join("; "))}
+        })();
+        if let Err(message)=&result{if !cancel.load(Ordering::SeqCst){
+            self.failed.store(true,Ordering::SeqCst);
+            for id in passes.keys(){self.source_errors.write().unwrap().insert(id.clone(),message.clone());self.update(json!({"version":2,"volume":id,"phase":"failed","message":message,"total":null}));}
+            self.update(json!({"version":2,"phase":"failed","message":message,"total":null}));
+            cancel.store(true,Ordering::SeqCst);
+        }}
+        drop(received);
+        for thread in threads{let _=thread.join();}
+        result
+    }
+    #[cfg(windows)]
+    fn stream_volume(self:&Arc<Self>,id:&str,volume:&Value,full:bool,known:&str,cancel:Arc<AtomicBool>,
+        events:&std::sync::mpsc::SyncSender<ScanEvent>)->Result<Value,String>{
+        if volume["filesystem"]=="NTFS"&&volume["ntfsSchedulerReady"]==true{
+            let result=(||{
+                let pipe=discovery::ipc::Pipe::connect(cancel.clone())?;
+                pipe.send(&json!({"version":1,"op":"scan","volume":id,"full":full,"knownRevision":known}))?;
+                loop{
+                    self.quiet(&cancel)?;
+                    let response=pipe.receive()?;
+                    match response["kind"].as_str(){
+                        Some("progress")=>events.send(ScanEvent::Progress(id.into(),response)).map_err(|_|"Discovery cancelled.")?,
+                        Some("candidate")=>{
+                            let candidate:Candidate=serde_json::from_value(response["candidate"].clone()).map_err(|e|e.to_string())?;
+                            if !discovery::valid_candidate_id(&candidate.id)||candidate.file_id.len()!=32||
+                                !candidate.file_id.bytes().all(|b|b.is_ascii_hexdigit())||candidate.volume!=id||
+                                candidate.path.len()>32768||!candidate.path.starts_with(id){return Err("Invalid executable identity from the discovery service.".into())}
+                            events.send(ScanEvent::Candidate(id.into(),candidate)).map_err(|_|"Discovery cancelled.")?;
+                        },
+                        Some("complete")=>{let mut response=response;response["mode"]=json!("ntfs");return Ok(response)},
+                        Some("error")=>return Err(response["message"].as_str().unwrap_or("NTFS discovery failed.").to_string()),
+                        _=>return Err("Unexpected discovery response.".into())
+                    }
+                }
+            })();
+            match result{
+                Ok(value)=>return Ok(value),
+                Err(error)if cancel.load(Ordering::SeqCst)=>return Err(error),
+                Err(error)=>{events.send(ScanEvent::Progress(id.into(),json!({"phase":"waiting","message":format!("{error} Using directory discovery."),"total":null}))).map_err(|_|"Discovery cancelled.")?;}
+            }
+        }
+        self.fallback(id,volume,&cancel,events)
     }
     #[cfg(windows)]
     fn fallback_due(&self,id:&str)->bool{self.last_fallback.lock().unwrap().get(id).is_none_or(|last|last.elapsed()>Duration::from_secs(300))}
@@ -229,61 +338,60 @@ impl Manager {
     }
     #[cfg(windows)]
     fn publish_cached(&self,db:&discovery::store::CandidateStore,options:&Options)->Result<(),String>{
+        let accepted=db.accepted()?;
         for volume in &options.volumes{
-            let mut records=vec![];
-            for candidate in db.accepted()?.into_iter().filter(|c|&c.volume==volume&&!options.hidden.contains(&c.id)){
+            let records=accepted.iter().filter(|c|&c.volume==volume&&!options.hidden.contains(&c.id)).map(|candidate|{
                 let directory=std::path::Path::new(&candidate.path).parent().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default();
                 let mut record=Record::new(format!("discovered:{}",candidate.id),candidate.name.clone(),&Self::source(volume),
                     Target::Executable{path:candidate.path.clone(),working_directory:directory.clone()});
-                record.publisher=candidate.publisher;record.description=candidate.description;record.product=candidate.product;
-                record.executable=candidate.path;record.working_directory=directory;record.icon_revision=candidate.file_stamp;
-                record.launch_key=candidate.launch_key;
-                records.push(record);
-            }
+                record.publisher=candidate.publisher.clone();record.description=candidate.description.clone();record.product=candidate.product.clone();
+                record.executable=candidate.path.clone();record.working_directory=directory;record.icon_revision=candidate.file_stamp.clone();
+                record.launch_key=candidate.launch_key.clone();record
+            }).collect();
             self.apps.publish_discovery(&Self::source(volume),records,true);
         }
         Ok(())
     }
     #[cfg(windows)]
-    fn fallback(&self,db:&discovery::store::CandidateStore,id:&str,volume:&Value,options:&Options,cancel:&AtomicBool)->Result<(),String>{
+    fn fallback(&self,id:&str,volume:&Value,cancel:&AtomicBool,events:&std::sync::mpsc::SyncSender<ScanEvent>)->Result<Value,String>{
         use discovery::volume as fs;
         use std::os::windows::fs::MetadataExt;
         self.last_fallback.lock().unwrap().insert(id.into(),Instant::now());
         let root=volume["paths"].as_array().and_then(|p|p.first()).and_then(Value::as_str).ok_or("This volume has no usable mount point.")?;
         let mut stack=vec![std::fs::read_dir(root).map_err(|e|e.to_string())?];
-        let revision=format!("walk-{}",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
         let mut records=0u64;let mut skipped=0u64;let mut candidates=0u64;let mut last=Instant::now();
+        let mut timings=discovery::metrics::Timings::default();
         while !stack.is_empty(){
             self.quiet(cancel)?;
-            let Some(entry)=stack.last_mut().unwrap().next()else{stack.pop();continue};
+            let measured=Instant::now();
+            let next=stack.last_mut().unwrap().next();
+            timings.record("enumeration",measured,u64::from(next.is_some()));
+            let Some(entry)=next else{stack.pop();continue};
             let entry=match entry{Ok(entry)=>entry,Err(_)=>{skipped+=1;continue}};
             records+=1;
             let metadata=match std::fs::symlink_metadata(entry.path()){Ok(m)=>m,Err(_)=>{skipped+=1;continue}};
-            if metadata.file_attributes()&(0x400|0x1000)!=0{continue}
+            if metadata.file_attributes()&0x1400!=0{continue}
             if metadata.is_dir(){
-                if stack.len()<256{match std::fs::read_dir(entry.path()){Ok(dir)=>stack.push(dir),Err(_)=>skipped+=1}}
+                if stack.len()>=256{skipped+=1;continue}
+                match std::fs::read_dir(entry.path()){Ok(dir)=>stack.push(dir),Err(_)=>skipped+=1}
             }else if metadata.is_file()&&entry.path().extension().is_some_and(|x|x.eq_ignore_ascii_case("exe")){
-                let path=entry.path().to_string_lossy().into_owned();
+                let measured=Instant::now();let path=entry.path().to_string_lossy().into_owned();
                 let Ok(info)=fs::file_info(&path)else{skipped+=1;continue};
                 let parent_path=entry.path().parent().unwrap().to_path_buf();
                 let Ok(parent)=fs::directory_info(&parent_path.to_string_lossy())else{skipped+=1;continue};
                 let identity=format!("{id}|{}|{}|{}|{}",info.serial(),info.id().text(),parent.id().text(),entry.file_name().to_string_lossy());
-                let mut candidate=Candidate{id:format!("exe:{}",applications::digest(&identity)),
-                    volume:id.into(),file_id:info.id().text(),path:path.clone(),file_stamp:info.stamp(),..Candidate::default()};
-                let (portable,gui)=fs::pe_info(&entry.path()).unwrap_or((false,false));
-                let (product,publisher,description)=fs::metadata(&path);candidate.name=if product.is_empty(){entry.path().file_stem().unwrap_or_default().to_string_lossy().into_owned()}else{product.clone()};
-                candidate.product=product;candidate.publisher=publisher;candidate.description=description;candidate.portable=portable;candidate.gui=gui;
-                candidate.launch_key=fs::launch_key(&candidate.path,"",&entry.path().parent().unwrap().to_string_lossy()).unwrap_or_default();
-                Self::options_on_candidate(&mut candidate,options);db.save(&candidate,&revision)?;candidates+=1;
+                let candidate=Candidate{id:format!("exe:{}",applications::digest(&identity)),
+                    volume:id.into(),file_id:info.id().text(),path,file_stamp:info.stamp(),..Candidate::default()};
+                timings.record("pathResolution",measured,1);
+                events.send(ScanEvent::Candidate(id.into(),candidate)).map_err(|_|"Discovery cancelled.")?;candidates+=1;
             }
-            if last.elapsed()>Duration::from_millis(500){self.update(json!({"version":1,"phase":"metadata","mode":"directory","volume":id,"records":records,
-                "candidates":candidates,"skipped":skipped,"total":null}));self.publish_cached(db,options)?;last=Instant::now();}
+            if last.elapsed()>Duration::from_millis(500){
+                events.send(ScanEvent::Progress(id.into(),json!({"version":2,"phase":"enumerating","mode":"directory",
+                    "records":records,"candidates":candidates,"skipped":skipped,"total":null,"timings":timings}))).map_err(|_|"Discovery cancelled.")?;
+                last=Instant::now();
+            }
         }
-        // A partial walk retains previous candidates; it is never interpreted as mass removal.
-        if skipped==0{db.finish(id,&revision)?;}
-        self.publish_cached(db,options)?;
-        self.update(json!({"version":1,"phase":"watching","mode":"directory","volume":id,"records":records,"candidates":candidates,
-            "skipped":skipped,"partial":skipped!=0,"total":null}));Ok(())
+        Ok(json!({"records":records,"candidates":candidates,"skipped":skipped,"partial":skipped!=0,"mode":"directory","timings":timings}))
     }
     #[cfg(windows)]
     fn install_watcher(self:&Arc<Self>,options:&Options){
@@ -326,19 +434,43 @@ impl Manager {
             std::thread::spawn(move||loop{
                 let job=match rx.lock().unwrap().recv(){Ok(job)=>job,Err(_)=>break};
                 let Some(manager)=manager.upgrade()else{break};
-                let result=manager.prepare_metadata(job.wire,job.old,&job.options,&job.cancel);
-                let _=job.reply.send(result);
+                let id=job.wire.volume.clone();
+                let ticket=manager.metadata_gate.request(discovery::scheduler::Resource{volume:id.clone(),topology:job.topology});
+                let result=ticket.wait(&job.cancel,Duration::from_secs(120));
+                let queued=job.enqueued.elapsed();
+                let started=Instant::now();
+                let candidate=match result{
+                    Ok(_lease)=>manager.prepare_metadata(job.wire,job.old,&job.options,&job.cancel),
+                    Err(error)=>Err(error)
+                };
+                let _=job.reply.send(MetadataResult{volume:id,candidate,elapsed:started.elapsed(),queued});
             });
         }
         *owner=Some(tx.clone());tx
     }
     #[cfg(windows)]
-    fn drain_metadata(db:&discovery::store::CandidateStore,received:&std::sync::mpsc::Receiver<Result<Candidate,String>>,
-        revision:&str,finished:&mut u64)->Result<(),String>{
+    fn drain_metadata(db:&discovery::store::CandidateStore,received:&std::sync::mpsc::Receiver<MetadataResult>,
+        passes:&mut std::collections::BTreeMap<String,Pass>)->Result<bool,String>{
+        let mut changed=false;
         while let Ok(result)=received.try_recv(){
-            let candidate=result?;db.save(&candidate,revision)?;*finished+=1;
+            let Some(pass)=passes.get_mut(&result.volume)else{continue};
+            pass.finished+=1;
+            pass.timings.stages.entry("metadataReads".into()).or_default().record(result.elapsed,1);
+            pass.timings.stages.entry("metadataQueue".into()).or_default().record(result.queued,1);
+            match result.candidate{
+                Ok(candidate)=>pass.pending.push(candidate),
+                Err(message)=>pass.error=Some(message)
+            }
+            if pass.pending.len()>=64{Self::flush_metadata(db,pass)?;}
+            changed=true;
         }
-        Ok(())
+        Ok(changed)
+    }
+    #[cfg(windows)]
+    fn flush_metadata(db:&discovery::store::CandidateStore,pass:&mut Pass)->Result<(),String>{
+        let measured=Instant::now();db.save_batch(&pass.pending,&pass.revision)?;
+        if !pass.pending.is_empty(){pass.timings.record("databaseCommit",measured,pass.pending.len()as u64);}
+        pass.pending.clear();Ok(())
     }
     #[cfg(windows)]
     fn prepare_metadata(&self,mut candidate:Candidate,old:Option<Candidate>,options:&Options,cancel:&AtomicBool)->Result<Candidate,String>{
@@ -376,5 +508,14 @@ impl Manager {
 #[cfg(windows)]
 struct MetadataJob{
     wire:Candidate,old:Option<Candidate>,options:Arc<Options>,cancel:Arc<AtomicBool>,
-    reply:std::sync::mpsc::SyncSender<Result<Candidate,String>>,
+    topology:discovery::scheduler::Topology,enqueued:Instant,reply:std::sync::mpsc::SyncSender<MetadataResult>,
+}
+#[cfg(windows)]
+struct MetadataResult{volume:String,candidate:Result<Candidate,String>,elapsed:Duration,queued:Duration}
+#[cfg(windows)]
+enum ScanEvent{Progress(String,Value),Candidate(String,Candidate),Complete(String,Value),Failed(String,String)}
+#[cfg(windows)]
+struct Pass{
+    revision:String,seen:u64,finished:u64,complete:Option<Value>,error:Option<String>,pending:Vec<Candidate>,
+    timings:discovery::metrics::Timings,topology:discovery::scheduler::Topology,_lease:discovery::scheduler::Lease,
 }

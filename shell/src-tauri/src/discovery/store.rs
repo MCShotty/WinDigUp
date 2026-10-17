@@ -2,7 +2,7 @@ use super::{db::{Database,Value},ntfs::{FileId,Record},Candidate};
 use std::path::Path;
 
 /// Durable per-volume inventory. Batch transactions are committed before a journal checkpoint advances.
-pub struct VolumeStore {pub db:Database}
+pub struct VolumeStore {pub db:Database,paths:std::cell::RefCell<std::collections::HashMap<String,String>>,path_bytes:std::cell::Cell<usize>}
 impl VolumeStore {
 
     pub fn recovering(path:&Path)->Result<Self,String>{
@@ -28,7 +28,7 @@ impl VolumeStore {
         db.run("CREATE TABLE IF NOT EXISTS pending_renames(file_id TEXT PRIMARY KEY,parent TEXT NOT NULL,name TEXT NOT NULL)",&[])?;
         db.run("CREATE INDEX IF NOT EXISTS launch_identity_names ON launch_links(identity)",&[])?;
         db.run("PRAGMA user_version=1",&[])?;
-        Ok(Self{db})
+        Ok(Self{db,paths:std::cell::RefCell::new(std::collections::HashMap::new()),path_bytes:std::cell::Cell::new(0)})
     }
     pub fn get(&self,key:&str)->Result<Option<String>,String>{
         Ok(self.db.rows("SELECT value FROM meta WHERE key=?",&[Value::Text(key)])?.first().and_then(|r|r.first()).cloned())
@@ -37,6 +37,7 @@ impl VolumeStore {
         self.db.run("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",&[Value::Text(key),Value::Text(value)])
     }
     pub fn clear(&self)->Result<(),String> {
+        self.paths.borrow_mut().clear();self.path_bytes.set(0);
         self.db.run("DELETE FROM nodes",&[])?;self.put("complete","false")
     }
     pub fn apply(&self,records:&[Record],deleted:bool)->Result<(),String> {
@@ -63,21 +64,35 @@ impl VolumeStore {
             }
             self.db.run("COMMIT",&[])
         })();
-        if result.is_err(){let _=self.db.run("ROLLBACK",&[]);}result
+        if result.is_err(){let _=self.db.run("ROLLBACK",&[]);}
+        self.paths.borrow_mut().clear();self.path_bytes.set(0);result
     }
     pub fn path(&self,id:&str,volume:&str,root:&str)->Result<Option<String>,String> {
+        let key=format!("{volume}|{root}|{id}");
+        if let Some(path)=self.paths.borrow().get(&key){return Ok(Some(path.clone()))}
         let mut current=id.to_string();let mut names=vec![];let mut seen=std::collections::HashSet::new();
-        for _ in 0..256 {
-            if current==root {names.reverse();return Ok(Some(format!("{}{}",volume,names.join("\\"))))}
-            if !seen.insert(current.clone()){return Ok(None)}
+        let resolved=loop {
+            if current==root {names.reverse();break Some(format!("{}{}",volume,names.join("\\")))}
+            if names.len()>=256||!seen.insert(current.clone()){break None}
+            let prefix_key=format!("{volume}|{root}|{current}");
+            if let Some(prefix)=self.paths.borrow().get(&prefix_key).cloned(){
+                names.reverse();break Some(format!("{}\\{}",prefix,names.join("\\")));
+            }
             let rows=self.db.rows("SELECT parent,name,attrs FROM nodes WHERE id=?",&[Value::Text(&current)])?;
-            let Some(row)=rows.first()else{return Ok(None)};
+            let Some(row)=rows.first()else{break None};
             let attrs=row[2].parse::<u32>().unwrap_or(0);
-            // Never traverse reparse points into another namespace or hydrate placeholders.
-            if attrs&0x400!=0||attrs&0x1000!=0||row[1]=="."||row[1]==".." {return Ok(None)}
+            // Protected graph paths never cross reparse points or offline placeholders.
+            if attrs&0x1400!=0||row[1]=="."||row[1]==".."{break None}
             names.push(row[1].clone());current=row[0].clone();
+        };
+        if let Some(path)=&resolved {
+            let bytes=key.len()+path.len();
+            if self.path_bytes.get()+bytes>8*1024*1024||self.paths.borrow().len()>=4096 {
+                self.paths.borrow_mut().clear();self.path_bytes.set(0);
+            }
+            self.paths.borrow_mut().insert(key,path.clone());self.path_bytes.set(self.path_bytes.get()+bytes);
         }
-        Ok(None)
+        Ok(resolved)
     }
     pub fn launch_identity(&self,volume:&str,file:&str,parent:&str,name:&str)->Result<String,String>{
         if let Some(row)=self.db.rows("SELECT identity FROM launch_links WHERE file_id=? AND parent=? AND name=?",
@@ -128,6 +143,13 @@ impl CandidateStore {
         self.db.run("INSERT INTO candidates VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,record=excluded.record,classification=excluded.classification,name=excluded.name",
             &[Value::Text(&record.id),Value::Text(&record.volume),Value::Text(revision),Value::Text(&json),Value::Text(&record.classification),Value::Text(&record.name)])
     }
+    pub fn save_batch(&self,records:&[Candidate],revision:&str)->Result<(),String> {
+        if records.is_empty(){return Ok(())}
+        if records.len()>256{return Err("Executable commit batch is too large.".into())}
+        self.db.run("BEGIN IMMEDIATE",&[])?;
+        let result=(||{for record in records{self.save(record,revision)?;}self.db.run("COMMIT",&[])})();
+        if result.is_err(){let _=self.db.run("ROLLBACK",&[]);}result
+    }
     pub fn finish(&self,volume:&str,revision:&str)->Result<(),String> {
         self.db.run("DELETE FROM candidates WHERE volume=? AND revision!=?",&[Value::Text(volume),Value::Text(revision)])
     }
@@ -153,6 +175,10 @@ impl CandidateStore {
             &[Value::Text(&pattern),Value::Text(classification),Value::Text(classification),Value::Integer(limit.clamp(1,100)as i64),Value::Integer(offset.min(1_000_000)as i64)])?
             .into_iter().map(|r|serde_json::from_str(&r[0]).map_err(|e|e.to_string())).collect::<Result<Vec<_>,_>>()?;
         Ok((records,total))
+    }
+    pub fn accepted_for(&self,volume:&str)->Result<Vec<Candidate>,String>{
+        self.db.rows("SELECT record FROM candidates WHERE classification='accepted' AND volume=? ORDER BY id",&[Value::Text(volume)])?
+            .into_iter().map(|r|serde_json::from_str(&r[0]).map_err(|e|e.to_string())).collect()
     }
     pub fn accepted(&self)->Result<Vec<Candidate>,String> {
         self.db.rows("SELECT record FROM candidates WHERE classification='accepted' ORDER BY id",&[])?
