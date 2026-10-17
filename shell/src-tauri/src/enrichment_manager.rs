@@ -100,7 +100,7 @@ impl Manager {
                     let job=match jobs.lock().unwrap().recv(){Ok(job)=>job,Err(_)=>break};
                     let Some(manager)=manager.upgrade()else{break};
                     if manager.cancel.load(Ordering::SeqCst){break}
-                    let result=if manager.options.read().unwrap().enabled&&manager.apps.enabled(){enrichment::fetch_package_with_policy(&job.0,job.1,&||manager.options.read().unwrap().enabled&&manager.apps.enabled()&&!manager.cancel.load(Ordering::SeqCst))}
+                    let result=if manager.options.read().unwrap().enabled&&manager.apps.enabled(){enrichment::fetch_package_with_policies(&job.0,job.1,&||manager.options.read().unwrap().enabled&&manager.apps.enabled()&&!manager.cancel.load(Ordering::SeqCst),&||manager.options.read().unwrap().publisher_pages)}
                         else{Err("Online descriptions are disabled.".into())};
                     let _=done.send((job.0,result,job.2));
                 });

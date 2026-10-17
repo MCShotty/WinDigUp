@@ -20,7 +20,8 @@ permissions:
 
 concurrency:
   group: packages-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Finish a running installer build; retain only the latest pending commit.
+  cancel-in-progress: false
 
 jobs:
   linux:

@@ -469,7 +469,7 @@ impl Catalog {
     pub fn enrich(&self,descriptions:BTreeMap<String,enrichment::Description>){
         *self.enrichment.write().unwrap()=descriptions;self.rebuild();(self.notify)(self.info());
     }
-    pub fn enriched_count(&self)->usize{let descriptions=self.enrichment.read().unwrap();self.snapshot.read().unwrap().hits.iter().filter(|h|!h.hidden&&descriptions.contains_key(&h.id)).count()}
+    pub fn enriched_count(&self)->usize{self.snapshot.read().unwrap().hits.iter().filter(|h|!h.hidden&&h.description_source.is_some()).count()}
     pub fn description_source(&self,id:&str)->Option<String>{self.enrichment.read().unwrap().get(id).map(|d|d.url.clone())}
     pub fn start(self: &Arc<Self>) {
         #[cfg(all(windows, not(test)))]
@@ -694,7 +694,7 @@ mod tests {
         options.overrides.insert(id.clone(),Override{purpose:"My custom purpose".into(),..Default::default()});
         c.configure(options);
         let hit=c.search("Editor",false).remove(0);assert_eq!(hit.description,"My custom purpose");
-        assert!(hit.description_source.is_none());assert!(!hit.keywords.contains("portrait"));
+        assert!(hit.description_source.is_none());assert!(!hit.keywords.contains("portrait"));assert_eq!(c.enriched_count(),0);
         let _=std::fs::remove_dir_all(root);
     }
     #[test]

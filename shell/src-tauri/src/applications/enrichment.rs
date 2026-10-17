@@ -154,6 +154,13 @@ pub fn fetch_package(package:&Package,publisher_pages:bool)->Result<Description,
     fetch_package_with_policy(package,publisher_pages,&||true)
 }
 pub fn fetch_package_with_policy(package:&Package,publisher_pages:bool,permitted:&dyn Fn()->bool)->Result<Description,String>{
+    fetch_package_with_policies(package,publisher_pages,permitted,&||true)
+}
+pub fn fetch_package_with_policies(package:&Package,publisher_pages:bool,permitted:&dyn Fn()->bool,publisher_allowed:&dyn Fn()->bool)->Result<Description,String>{
+    fetch_package_using(package,publisher_pages,permitted,publisher_allowed,&fetch)
+}
+fn fetch_package_using(package:&Package,publisher_pages:bool,permitted:&dyn Fn()->bool,publisher_allowed:&dyn Fn()->bool,
+    fetcher:&dyn Fn(&str)->Result<(String,String),String>)->Result<Description,String>{
     if !permitted(){return Err("Online descriptions are disabled.".into())}
     if !valid_package(&package.id,&package.version){return Err("Invalid product identity.".into())}
     let mut base=Url::parse("https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/").unwrap();
@@ -161,16 +168,16 @@ pub fn fetch_package_with_policy(package:&Package,publisher_pages:bool,permitted
         segments.pop_if_empty().push(&package.id[..1].to_ascii_lowercase());
         for part in package.id.split('.'){segments.push(part);}segments.push(&package.version);}
     let first=format!("{}/{}.yaml",base.as_str().trim_end_matches('/'),package.id);
-    let (text,mut source)=fetch(&first)?;let mut doc=yaml(&text)?;
+    let (text,mut source)=fetcher(&first)?;let mut doc=yaml(&text)?;
     if let Some(locale)=doc["DefaultLocale"].as_str(){
         if locale.len()>32||!locale.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'){return Err("Invalid manifest locale.".into())}
         let locale_url=format!("{}/{}.locale.{}.yaml",base.as_str().trim_end_matches('/'),package.id,locale);
         if !permitted(){return Err("Online descriptions are disabled.".into())}
-        let(text,url)=fetch(&locale_url)?;doc=yaml(&text)?;source=url;
+        let(text,url)=fetcher(&locale_url)?;doc=yaml(&text)?;source=url;
     }
     let mut result=manifest(&doc,package,&source)?;
-    if permitted()&&result.description.chars().count()<40&&publisher_pages&&!result.product_url.is_empty(){
-        if let Ok((html,url))=fetch(&result.product_url){
+    if permitted()&&result.description.chars().count()<40&&publisher_pages&&publisher_allowed()&&!result.product_url.is_empty(){
+        if let Ok((html,url))=fetcher(&result.product_url){
             if let Some(text)=publisher_description(&html){
                 result.description=text;result.source="Publisher".into();result.url=url;
             }
@@ -214,6 +221,20 @@ pub fn now()->u64{std::time::SystemTime::now().duration_since(std::time::UNIX_EP
         let export=serde_json::json!({"Sources":[{"SourceDetails":{"Identifier":"custom","Argument":"https://example.com"},"Packages":[{"PackageIdentifier":"Example.Editor","Version":"1.2.3"}]}]});
         assert!(parse_export(&serde_json::to_vec(&export).unwrap()).unwrap().is_empty());
         assert!(!valid_package("Example.Editor/../run","1"));
+    }
+    #[test]fn publisher_opt_out_during_manifest_fetch_prevents_the_next_request(){
+        use std::cell::Cell;
+        let allowed=Cell::new(true);let requests=Cell::new(0);
+        let package=Package{id:"Example.Editor".into(),version:"1.2.3".into()};
+        let fetcher=|url:&str|{
+            requests.set(requests.get()+1);
+            if requests.get()==1{return Ok(("DefaultLocale: en-US".into(),url.into()))}
+            assert_eq!(requests.get(),2,"Publisher request started after its permission was removed");
+            allowed.set(false);
+            Ok(("PackageIdentifier: Example.Editor\nPackageVersion: 1.2.3\nPackageName: Photo Editor\nPublisher: Example\nShortDescription: Edit photographs\nPackageUrl: https://example.com/product\n".into(),url.into()))
+        };
+        let description=fetch_package_using(&package,true,&||true,&||allowed.get(),&fetcher).unwrap();
+        assert_eq!(requests.get(),2);assert_eq!(description.source,"WinGet");
     }
     #[test]fn publisher_html_is_data_and_decodes_entities(){
         let html=r#"<html><head><meta name="description" content="Edit photos &amp; retouch portraits."></head><script>throw new Error('must not execute')</script></html>"#;
