@@ -18,7 +18,7 @@ jobs:
         run: |
           Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors | ConvertTo-Json > reference-machine.json
           Get-Disk | Select-Object Number, FriendlyName, BusType, Size | ConvertTo-Json >> reference-machine.json
-          cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml discovery::benchmark::baseline -- --ignored --nocapture 2>&1 | Tee-Object -FilePath discovery-baseline.txt
+          cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml --lib discovery::benchmark::baseline -- --ignored --nocapture 2>&1 | Tee-Object -FilePath discovery-baseline.txt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
@@ -42,6 +42,12 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Select an installed Swift 6.2 or newer toolchain
+        run: |
+          selected=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -print | sort | tail -1)
+          test -n "$selected"
+          echo "DEVELOPER_DIR=$selected/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$selected/Contents/Developer" xcrun swift --version
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |

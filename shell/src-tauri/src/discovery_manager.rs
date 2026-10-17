@@ -3,6 +3,7 @@ use crate::{applications::{self,Catalog,Record,Target},discovery::{self,Candidat
 use serde_json::{json,Value};
 use std::{collections::HashSet,path::PathBuf,sync::{Arc,Mutex,RwLock,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 pub struct Manager {
+    configuring:Mutex<()>,last_notification:Mutex<Instant>,
     root:PathBuf,apps:Arc<Catalog>,options:RwLock<Options>,progress:RwLock<Value>,volumes:RwLock<Vec<Value>>,
     source_errors:RwLock<std::collections::BTreeMap<String,String>>,
     by_volume:RwLock<std::collections::BTreeMap<String,Value>>,
@@ -18,7 +19,7 @@ pub struct Manager {
 impl Manager {
     pub fn new(root:PathBuf,options:Options,apps:Arc<Catalog>,notify:impl Fn(Value)+Send+Sync+'static)->Arc<Self>{
         let phase=if !options.enabled{"disabled"}else if options.paused{"paused"}else{"waiting"};
-        let manager=Arc::new(Self{root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
+        let manager=Arc::new(Self{configuring:Mutex::new(()),last_notification:Mutex::new(Instant::now()-Duration::from_secs(1)),root,apps,options:RwLock::new(options),progress:RwLock::new(json!({"version":1,"phase":phase,"total":null})),
             source_errors:RwLock::new(std::collections::BTreeMap::new()),by_volume:RwLock::new(std::collections::BTreeMap::new()),
             #[cfg(windows)]metadata_gate:discovery::scheduler::Gate::new(discovery::scheduler::Mode::Metadata),volumes:RwLock::new(vec![]),cancel:Mutex::new(None),wake:AtomicBool::new(true),full:AtomicBool::new(false),
             running:AtomicBool::new(false),last_foreground:Mutex::new(Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or_else(Instant::now)),
@@ -53,9 +54,14 @@ impl Manager {
             if let(Some(old),Some(next))=(row.as_object_mut(),value.as_object()){for(key,value)in next{old.insert(key.clone(),value.clone());}}
             rows.insert(volume,row);
         }
-        *self.progress.write().unwrap()=value;(self.notify)(self.info());
+        let urgent=matches!(value["phase"].as_str(),Some("failed"|"unavailable"|"paused"|"disabled"|"watching"));
+        *self.progress.write().unwrap()=value;
+        let send={let mut last=self.last_notification.lock().unwrap();if urgent||last.elapsed()>=Duration::from_millis(250){*last=Instant::now();true}else{false}};
+        if send{(self.notify)(self.info());}
     }
     pub fn configure(&self,options:Options){
+        let _serial=self.configuring.lock().unwrap();
+        if options.revision<self.options.read().unwrap().revision{return}
         self.stop();self.by_volume.write().unwrap().retain(|id,_|options.volumes.contains(id));self.source_errors.write().unwrap().retain(|id,_|options.volumes.contains(id));
         self.dirty_options.store(true,Ordering::SeqCst);*self.options.write().unwrap()=options;self.apply_sources();self.schedule(false);
     }
@@ -151,7 +157,7 @@ impl Manager {
             let topology=serde_json::from_value(volume["topology"].clone()).unwrap_or_default();
             let ticket=gate.request(Resource{volume:selected.clone(),topology});
             self.update(json!({"version":2,"phase":"waiting","volume":selected,"records":null,"candidates":null,
-                "message":"Waiting for discovery capacity on this physical disk.","total":null,"topology":volume["topology"]}));
+                "message":"Waiting for discovery capacity on this physical disk.","total":null,"topology":volume["topology"],"timings":null,"serviceTimings":null,"metadataDone":null,"metadataQueued":null}));
             waiting.push((selected.clone(),volume,ticket));
         }
         let (events,received)=mpsc::sync_channel::<ScanEvent>(128);
@@ -194,7 +200,7 @@ impl Manager {
                         let pass=passes.get_mut(&id).ok_or("Discovery returned an obsolete volume.")?;
                         pass.seen+=1;
                         let mut job=MetadataJob{wire:candidate,old,options:job_options.clone(),cancel:cancel.clone(),
-                            topology:pass.topology.clone(),reply:results.clone()};
+                            topology:pass.topology.clone(),enqueued:Instant::now(),reply:results.clone()};
                         let mut progress=Instant::now();
                         loop{
                             self.quiet(&cancel)?;
@@ -252,6 +258,7 @@ impl Manager {
         })();
         if let Err(message)=&result{if !cancel.load(Ordering::SeqCst){
             self.failed.store(true,Ordering::SeqCst);
+            for id in passes.keys(){self.source_errors.write().unwrap().insert(id.clone(),message.clone());self.update(json!({"version":2,"volume":id,"phase":"failed","message":message,"total":null}));}
             self.update(json!({"version":2,"phase":"failed","message":message,"total":null}));
             cancel.store(true,Ordering::SeqCst);
         }}
@@ -401,12 +408,13 @@ impl Manager {
                 let id=job.wire.volume.clone();
                 let ticket=manager.metadata_gate.request(discovery::scheduler::Resource{volume:id.clone(),topology:job.topology});
                 let result=ticket.wait(&job.cancel,Duration::from_secs(120));
+                let queued=job.enqueued.elapsed();
                 let started=Instant::now();
                 let candidate=match result{
                     Ok(_lease)=>manager.prepare_metadata(job.wire,job.old,&job.options,&job.cancel),
                     Err(error)=>Err(error)
                 };
-                let _=job.reply.send(MetadataResult{volume:id,candidate,elapsed:started.elapsed()});
+                let _=job.reply.send(MetadataResult{volume:id,candidate,elapsed:started.elapsed(),queued});
             });
         }
         *owner=Some(tx.clone());tx
@@ -419,6 +427,7 @@ impl Manager {
             let Some(pass)=passes.get_mut(&result.volume)else{continue};
             pass.finished+=1;
             pass.timings.stages.entry("metadataReads".into()).or_default().record(result.elapsed,1);
+            pass.timings.stages.entry("metadataQueue".into()).or_default().record(result.queued,1);
             match result.candidate{
                 Ok(candidate)=>pass.pending.push(candidate),
                 Err(message)=>pass.error=Some(message)
@@ -470,10 +479,10 @@ impl Manager {
 #[cfg(windows)]
 struct MetadataJob{
     wire:Candidate,old:Option<Candidate>,options:Arc<Options>,cancel:Arc<AtomicBool>,
-    topology:discovery::scheduler::Topology,reply:std::sync::mpsc::SyncSender<MetadataResult>,
+    topology:discovery::scheduler::Topology,enqueued:Instant,reply:std::sync::mpsc::SyncSender<MetadataResult>,
 }
 #[cfg(windows)]
-struct MetadataResult{volume:String,candidate:Result<Candidate,String>,elapsed:Duration}
+struct MetadataResult{volume:String,candidate:Result<Candidate,String>,elapsed:Duration,queued:Duration}
 #[cfg(windows)]
 enum ScanEvent{Progress(String,Value),Candidate(String,Candidate),Complete(String,Value),Failed(String,String)}
 #[cfg(windows)]

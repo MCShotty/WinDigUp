@@ -56,7 +56,7 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
     private var position: llama_pos = 0
 
     /// `textOnly`: just the text model (queries). `log`: where llama.cpp's warnings and errors go (stderr when nil).
-    public init(models: LlamaModels, textOnly: Bool, log: URL? = nil) throws {
+    public init(models: LlamaModels, textOnly: Bool, log: URL? = nil, onActivity: (@Sendable (InferenceActivity)->Void)? = nil) throws {
         let started = Date()
         LlamaLog.shared.send(to: log)
         let acceleration = try Acceleration.selected()
@@ -73,13 +73,14 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
         let stable = deviceInfo.map { $0.stableID.isEmpty ? $0.id : $0.stableID } ?? "unknown"
         let gate = coordinated ? try GPUAdmission(identity: acceleration.registry + "|" + stable) : nil
         self.admission = gate
+        gate?.onActivity=onActivity
         let startup = try gate?.request(profile: textOnly ? "text512" : "multimodal2048",
             foreground: textOnly && ProcessInfo.processInfo.environment["DIGUP_INFERENCE_PRIORITY"] == "foreground")
         defer { startup?.finish() }
         let loading = try gate?.loading()
         defer { loading?.release() }
         if let gate {
-            let (resident, others) = try gate.resident()
+            let (resident, others, queryResident) = try gate.resident(query:textOnly)
             self.residency = resident
             var free = 0, total = 0
             ggml_backend_dev_memory(device, &free, &total)
@@ -88,7 +89,8 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
                 sum + ((try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? 0)
             }
             let reserve = max(Int64(512 * 1024 * 1024), weights * 2) + 256 * 1024 * 1024
-            if (total == 0 && others > 0) || total > 0 && Int64(free) < reserve {
+                + (!textOnly && !queryResident ? 1024 * 1024 * 1024 : 0)
+            if ((total == 0 || free == 0) && others > 0) || total > 0 && free > 0 && Int64(free) < reserve {
                 throw WorkerError.failed((others > 0 ? "capacity_limited: " : "insufficient_vram: ") +
                     "Not enough verified free GPU memory for another model context. Existing workers stay on the selected GPU.")
             }

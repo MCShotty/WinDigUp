@@ -12,9 +12,12 @@ pub fn refresh_discovery(shell:State<'_,Arc<Shell>>,full:Option<bool>)->Value{
     shell.discovery.schedule(full.unwrap_or(false));shell.discovery.info()
 }
 #[tauri::command]
-pub fn set_discovery_options(shell:State<'_,Arc<Shell>>,options:Options)->Result<Value,String>{
+pub fn set_discovery_options(shell:State<'_,Arc<Shell>>,mut options:Options)->Result<Value,String>{
     options.validate()?;
-    let mut current=shell.settings.lock().unwrap();let mut next=current.clone();next.discovery=options.clone();
+    let mut current=shell.settings.lock().unwrap();let mut next=current.clone();
+    options.included=current.discovery.included.clone();options.hidden=current.discovery.hidden.clone();
+    options.revision=current.discovery.revision.checked_add(1).ok_or("Discovery settings revision overflowed.")?;
+    next.discovery=options.clone();
     next.save(&shell.settings_path).map_err(|e|e.to_string())?;*current=next;drop(current);
     shell.discovery.configure(options);Ok(shell.discovery.info())
 }
@@ -29,7 +32,8 @@ pub async fn discovery_candidates(shell:State<'_,Arc<Shell>>,q:Option<String>,cl
         if !file.is_file(){return Ok(json!({"hits":[],"total":0,"generation":generation}))}
         let db=CandidateStore::read(&file)?;
         let(hits,total)=db.list(&q,&classification,offset.unwrap_or(0),limit.unwrap_or(50))?;
-        Ok(json!({"hits":hits,"total":total,"generation":generation}))
+        let catalog_total=db.list("","all",0,1)?.1;
+        Ok(json!({"hits":hits,"total":total,"catalogTotal":catalog_total,"generation":generation}))
     }).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
@@ -43,6 +47,7 @@ pub async fn set_discovery_candidate(shell:State<'_,Arc<Shell>>,candidate_id:Str
     if action=="include"&&!candidate.portable{return Err("This file could not be identified as a Windows executable.".into())}
     let options={
         let mut current=shell.settings.lock().unwrap();let mut next=current.clone();
+        next.discovery.revision=next.discovery.revision.checked_add(1).ok_or("Discovery settings revision overflowed.")?;
         next.discovery.included.remove(&candidate_id);next.discovery.hidden.remove(&candidate_id);
         if action=="include"{next.discovery.included.insert(candidate_id);}
         else if action=="hide"{next.discovery.hidden.insert(candidate_id);}

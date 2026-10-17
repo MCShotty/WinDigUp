@@ -114,6 +114,7 @@ final class IndexService: @unchecked Sendable {
         Thread.detachNewThread { [self] in readCommands() }
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var codeCounted = code == nil
+        var preferCode=false
         while true {
             if lock.withLock({ () -> Bool in defer { syncRequested = false }; return syncRequested }) {
                 sync(main, into: &newFiles)
@@ -132,9 +133,14 @@ final class IndexService: @unchecked Sendable {
                 emitCounts("waiting", ["for": "model"])
                 break
             }
+            if let code,!newCode.isEmpty && (preferCode || newFiles.isEmpty) {
+                guard run(code,only:newCode)else{break}
+                newCode=left(code,of:newCode);preferCode=false;continue
+            }
             if !newFiles.isEmpty {
                 guard run(main, only: newFiles) else { break }
                 newFiles = left(main, of: newFiles)
+                preferCode=true
                 continue
             }
             if (try? main.store.pendingCount()) ?? 0 > 0, lock.withLock({ backfillAllowed }) {
@@ -143,7 +149,7 @@ final class IndexService: @unchecked Sendable {
             }
             // The code index once the main one has nothing waiting: its own sync (code changes come in a while after
             // they settle), what it just queued at once, the rest under the backfill's rules.
-            if let code, (try? main.store.pendingCount()) ?? 1 == 0 || !lock.withLock({ backfillAllowed }) {
+            if let code {
                 if lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
                     sync(code, into: &newCode)
                 }
@@ -164,6 +170,7 @@ final class IndexService: @unchecked Sendable {
                 if lock.withLock({ syncRequested || codeSyncRequested }) { continue }
             }
             if code != nil, lock.withLock({ codeSyncRequested }) { continue }
+            if lock.withLock({backfillAllowed}),parts.contains(where:{((try? $0.store.pendingCount()) ?? 0)>0}){continue}
             emitCounts("idle")
             // Nothing warm to keep around: leave now. Else wait a little for more work.
             guard model.isRunning, waitForWork() else { break }
@@ -181,8 +188,7 @@ final class IndexService: @unchecked Sendable {
     /// New files a run stopped before (a sync or stop came first): kept for the next round. Done: anything still
     /// pending joins the backfill.
     private func left(_ part: Part, of files: Set<Int64>) -> Set<Int64> {
-        let yielded = lock.withLock { syncRequested || stopRequested || (part.code && codeSyncRequested) }
-        return yielded ? Set((try? part.store.pending(limit: nil, only: files).map(\.id)) ?? []) : []
+        Set((try? part.store.pending(limit:nil,only:files).map(\.id)) ?? [])
     }
 
     /// Scratch folders ($TMPDIR/DigUp-<pid>) of indexing processes that are gone (killed mid-batch).
@@ -261,7 +267,7 @@ final class IndexService: @unchecked Sendable {
         let started = Date()
         let isNew = ids != nil
         do {
-            let states = try part.indexer.run(only: ids, shouldStop: { [self] in
+            let states = try part.indexer.run(limit:24,only: ids, shouldStop: { [self] in
                 lock.withLock {
                     stopRequested || (!isNew && !backfillAllowed)
                         || Date() >= yieldAt && (syncRequested || part.code && codeSyncRequested)

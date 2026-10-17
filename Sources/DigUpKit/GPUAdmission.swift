@@ -108,17 +108,19 @@ public final class GPUAdmission: @unchecked Sendable {
         }
         throw WorkerError.failed("Timed out waiting for the selected GPU. Check Activity and retry explicitly.")
     }
-    public func resident() throws -> (GPULease, Int) {
-        var available: [GPULease] = []
+    public func resident(query:Bool) throws -> (GPULease, Int, Bool) {
+        var available:[Int:GPULease]=[:]
         for slot in 0..<4 {
-            if let lease = Self.tryLease(directory.appendingPathComponent("resident-\(slot)")) { available.append(lease) }
+            if let lease=Self.tryLease(directory.appendingPathComponent("resident-\(slot)")){available[slot]=lease}
         }
-        let others = 4-available.count
-        guard let lease = available.popLast() else {
-            throw WorkerError.failed("capacity_limited: Four model workers are already resident on this GPU.")
+        let others=4-available.count
+        let queryResident=available[3]==nil
+        let preferred=query ? [3,0,1,2] : [0,1,2]
+        guard let number=preferred.first(where:{available[$0] != nil}),let lease=available.removeValue(forKey:number)else{
+            throw WorkerError.failed("capacity_limited: Model capacity is occupied on this GPU; a slot is reserved for foreground search.")
         }
-        available.forEach { $0.release() }
-        return (lease, others)
+        available.values.forEach{$0.release()}
+        return (lease,others,queryResident)
     }
     private func countActive() -> Int? {
         guard let admission = Self.tryLease(directory.appendingPathComponent("admission")) else { return nil }

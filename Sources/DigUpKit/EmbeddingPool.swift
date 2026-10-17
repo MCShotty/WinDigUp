@@ -14,6 +14,7 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
     private var stopped = false
     private var failure: String?
     private var capacityReason: String?
+    public var onCapacity: (@Sendable (InferenceActivity)->Void)?
     private let batches = DispatchQueue(label: "DigUp.text-batches", qos: .utility)
     private var texts: [TextCall] = []
     private var batchesRunning = 0
@@ -66,8 +67,13 @@ public final class EmbeddingPool: ParallelEmbedding, InferenceReporting, @unchec
                     if String(describing:error).contains("capacity_limited:") {
                         limit=max(1,slots.count+creating)
                         capacityReason=String(describing:error)
-                        changed.broadcast()
-                        continue
+                        var activity=InferenceActivity(configuredLimit:GPUAdmission.configuredMaximum,effectiveLimit:limit,
+                            activeJobs:nil,phase:"limited",profile:"multimodal2048")
+                        activity.residentWorkers=slots.count;activity.reason=capacityReason
+                        let callback=onCapacity
+                        changed.broadcast();changed.unlock()
+                        callback?(activity)
+                        changed.lock();continue
                     }
                     failure=String(describing:error);changed.broadcast();changed.unlock();throw error
                 }

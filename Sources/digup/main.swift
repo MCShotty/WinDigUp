@@ -54,7 +54,8 @@ let usage = """
 
     The model: EmbeddingGemma 2 on llama.cpp, from $DIGUP_MODELS (only there, when set), else
     ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_ACCELERATOR chooses vulkan,
-    amd-vulkan, nvidia-cuda or openvino-npu. CPU inference and unverified worker overrides are disabled.
+    amd-vulkan, nvidia-cuda or openvino-npu. DIGUP_GPU_JOBS is 0 (automatic), 1, 2, or 3.
+    CPU inference and unverified worker overrides are disabled.
     """
 
 struct CLIError: Error, CustomStringConvertible {
@@ -244,15 +245,18 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
             config.onInferenceActivity={activity in emitInference(activity)}
         }
         let workerConfig=config
-        return try EmbeddingPool(maximum:maximum){
+        let pool=try EmbeddingPool(maximum:maximum){
             var next=workerConfig
             next.log=log.deletingPathExtension().appendingPathExtension(UUID().uuidString+".log")
             next.arguments += ["--worker-log",next.log!.path]
             return try EmbeddingWorker(next,textOnly:false)
         }
+        if command=="index-service"{pool.onCapacity={emitInference($0)}}
+        return pool
     }
     #endif
-    let model=try LlamaEmbedder(models:try LlamaModels.locate(),textOnly:textOnly,log:log)
+    let callback:(@Sendable (InferenceActivity)->Void)? = CommandLine.arguments.dropFirst().first=="worker" ? {emitInference($0)} : nil
+    let model=try LlamaEmbedder(models:try LlamaModels.locate(),textOnly:textOnly,log:log,onActivity:callback)
     if CommandLine.arguments.dropFirst().first=="worker" {
         model.onInferenceActivity={activity in emitInference(activity)}
     }

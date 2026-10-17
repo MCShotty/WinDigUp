@@ -33,6 +33,14 @@ fn baseline() {
                 classification:"accepted".into(),..Candidate::default()},"fixture").unwrap();
         }
         report["candidateCommitMs"]=json!(started.elapsed().as_secs_f64()*1000.0);
+        let batched=CandidateStore::open(&root.join("batched-candidates.sqlite")).unwrap();
+        let values:Vec<_>=(0..2000).map(|number|Candidate{id:format!("exe:{number:064x}"),volume:"fixture".into(),
+            path:format!("V:\\Applications\\App {number}.exe"),name:format!("App {number}"),
+            classification:"accepted".into(),..Candidate::default()}).collect();
+        let started=Instant::now();
+        for records in values.chunks(64){batched.save_batch(records,"fixture").unwrap();}
+        report["batchedCandidateCommitMs"]=json!(started.elapsed().as_secs_f64()*1000.0);
+        assert_eq!(batched.accepted().unwrap().len(),2000);
         let started=Instant::now();
         assert_eq!(candidates.accepted().unwrap().len(),2000);
         report["catalogReadMs"]=json!(started.elapsed().as_secs_f64()*1000.0);
