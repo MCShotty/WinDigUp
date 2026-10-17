@@ -44,8 +44,17 @@ let browser;
           if (baseline) { const node=document.getElementById("panel"); if(node)node.style.height=args.height+"px"; }
           return {width:640,height:args.height,maxHeight:640,nativeSized:false};
         }
-        if (command === "window_info") return {...await old(command,args),
+        if (command === "window_info") return {...await old(command,args),...options.debug,
           search:options.handoff || window.handoff,applications:{supported:true,enabled:true,semanticEnabled:true,mixedSearch:"smart"}};
+        if (command === "search_apps" && options.discoveryPending && args.q === "Delayed fixture") {
+          window.calls.push({command,args});
+          const hits = window.discoveryReady && !window.discoveryMissing ? [{
+            id:"app:delayed",name:"Delayed fixture",resultType:"application",kind:"app",reason:"exact",
+            publisher:"Synthetic fixture",description:"Delayed drive discovery",aliases:[]}] : [];
+          return {hits,total:hits.length,generation:args.generation,
+            catalog:{supported:true,enabled:true,refreshing:!window.discoveryReady,revision:window.discoveryReady?"ready":"checking"},
+            semantic:{state:"disabled"}};
+        }
         if (command === "search_apps" && args.q.startsWith("Bench ")) {
           window.calls.push({command,args});
           const hits = benches.filter(hit => hit.name === args.q);
@@ -214,6 +223,25 @@ let browser;
       "C:/Documents/Synthetic note 1.txt");
     await capture(windowPage,"window-light");
     await windowPage.close();
+
+    for (const missing of [false,true]) {
+      const discovery = await fixture("window.html",{width:1120,height:800},{
+        discoveryPending:true,debug:{debugQuery:"apps: Delayed fixture",debugLaunch:true}});
+      await discovery.waitForFunction(()=>window.calls.some(call=>call.command==="search_apps"&&call.args.q==="Delayed fixture"));
+      await discovery.waitForTimeout(180);
+      assert.equal(await discovery.evaluate(()=>window.calls.some(call=>call.command==="debug_report")),false,
+        "Installed launch check reported failure before drive discovery finished");
+      await discovery.evaluate(missing=>{
+        window.discoveryReady=true;window.discoveryMissing=missing;
+        window.emit("applications",{supported:true,enabled:true,refreshing:false,revision:"ready"});
+      },missing);
+      await discovery.waitForFunction(()=>window.calls.some(call=>call.command==="debug_report"));
+      const report=await discovery.evaluate(()=>window.calls.find(call=>call.command==="debug_report").args.report);
+      assert.equal(report.launchAccepted,!missing);
+      if(missing)assert.match(report.error,/No matching catalog application/);
+      else assert.equal(await discovery.evaluate(()=>window.calls.filter(call=>call.command==="launch_app").at(-1).args.appId),"app:delayed");
+      await discovery.close();
+    }
 
     const settings = await fixture("settings.html?tab=general",{width:660,height:620});
     assert.equal(await settings.getByRole("combobox",{name:"Search panel appearance"}).isVisible(),true);

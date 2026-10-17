@@ -1461,6 +1461,8 @@ function debugSearch(query) {
 }
 
 function report() {
+  // Drive discovery publishes names after the first reply; do not end an installed launch check on a partial catalog.
+  if (isAppsMode() && !applicationSearch.hits.length && applicationSearch.catalog.refreshing) return;
   debugPending = false;
   if (state.info.debugLaunch) {
     const hit = selectedHit();
