@@ -1425,7 +1425,7 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&shell.logs.join(name), 24_576)));
         }
         if let Some(index) = shell.index_folder() {
-            for name in ["worker.log", "worker-query.log"] {
+            for name in ["worker.log", "worker.gpu-2.log", "worker.gpu-3.log", "worker-query.log"] {
                 text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&index.join(name), 12_288)));
             }
         }

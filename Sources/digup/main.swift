@@ -212,6 +212,19 @@ func skippedLine(_ skipped: [String: Int]) -> String {
 
 // MARK: Commands
 
+private final class WorkerLogs: @unchecked Sendable {
+    private let lock=NSLock()
+    private let base:URL
+    private var number=0
+    init(_ base:URL){self.base=base}
+    func next()->URL{
+        lock.withLock{
+            number+=1
+            return number==1 ? base : base.deletingPathExtension().appendingPathExtension("gpu-\(number).log")
+        }
+    }
+}
+
 /// Strict GPU llama.cpp, or the worker that verifies every OpenVINO graph on Intel NPU.
 func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) throws -> any Embedder {
     try FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -245,9 +258,10 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
             config.onInferenceActivity={activity in emitInference(activity)}
         }
         let workerConfig=config
+        let logs=WorkerLogs(log)
         let pool=try EmbeddingPool(maximum:maximum){
             var next=workerConfig
-            next.log=log.deletingPathExtension().appendingPathExtension(UUID().uuidString+".log")
+            next.log=logs.next()
             next.arguments += ["--worker-log",next.log!.path]
             return try EmbeddingWorker(next,textOnly:false)
         }
