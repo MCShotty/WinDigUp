@@ -14,7 +14,7 @@ public enum IndexerError: Error, CustomStringConvertible {
 
 /// Keeps the index in step with the chosen folders, then extracts and embeds whatever is pending.
 ///
-/// Extraction runs one batch ahead. Prepared inference may overlap; only the index owner commits results.
+/// Bounded preparation and inference feed one ordered database writer.
 public final class Indexer {
     public struct SyncSummary: Sendable {
         public var added = 0, changed = 0, moved = 0, removed = 0, unchanged = 0
@@ -38,6 +38,7 @@ public final class Indexer {
     private let makeEmbedder: () throws -> any Embedder
     private var worker: (any Embedder)?
     private var replay: ComputedEmbedding?
+    public private(set) var lastPipeline: IndexPipelineSnapshot?
     private let scratch: URL
 
     /// When set, an index built with another model or other settings is emptied and embedded again (the app: a new
@@ -146,6 +147,7 @@ public final class Indexer {
     @discardableResult
     public func run(limit: Int? = nil, only ids: Set<Int64>? = nil, shouldStop: () -> Bool = { false },
                     onEvent: (Event) -> Void = { _ in }) throws -> [String: Int] {
+        lastPipeline = nil
         let queue = try store.pending(limit: limit, only: ids)
         var states: [String: Int] = [:]
         var done = 0
@@ -181,6 +183,7 @@ public final class Indexer {
     @discardableResult
     public func finishLongFiles(shouldStop: () -> Bool = { false }, onStep: (Step) -> Void = { _ in }) throws
         -> [String: Int] {
+        lastPipeline = nil
         var jobs: [Job] = []
         for file in try store.unfinished() {
             let info = try store.info(of: file.id)
@@ -216,112 +219,107 @@ public final class Indexer {
         return states
     }
 
-    /// Runs `jobs` in order until `shouldStop` (asked between jobs), passing each one's results to `committed` (with
-    /// its place in `jobs`). Jobs that `skip` turns down when their turn comes are left out.
-    ///
-    /// Extract ahead, infer within the worker limit, then commit in original order after checking source identity.
     private func process(_ jobs: [Job], shouldStop: () -> Bool,
                          committed: (Int, Job, [(String, String?)], Double) -> Void,
                          skip: (Job) -> Bool = { _ in false }) throws {
-        var ahead: PendingBatch?
-        var pending:[InferredJob]=[]
-        func cleanup(_ item:InferredJob) {
-            _ = try? item.result.wait()
-            try? FileManager.default.removeItem(at:item.prepared.folder)
-        }
+        guard !jobs.isEmpty, !shouldStop() else { lastPipeline = IndexPipelineSnapshot(); return }
+        let options = options
+        let folder = scratch.appendingPathComponent(UUID().uuidString)
+        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(jobs, prepare: { index, job in
+            autoreleasepool {
+                Self.prepare(job, options: options, into: folder.appendingPathComponent("batch-\(index)"))
+            }
+        }, cleanup: { prepared in
+            try? FileManager.default.removeItem(at: prepared.folder)
+        })
+        var modelLoadMs = 0.0
         defer {
-            if let ahead {try? FileManager.default.removeItem(at:ahead.wait().folder)}
-            for item in pending {cleanup(item)}
-            if let costsFolder,!measured.tallies.isEmpty {
-                MeasuredCosts.merge(measured,into:costsFolder);measured=MeasuredCosts()
+            pipeline.close()
+            lastPipeline = pipeline.snapshot(modelLoadMs: modelLoadMs)
+            try? FileManager.default.removeItem(at: folder)
+            if let costsFolder, !measured.tallies.isEmpty {
+                MeasuredCosts.merge(measured, into: costsFolder)
+                measured = MeasuredCosts()
             }
         }
-        func publishFirst()throws {
-            let item=pending.removeFirst()
-            defer{try? FileManager.default.removeItem(at:item.prepared.folder)}
-            let computed=try item.result.wait()
-            guard !skip(item.job) else{return}
-            let changed=item.job.files.contains{file in
-                guard let current=FileSystem.info(of:file.path),current.isRegular else{return true}
-                return current.size != file.size || abs(current.mtime-file.mtime)>0.001 ||
-                    file.inode != 0 && current.inode != 0 && (current.inode != file.inode || current.device != file.device)
+
+        func publish(_ item: IndexPipeline<Job, Prepared, ComputedEmbedding?>.Item,
+                     computed: ComputedEmbedding?, inferenceMs: Double) throws {
+            let start = ProcessInfo.processInfo.systemUptime
+            var didCommit = false
+            defer {
+                if shouldStop() { pipeline.stop() }
+                pipeline.release(item, commitMs: (ProcessInfo.processInfo.systemUptime - start) * 1000, committed: didCommit)
             }
-            replay=computed
-            defer{replay=nil}
-            let results:[(String,String?)]=try store.db.transaction {
-                if let computed{
-                    let expected="\(computed.info.vectorSource) | \(options.fingerprint)"
-                    let actual=try store.meta("fingerprint") ?? ""
-                    if actual != expected{throw IndexerError.fingerprintMismatch(index:actual,now:expected)}
-                }
-                var stale=false
-                for file in item.job.files {
-                    var matches=false
-                    try store.db.query("SELECT path,size,mtime,inode,device FROM files WHERE id=?",[.int(file.id)]){row in
-                        matches=row.text(0)==file.path && row.int(1)==file.size &&
-                            abs(row.double(2)-file.mtime)<0.001 &&
-                            UInt64(bitPattern:row.int(3))==file.inode && UInt64(bitPattern:row.int(4))==file.device
-                    }
-                    if !matches{stale=true}
-                }
-                if stale{return item.job.files.map{_ in ("pending","source_changed")}}
-                if changed{
-                    for file in item.job.files{try store.requeue(file.id)}
-                    return item.job.files.map{_ in ("pending","source_changed")}
-                }
-                return try autoreleasepool{try commit(item.prepared)}
+            guard !skip(item.input) else { return }
+            let results: [(String, String?)]
+            do { results = try self.publish(item.value, computed: computed) }
+            catch { pipeline.stop(); throw error }
+            didCommit = true
+            let seconds = (item.preparationMs + inferenceMs) / 1000
+            measure(item.value, seconds: seconds)
+            committed(item.index, item.input, results, seconds / Double(item.input.files.count))
+        }
+
+        while let item = pipeline.nextPrepared(shouldStop: shouldStop) {
+            if skip(item.input) || !Self.embeddingCalls(item.value, options: options).contains(where: { !$0.inputs.isEmpty }) {
+                try publish(item, computed: nil, inferenceMs: 0)
+                continue
             }
-            let seconds=ProcessInfo.processInfo.systemUptime-item.started
-            if item.modelWasRunning{measure(item.prepared,seconds:seconds)}
-            committed(item.index,item.job,results,seconds/Double(item.job.files.count))
+            let start = ProcessInfo.processInfo.systemUptime
+            let wasRunning = worker != nil
+            let model = try fullWorker()
+            if !wasRunning { modelLoadMs = (ProcessInfo.processInfo.systemUptime - start) * 1000 }
+            let owner = InferenceOwner(model)
+            pipeline.startInference(parallelism: (model as? any ParallelEmbedding)?.maximumParallelJobs ?? 1) { prepared in
+                let calls = Self.embeddingCalls(prepared, options: options)
+                guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
+                return try ComputedEmbedding(calls: calls, worker: owner.model)
+            }
+            while let result = pipeline.next(shouldStop: shouldStop) {
+                try publish(result.item, computed: result.result.get(), inferenceMs: result.inferenceMs)
+            }
+            break
         }
-        for(index,job)in jobs.enumerated(){
-            guard !shouldStop()else{break}
-            let started=ProcessInfo.processInfo.systemUptime
-            let prepared=(ahead ?? prepare(job)).wait()
-            ahead=index+1<jobs.count ? prepare(jobs[index+1]) : nil
-            guard !skip(job)else{try? FileManager.default.removeItem(at:prepared.folder);continue}
-            let calls=embeddingCalls(prepared)
-            let modelWasRunning=worker != nil
-            let model=try calls.contains(where:{!$0.inputs.isEmpty}) ? fullWorker() : nil
-            let future=InferenceResult()
-            let owner=InferenceOwner(model)
-            if let model {
-                let infer:@Sendable ()->Void={
-                    do{future.fulfill(.success(try ComputedEmbedding(calls:calls,worker:owner.model!)))}
-                    catch{future.fulfill(.failure(error))}
-                }
-                if ((model as? any ParallelEmbedding)?.maximumParallelJobs ?? 1)>1 {
-                    inferenceQueues[index%inferenceQueues.count].async(execute:infer)
-                }else{infer()}
-            }else{future.fulfill(.success(nil))}
-            pending.append(InferredJob(index:index,job:job,prepared:prepared,result:future,
-                started:started,modelWasRunning:modelWasRunning))
-            let width=(worker as? any ParallelEmbedding)?.maximumParallelJobs ?? 1
-            if pending.count>=width{try publishFirst()}
-        }
-        while !pending.isEmpty{try publishFirst()}
     }
 
-    private struct InferredJob {
-        let index:Int
-        let job:Job
-        let prepared:Prepared
-        let result:InferenceResult
-        let started:Double
-        let modelWasRunning:Bool
+    private func publish(_ prepared: Prepared, computed: ComputedEmbedding?) throws -> [(String, String?)] {
+        let changed = prepared.batch.contains { file in
+            guard let current = FileSystem.info(of: file.path), current.isRegular else { return true }
+            return current.size != file.size || abs(current.mtime - file.mtime) > 0.001 ||
+                file.inode != 0 && current.inode != 0 && (current.inode != file.inode || current.device != file.device)
+        }
+        replay = computed
+        defer { replay = nil }
+        return try store.db.transaction {
+            if let computed {
+                let expected = "\(computed.info.vectorSource) | \(options.fingerprint)"
+                let actual = try store.meta("fingerprint") ?? ""
+                if actual != expected { throw IndexerError.fingerprintMismatch(index: actual, now: expected) }
+            }
+            for file in prepared.batch {
+                var matches = false
+                try store.db.query("SELECT path,size,mtime,inode,device FROM files WHERE id=?", [.int(file.id)]) { row in
+                    matches = row.text(0) == file.path && row.int(1) == file.size &&
+                        abs(row.double(2) - file.mtime) < 0.001 &&
+                        UInt64(bitPattern: row.int(3)) == file.inode && UInt64(bitPattern: row.int(4)) == file.device
+                }
+                if !matches { return prepared.batch.map { _ in ("pending", "source_changed") } }
+            }
+            if changed {
+                for file in prepared.batch { try store.requeue(file.id) }
+                return prepared.batch.map { _ in ("pending", "source_changed") }
+            }
+            return try autoreleasepool { try commit(prepared) }
+        }
     }
+
     private final class InferenceOwner: @unchecked Sendable {
-        let model:(any Embedder)?
-        init(_ model:(any Embedder)?){self.model=model}
+        let model: any Embedder
+        init(_ model: any Embedder) { self.model = model }
     }
-    private final class InferenceResult: @unchecked Sendable {
-        private let ready=DispatchSemaphore(value:0)
-        private var value:Result<ComputedEmbedding?,any Error>?
-        func fulfill(_ value:Result<ComputedEmbedding?,any Error>){self.value=value;ready.signal()}
-        func wait()throws->ComputedEmbedding?{ready.wait();return try value!.get()}
-    }
-    private func embeddingCalls(_ prepared:Prepared)->[EmbeddingCall] {
+
+    private static func embeddingCalls(_ prepared: Prepared, options: IndexOptions) -> [EmbeddingCall] {
         let file=prepared.batch[0]
         let title=URL(fileURLWithPath:file.path).deletingPathExtension().lastPathComponent
         switch prepared.payload {
@@ -457,55 +455,29 @@ public final class Indexer {
         let ocr: String
     }
 
-    /// A batch being prepared on the preparation queue.
-    final class PendingBatch: @unchecked Sendable {
-        private let ready = DispatchSemaphore(value: 0)
-        private var value: Prepared?
-
-        fileprivate func fulfill(_ prepared: Prepared) {
-            value = prepared
-            ready.signal()
-        }
-
-        /// Blocks until it's ready. Call once.
-        func wait() -> Prepared {
-            ready.wait()
-            return value!
-        }
+    /// The oldest active extraction remains visible when another preparation finishes.
+    public static var nowReading: (path: String, since: Date)? {
+        readingLock.withLock { reading.values.min { $0.since < $1.since } }
     }
-
-    private let inferenceQueues=(0..<3).map{DispatchQueue(label:"DigUp.infer-\($0)",qos:.utility)}
-    private let preparing = DispatchQueue(label: "DigUp.prepare", qos: .utility)
-    private var jobsPrepared = 0   // names the scratch folders
-
-    /// The file being read (extracted) right now, and since when: for a watchdog. Apple's frameworks have run away on
-    /// some files (PDF text extraction growing by gigabytes a minute, never returning), and nothing stops them from
-    /// outside but ending the process, so it has to know which file that was. One value for the whole process, since
-    /// files are read one at a time.
-    public static var nowReading: (path: String, since: Date)? { readingLock.withLock { reading } }
-    nonisolated(unsafe) private static var reading: (path: String, since: Date)?
+    nonisolated(unsafe) private static var reading: [String: (path: String, since: Date)] = [:]
     private static let readingLock = NSLock()
 
-    private static func startReading(_ path: String) {
-        readingLock.withLock { reading = (path, Date()) }
+    static var activeReadPaths: Set<String> { readingLock.withLock { Set(reading.values.map(\.path)) } }
+
+    static func startReading(_ path: String, token: String) {
+        readingLock.withLock { reading[token] = (path, Date()) }
     }
 
-    private func prepare(_ job: Job) -> PendingBatch {
-        let pending = PendingBatch()
-        jobsPrepared += 1
-        let (options, folder) = (options, scratch.appendingPathComponent("batch-\(jobsPrepared)"))
-        preparing.async {
-            pending.fulfill(Self.prepare(job, options: options, into: folder))
-        }
-        return pending
+    static func endReading(token: String) {
+        _ = readingLock.withLock { reading.removeValue(forKey: token) }
     }
 
     static func prepare(_ job: Job, options: IndexOptions, into folder: URL) -> Prepared {
         let batch = job.files
         var prepared = Prepared(batch: batch, step: job.step, folder: folder)
         let url = URL(fileURLWithPath: batch[0].path)
-        startReading(batch[0].path)
-        defer { readingLock.withLock { reading = nil } }
+        startReading(batch[0].path, token: folder.path)
+        defer { endReading(token: folder.path) }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             switch batch[0].kind {
@@ -514,7 +486,7 @@ public final class Indexer {
                 var ready: [ReadyImage] = []
                 for (slot, file) in batch.enumerated() {
                     let url = URL(fileURLWithPath: file.path)
-                    startReading(file.path)
+                    startReading(file.path, token: folder.path)
                     do {
                         let image = try ImageExtractor.prepare(url, maxPixel: screenshot ? 1536 : 1024,
                                                                minSide: options.minImageSide, to: folder,

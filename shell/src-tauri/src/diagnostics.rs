@@ -20,10 +20,16 @@ impl Diagnostics {
 
     pub fn record(&self, source: &str, event: Value) {
         let time = now();
-        let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress" | "inference_activity" | "panel_timing"));
+        let mut important = !matches!(event["event"].as_str(), Some("scan_progress" | "file" | "rest" | "counts" | "progress" | "inference_activity" | "panel_timing" | "index_pipeline"));
         if event["event"] == "file" && matches!(event["state"].as_str(), Some("failed" | "error")) { important = true; }
         {
             let mut runtime = self.runtime.lock().unwrap();
+            if source == "index" && event["event"] == "index_pipeline" && event["pipeline"]["schemaVersion"] == 1 {
+                if !runtime["indexPipeline"].is_object() { runtime["indexPipeline"] = json!({}); }
+                let key = if event["code"] == true { "code" } else { "files" };
+                runtime["indexPipeline"][key] = event["pipeline"].clone();
+                runtime["indexPipeline"][key]["capturedAt"] = json!(time);
+            }
             if event["event"]=="inference_activity" && event["activity"]["schemaVersion"]==1 {
                 let value=&event["activity"];
                 if let Some(worker)=value["workerID"].as_i64() {
@@ -253,5 +259,31 @@ mod panel_timing_tests {
         assert_eq!(diagnostics.recent().as_array().unwrap().len(), 100);
         assert_eq!(diagnostics.recent()[99]["event"]["showToFocusMs"], 12.5);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod index_pipeline_tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_timings_are_separate_for_file_and_code_work_and_do_not_evict_errors() {
+        let d = Diagnostics::new(&std::env::temp_dir().join("digup-pipeline-diagnostics-absent"));
+        d.record("index", json!({"event":"error","message":"Fixture model failure"}));
+        for n in 0..150 {
+            d.record("index", json!({"event":"index_pipeline","pipeline":{
+                "schemaVersion":1,"preparedJobs":n,"preparationMs":23.5,"inferenceMs":200,"commitMs":12
+            }}));
+        }
+        d.record("index", json!({"event":"index_pipeline","code":true,
+            "pipeline":{"schemaVersion":1,"preparedJobs":4,"inferenceMs":8}}));
+        d.record("index", json!({"event":"index_pipeline","pipeline":{"schemaVersion":99,"preparedJobs":999}}));
+        assert_eq!(d.runtime()["indexPipeline"]["files"]["preparedJobs"], 149);
+        assert_eq!(d.runtime()["indexPipeline"]["files"]["preparationMs"], 23.5);
+        assert_eq!(d.runtime()["indexPipeline"]["code"]["preparedJobs"], 4);
+        assert!(d.runtime()["indexPipeline"]["files"]["capturedAt"].is_number());
+        assert!(d.runtime()["verified"].is_null());
+        assert_eq!(d.significant().as_array().unwrap().len(), 1);
+        assert_eq!(d.significant()[0]["event"]["message"], "Fixture model failure");
     }
 }

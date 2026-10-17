@@ -30,9 +30,10 @@ struct IndexConcurrencyTests {
         defer{try? FileManager.default.removeItem(at:root)}
         let input=root.appendingPathComponent("documents")
         try FileManager.default.createDirectory(at:input,withIntermediateDirectories:true)
+        // No readers exist during setup; atomic replacement can hit Windows sharing locks.
         for index in 0..<6 {
             try "A searchable document with ordinary words and sentences, number \(index).".write(
-                to:input.appendingPathComponent("document-\(index).txt"),atomically:true,encoding:.utf8)
+                to:input.appendingPathComponent("document-\(index).txt"),atomically:false,encoding:.utf8)
         }
         let store=try IndexStore(directory:root.appendingPathComponent("index"))
         let fake=Fake()
@@ -49,7 +50,7 @@ struct IndexConcurrencyTests {
         let input=root.appendingPathComponent("documents")
         try FileManager.default.createDirectory(at:input,withIntermediateDirectories:true)
         let file=input.appendingPathComponent("changing.txt")
-        try "Original prose for an indexing fixture.".write(to:file,atomically:true,encoding:.utf8)
+        try "Original prose for an indexing fixture.".write(to:file,atomically:false,encoding:.utf8)
         let store=try IndexStore(directory:root.appendingPathComponent("index"))
         let fake=Fake();fake.change=file
         let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{fake})

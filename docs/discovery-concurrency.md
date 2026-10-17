@@ -65,7 +65,7 @@ Each child owns its context and scratch memory. Text requests can join a two-mil
 
 ## Prepare, infer, commit
 
-File extraction stays ahead of inference on its existing owner. Prepared GPU jobs use three owned serial execution lanes instead of blocking a shared executor pool. Single-owner embedders keep synchronous inference. Only immutable results cross back to the single database owner, which commits in original order.
+Two extraction owners prepare bounded immutable batches. Inference owners take the next prepared batch independently of database commits, so waiting for the oldest result does not stall the other lanes. Single-owner embedders use one serial inference lane. The single database owner commits in original order. At most eight batches are admitted across preparation, active inference and completed results; a serialized encoder uses two. See [asynchronous indexing](asynchronous-indexing.md) for measurements and pause/failure behavior.
 
 Before publication, commits recheck source size, modification time, known physical file identity, the current database row, and the vector fingerprint. Changed sources stay pending for resynchronization. Incompatible configuration changes cannot publish old vectors. A failed later job does not erase already committed work, and long-document cursors advance only with their transaction.
 
