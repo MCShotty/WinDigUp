@@ -1,0 +1,85 @@
+# Installed compact WebView2 panel, with ordinary OS catalog data and no model required.
+param([string]$InstalledApp = (Join-Path $env:LOCALAPPDATA 'DigUp\DigUp.exe'))
+$ErrorActionPreference = 'Stop'
+Add-Type @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class DigUpPanelProbe {
+    public delegate bool EnumCallback(IntPtr hwnd, IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumCallback callback, IntPtr data);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr hwnd, IntPtr region);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left,int top,int right,int bottom);
+    [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region,int x,int y);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr region);
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
+    public static bool HasRoundedPanel(uint pid) {
+        bool found=false;
+        EnumWindows((hwnd,data) => {
+            uint owner; GetWindowThreadProcessId(hwnd,out owner);
+            if(owner!=pid) return true;
+            Rect rect;
+            if(!GetWindowRect(hwnd,out rect)) return true;
+            int width=rect.right-rect.left, height=rect.bottom-rect.top;
+            if(width<200 || height<60) return true;
+            IntPtr region=CreateRectRgn(0,0,0,0);
+            if(region==IntPtr.Zero) return true;
+            try {
+                if(GetWindowRgn(hwnd,region)>0 && !PtInRegion(region,0,0) && PtInRegion(region,width/2,30))
+                    found=true;
+            } finally { DeleteObject(region); }
+            return !found;
+        },IntPtr.Zero);
+        return found;
+    }
+}
+'@
+$work = Join-Path $env:RUNNER_TEMP ('DigUp Panel ' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force $work | Out-Null
+try {
+    foreach ($material in @('automatic','solid')) {
+        $settings = Join-Path $work ($material + '.json')
+        $configuration = @{setUp=$true;updateChecksOff=$true;appearance='dark';panelMaterial=$material;
+            applications=@{enabled=$true;semanticEnabled=$false};windowsSettings=@{enabled=$true;semanticEnabled=$false};
+            acceleration=@{version=2;backend='openvino-npu';discoveryPending=$false}}
+        [IO.File]::WriteAllText($settings, ($configuration | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $stdout = Join-Path $work ($material + '-ui.json')
+        $stderr = Join-Path $work ($material + '-error.txt')
+        $arguments = '--settings "' + $settings + '" --index "' + (Join-Path $work ($material+'-index')) +
+            '" --debug-query "apps:" --debug-show --debug-quit'
+        $process = Start-Process -FilePath $InstalledApp -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            $rounded = $false
+            while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+                $rounded = $rounded -or [DigUpPanelProbe]::HasRoundedPanel([uint32]$process.Id)
+                Start-Sleep -Milliseconds 50
+                $process.Refresh()
+            }
+            if (-not $process.HasExited) { throw 'Installed compact panel did not finish its report' }
+            Get-Content $stdout
+            Get-Content $stderr
+            $reports = @(Get-Content $stdout | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} })
+            $report = $reports | Where-Object { $_.panel -and $_.phase -eq 'applications' } | Select-Object -Last 1
+            if (-not $report) { throw 'Installed panel did not render app results' }
+            if (@($report.applications).Count -eq 0) { throw 'Installed panel catalog is empty' }
+            if ($report.panel.fieldHeight -ne 62 -or $report.panel.height -le 64 -or $report.panel.height -gt 640) {
+                throw 'Installed panel did not use bounded progressive geometry'
+            }
+            if ($report.panel.listWidth -lt ($report.panel.width-30)) { throw 'Installed panel still uses a split-width list' }
+            if ($report.panel.appearance -ne 'dark') { throw 'Native saved appearance was not loaded' }
+            if ($material -eq 'solid' -and $report.panel.material -ne 'solid') { throw 'Solid appearance was not respected' }
+            if ($report.panel.material -notin @('solid','acrylic')) { throw 'Native material state is missing' }
+            if ($report.panel.previewOpen) { throw 'An automatic preview opened' }
+            if (-not $rounded) { throw 'The native window did not have a rounded hit region' }
+            Write-Output ("PASS: installed compact panel ($material): name results without inference, progressive geometry, saved appearance and rounded native hit region. Applied material: " + $report.panel.material)
+        } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }
+            $process.Dispose()
+        }
+    }
+} finally {
+    Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+}

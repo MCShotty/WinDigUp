@@ -71,6 +71,12 @@ jobs:
       - name: Pinned Tauri CLI without npm PATH shims
         shell: bash
         run: bash scripts/tauri-cli.sh --version
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            shell/src-tauri/target
+          key: floating-shell-${{ runner.os }}-${{ hashFiles('shell/src-tauri/Cargo.lock') }}
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
       - name: Compile portable search-vector conversion for Windows x64

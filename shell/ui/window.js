@@ -310,6 +310,7 @@ function chip(title, icon, count, selected, action, number) {
 function restoreHandoff() {
   const pending = state.handoff;
   if (!pending || pending.generation !== state.generation) return;
+  if (state.weaker.some(hit => resultKey(hit) === pending.key)) state.showWeaker = true;
   const hit = rows().find(hit => resultKey(hit) === pending.key);
   if (hit) { state.selection = pending.key; state.chosen = hit; state.navigated = true; state.handoff = null; }
 }

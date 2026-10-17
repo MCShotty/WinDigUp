@@ -16,7 +16,7 @@ let browser;
     const page = await browser.newPage({viewport});
     page.on("pageerror",error => errors.push(error.message));
     await setup(page);
-    await page.addInitScript(({options}) => {
+    await page.addInitScript(({options,baseline}) => {
       const old = window.__TAURI__.core.invoke;
       window.appearanceValue = "system"; window.materialValue = "automatic";
       window.searchDelay = 0; window.blockPurpose = true; window.releaseQueries = [];
@@ -40,7 +40,9 @@ let browser;
         }
         if (command === "panel_config") return {schemaVersion:1,width:640,fieldHeight:64,maxHeight:640,nativeSized:false,material:panel()};
         if (command === "panel_height") {
-          window.calls.push({command,args}); return {width:640,height:args.height,maxHeight:640,nativeSized:false};
+          window.calls.push({command,args});
+          if (baseline) { const node=document.getElementById("panel"); if(node)node.style.height=args.height+"px"; }
+          return {width:640,height:args.height,maxHeight:640,nativeSized:false};
         }
         if (command === "window_info") return {...await old(command,args),
           search:options.handoff || window.handoff,applications:{supported:true,enabled:true,semanticEnabled:true,mixedSearch:"smart"}};
@@ -66,7 +68,7 @@ let browser;
         }
         return old(command,args);
       };
-    },{options});
+    },{options,baseline});
     await page.goto(base + "/" + view);
     assert.equal(await page.title(),view.startsWith("settings.html") ? "DigUp Settings" : "DigUp");
     return page;

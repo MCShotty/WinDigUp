@@ -206,7 +206,9 @@ function revealSelected() {
 
 /// The same search in the window, for a bigger look (only one kind, if given).
 function openInWindow(kind) {
-  invoke("open_window", { query: $query.value.trim(), kind: kind ?? null, selected: state.selection === WEAKER ? null : state.selection }).catch(failed);
+  const hit = selectedHit();
+  const inScope = !kind || kind === "apps" && isApp(hit) || kind === "settings" && isSetting(hit);
+  invoke("open_window", { query: $query.value.trim(), kind: kind ?? null, selected: hit && inScope ? resultKey(hit) : null }).catch(failed);
 }
 
 // MARK: Drawing
@@ -617,7 +619,9 @@ function renderBig() {
   }
   const box = element("div", "view");
   box.append(view);
-  $big.replaceChildren(head, box);
+  const location = element("div", "preview-location");
+  if (!isLauncher(hit)) { location.textContent = folderOf(hit) + " · " + details(hit); location.title = hit.path; }
+  $big.replaceChildren(head, ...(!isLauncher(hit) ? [location] : []), box);
 }
 
 function message(title, text) {
@@ -744,12 +748,17 @@ function report() {
   // Dev snapshots (index.html?big): the selected result's big preview, as Space shows it.
   if (new URLSearchParams(location.search).has("big")) toggleBig();
   setTimeout(() => {
-    const big = $preview.querySelector("img, video, audio, .passage");
+    const big = ($big.hidden ? $preview : $big).querySelector("img, video, audio, .passage");
     const thumbs = [...$list.querySelectorAll("img.thumb")];
     invoke("debug_report", {
       report: {
         query: $query.value,
         phase: state.phase,
+        panel: {width: $panel.getBoundingClientRect().width, height: $panel.getBoundingClientRect().height,
+          fieldHeight: document.querySelector(".field").getBoundingClientRect().height,
+          listWidth: $list.getBoundingClientRect().width, material: document.documentElement.dataset.panelMaterial,
+          appearance: document.documentElement.dataset.theme, previewOpen: !$big.hidden,
+          primaryAction: $primary.textContent, activeDescendant: $query.getAttribute("aria-activedescendant")},
         groups: [...(applicationSearch.hits.length ? [{title:"Apps", rows:applicationSearch.hits.map(titleOf)}] : []), ...state.groups.map((group) => ({ title: group.title, rows: group.rows.map(titleOf) }))],
         applications: applicationSearch.hits.map(hit => ({id: hit.id, name: hit.name})),
         weaker: state.weaker.length,

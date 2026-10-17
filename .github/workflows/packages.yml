@@ -286,6 +286,9 @@ jobs:
       - name: Installed application discovery and launch
         shell: pwsh
         run: scripts/check-windows-applications.ps1
+      - name: Installed compact search panel
+        shell: pwsh
+        run: scripts/check-windows-panel.ps1
       - name: Installed Windows settings activation
         shell: pwsh
         run: scripts/check-windows-settings.ps1
