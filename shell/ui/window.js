@@ -67,79 +67,51 @@ function closeActivity() {
   activityView.hide(); state.activityOpen = false; document.body.classList.remove("activity-open"); renderSide();
   (activityReturnFocus?.isConnected ? activityReturnFocus : $query).focus();
 }
-const applicationSearch = new ApplicationSearch((statusOnly=false) => {
-  if(statusOnly&&!isAppsMode() && !isSettingsMode()){renderStatus();return;}
-  state.counts.apps=applicationSearch.total;
-  const old=state.selection,shown=rows();
-  if(shown.length)state.hasResults=true;
-  if(!state.navigated)state.selection=!isAppsMode() && !isSettingsMode()&&!state.lexicalReady&&state.filesPending?null:shown.length?resultKey(shown[0]):null;
-  else if(!shown.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
-  if(isAppsMode()){
-    state.hasResults=true;
-    if(!statusOnly)render();else {
-      const label=$content.querySelector(".app-purpose-state");if(label)label.textContent=applicationSearch.purposeLabel();
-    }
-  }else{
-    // App changes never discard file DOM, thumbnails, or a playing file preview.
-    const scroll=$content.scrollTop,focus=document.activeElement.closest?.(".app-row")?.dataset.resultKey;
-    $content.querySelectorAll(".app-group:not(.windows-settings-group)").forEach(group=>group.remove());
-    const placement=appPlacement();
-    if(placement.before.length)$content.prepend(applicationGroup(placement.before,"Best match · App"));
-    if(placement.after.length)$content.insertBefore(applicationGroup(placement.after),$content.querySelector(".windows-settings-group"));
-    for(const node of $content.querySelectorAll("[data-result-key]")){
-      const selected=node.dataset.resultKey===state.selection;node.classList.toggle("selected",selected);node.setAttribute("aria-selected",String(selected));
-    }
-    $content.scrollTop=scroll;
-    if(focus)$content.querySelector(`[data-result-key="${CSS.escape(focus)}"] .app-launch`)?.focus({preventScroll:true});
-    if(old!==state.selection||isLauncher(selectedHit()))renderSide();
-    const count=$kinds.querySelector('[data-title="Apps"] .number');if(count)count.textContent=String(applicationSearch.total);
-    if(Boolean($kinds.querySelector('[data-title="Apps"]'))!==(Apps.supported&&Apps.enabled))renderBar();
-    renderStatus();
+function providerChanged(statusOnly = false) {
+  state.counts.apps = applicationSearch.total;
+  state.counts.settings = settingsSearch.total;
+  if (statusOnly) { renderStatus(); return; }
+  const shown = rows();
+  if (shown.length) state.hasResults = true;
+  if (!state.navigated) state.selection = shown.length ? resultKey(shown[0]) : null;
+  else if (!shown.some(hit => resultKey(hit) === state.selection)) { state.selection = null; state.chosen = null; }
+  renderContent(); renderSide(); renderStatus();
+  for (const [title, count] of [["Apps", applicationSearch.total], ["Windows settings", settingsSearch.total]]) {
+    const label = $kinds.querySelector('[data-title="' + title + '"] .number');
+    if (label) label.textContent = String(count);
   }
-  if(debugPending&&isAppsMode()&&(applicationSearch.hits.length||!applicationSearch.catalog.refreshing))report();
-},3,()=>isAppsMode()?state.selection:null);
-const settingsSearch=new WindowsSettingsSearch((statusOnly=false)=>{
-  state.counts.settings=settingsSearch.total;
-  if(statusOnly){renderStatus();return;}
-  const old=state.selection,shown=rows();
-  if(shown.length)state.hasResults=true;
-  if(!state.navigated)state.selection=!isSettingsMode()&&!state.lexicalReady&&state.filesPending?null:shown.length?resultKey(shown[0]):null;
-  else if(!shown.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
-  if(isSettingsMode()){render();if(debugPending&&(settingsSearch.hits.length||!settingsSearch.catalog.refreshing))report();return;}
-  const scroll=$content.scrollTop,focus=document.activeElement.closest?.(".windows-settings-group .app-row")?.dataset.resultKey;
-  $content.querySelectorAll(".windows-settings-group").forEach(node=>node.remove());
-  if(settingsSearch.visible().length)$content.append(windowsSettingsGroup());
-  for(const node of $content.querySelectorAll("[data-result-key]")){
-    const selected=node.dataset.resultKey===state.selection;node.classList.toggle("selected",selected);node.setAttribute("aria-selected",String(selected));
-  }
-  $content.scrollTop=scroll;
-  if(focus)$content.querySelector('[data-result-key="'+CSS.escape(focus)+'"] .app-launch')?.focus({preventScroll:true});
-  if(old!==state.selection||isSetting(selectedHit()))renderSide();
-  const count=$kinds.querySelector('[data-title="Windows settings"] .number');if(count)count.textContent=String(settingsSearch.total);
-  renderStatus();
-});
-function isSettingsMode(){return Apps.parse(state.query,state.filter).mode==="settings";}
-function windowsSettingsGroup(){
-  const box=element("section","windows-settings-group app-group"+(isSettingsMode()?"":" app-group-mixed"));
-  box.setAttribute("aria-label","Windows settings");
-  const heading=element("div","app-group-heading");heading.append(element("h2","app-group-title","Windows settings"));
-  if(isSettingsMode())heading.append(element("span","app-group-count",settingsSearch.total+" pages"));
-  box.append(heading);
-  const list=element("div","app-results");list.setAttribute("role","grid");list.setAttribute("aria-label","Matching Windows settings");
-  for(const hit of settingsSearch.visible())list.append(Apps.row(hit,state.selection===resultKey(hit),select,open,true));
-  box.append(list);
-  if(!settingsSearch.hits.length||settingsSearch.error)box.append(element("p","app-status",settingsSearch.status()));
-  if(settingsSearch.total>settingsSearch.visible().length){
-    const more=element("button","app-more",isSettingsMode()?"Show more settings":"Show all matching Windows settings");
-    more.onclick=()=>isSettingsMode()?settingsSearch.more():setFilter("settings");box.append(more);
-  }
-  if(isSettingsMode())box.append(element("p","app-keyboard-help","↑ ↓ Select · Enter Open settings · Ctrl+9 Windows settings"));
-  return box;
+  if (Boolean($kinds.querySelector('[data-title="Apps"]')) !== (Apps.supported && Apps.enabled)) renderBar();
+  if (debugPending && (isAppsMode() || isSettingsMode())) report();
 }
-function appPlacement(){
-  return Apps.placement(applicationSearch.hits,state.fileWords||[],{appsOnly:isAppsMode(),text:state.text,
-    lexicalReady:state.lexicalReady||Boolean(state.fileError)||!state.info.folders.length,categoryQuery:state.categoryQuery,
-    exactFilenameKnown:state.exactFilenameKnown,exactFilename:state.exactFilename});
+const applicationSearch = new ApplicationSearch(providerChanged, 3, () => isAppsMode() ? state.selection : null);
+const settingsSearch = new WindowsSettingsSearch(providerChanged);
+function isSettingsMode() { return Apps.parse(state.query, state.filter).mode === "settings"; }
+function resultLayout() {
+  const mode = Apps.parse(state.query, state.filter).mode;
+  return MixedResults.compose({
+    text: state.text, mode: mode === "all" && !Apps.supported ? "files" : mode,
+    files: state.ranked, apps: applicationSearch.active ? applicationSearch.hits : [],
+    settings: settingsSearch.visible(), preference: Apps.mixedSearch, includeEmptyFiles: state.weaker.length > 0,
+  });
+}
+function windowsSettingsGroup(hits = settingsSearch.visible(), shownCount = hits.length) {
+  const box = element("section", "windows-settings-group app-group" + (isSettingsMode() ? "" : " app-group-mixed"));
+  box.setAttribute("aria-label", "Windows settings");
+  const heading = element("div", "app-group-heading");
+  heading.append(element("h2", "app-group-title", "Windows settings"));
+  if (isSettingsMode()) heading.append(element("span", "app-group-count", settingsSearch.total + " pages"));
+  box.append(heading);
+  const list = element("div", "app-results"); list.setAttribute("role", "grid");
+  list.setAttribute("aria-label", "Matching Windows settings");
+  for (const hit of hits) list.append(Apps.row(hit, state.selection === resultKey(hit), select, open, true));
+  box.append(list);
+  if ((!hits.length && isSettingsMode()) || settingsSearch.error) box.append(element("p", "app-status", settingsSearch.status()));
+  if (settingsSearch.total > shownCount) {
+    const more = element("button", "app-more", isSettingsMode() ? "Show more settings" : "Show all matching Windows settings");
+    more.onclick = () => isSettingsMode() ? settingsSearch.more() : setFilter("settings"); box.append(more);
+  }
+  if (isSettingsMode()) box.append(element("p", "app-keyboard-help", "↑ ↓ Select · Enter Open settings · Ctrl+9 Windows settings"));
+  return box;
 }
 
 // MARK: Searching
@@ -266,8 +238,12 @@ function setFilter(key) {
 
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
 function rows() {
-  const app=appPlacement();
-  return [...app.before,...state.ranked,...(state.showWeaker?state.weaker:[]),...app.after,...settingsSearch.visible()];
+  const layout = resultLayout(), shown = [...layout.best];
+  for (const section of layout.sections) {
+    shown.push(...section.hits);
+    if (section.source === "files" && state.showWeaker) shown.push(...state.weaker);
+  }
+  return shown;
 }
 
 function selectedHit() {
@@ -323,32 +299,58 @@ function chip(title, icon, count, selected, action, number) {
 }
 
 function renderContent() {
-  const focusedLaunch = document.activeElement.closest?.(".app-row")?.dataset.resultKey;
+  const focused = document.activeElement;
+  const focusedLaunch = focused.closest?.(".app-row")?.dataset.resultKey;
   const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
   state.renderedGeneration = state.generation;
   thumbnails.disconnect();
   $content.replaceChildren();
-  const placement=appPlacement();
-  if(isSettingsMode())$content.append(windowsSettingsGroup());
-  else if (isAppsMode()) $content.append(applicationGroup(placement.before));
+  const layout = resultLayout();
+  if (isSettingsMode()) $content.append(windowsSettingsGroup());
+  else if (isAppsMode()) $content.append(applicationGroup(applicationSearch.hits));
   else {
-    if(placement.before.length)$content.append(applicationGroup(placement.before,"Best match · App"));
+    if (layout.best.length) $content.append(bestMatches(layout.best));
+    for (const section of layout.sections) {
+      if (section.source === "apps") $content.append(applicationGroup(section.hits));
+      else if (section.source === "settings") $content.append(windowsSettingsGroup(section.hits, settingsSearch.visible().length));
+      else if (section.hits.length || state.weaker.length) {
+        const files = element("section", "file-results-group");
+        files.setAttribute("aria-label", "Files");
+        if (layout.best.length || applicationSearch.hits.length || settingsSearch.visible().length)
+          files.append(element("h2", "result-section-title", "Files"));
+        files.append(isCode() ? codeList() : grid(section.hits)); $content.append(files);
+      }
+    }
+    const shownApps = layout.rows.filter(isApp).length, shownSettings = layout.rows.filter(isSetting).length;
+    if (shownApps && !layout.sections.some(section => section.source === "apps") && applicationSearch.total > shownApps)
+      $content.append(applicationGroup([], "Apps", shownApps));
+    if (shownSettings && !layout.sections.some(section => section.source === "settings") && settingsSearch.total > shownSettings)
+      $content.append(windowsSettingsGroup([], shownSettings));
     if (!state.info.folders.length && !isCode()) $content.append(chooseFolders());
     else if (!state.query.trim()) $content.append(home());
     else if (state.codePhase) $content.append(codeHintOrOff());
     else if (state.fileError) $content.append(fileSearchFailure());
-    else if (!state.lexicalReady&&!state.ranked.length) $content.append(centered(element("div", "spinner")));
-    else if (!state.ranked.length && !state.weaker.length) $content.append(nothingFound());
-    else if (isCode()) $content.append(codeList());
-    else $content.append(grid());
-    if(placement.after.length)$content.append(applicationGroup(placement.after));
-    if(settingsSearch.visible().length)$content.append(windowsSettingsGroup());
+    else if (!state.lexicalReady && !state.ranked.length && !layout.rows.length)
+      $content.append(centered(element("div", "spinner")));
+    else if (!state.ranked.length && !state.weaker.length && !layout.rows.length) $content.append(nothingFound());
   }
   $content.scrollTop = scroll;
-  if(focusedLaunch) ($content.querySelector(`[data-result-key="${CSS.escape(focusedLaunch)}"] .app-launch`) || $query).focus({preventScroll:true});
+  if (focused.isConnected) focused.focus({preventScroll: true});
+  else if (focusedLaunch) ($content.querySelector('[data-result-key="' + CSS.escape(focusedLaunch) + '"] .app-launch') || $query).focus({preventScroll: true});
 }
 
-function applicationGroup(hits=applicationSearch.hits,title="Apps") {
+function bestMatches(hits) {
+  const section = element("section", "best-matches app-group app-group-mixed");
+  section.setAttribute("aria-label", "Best matches");
+  const heading = element("div", "app-group-heading");
+  heading.append(element("h2", "app-group-title", "Best matches")); section.append(heading);
+  const list = element("div", "app-results"); list.setAttribute("role", "grid"); list.setAttribute("aria-label", "Best matches");
+  for (const hit of hits) list.append(isLauncher(hit)
+    ? Apps.row(hit, state.selection === resultKey(hit), select, open, true) : cell(hit, true));
+  section.append(list); return section;
+}
+
+function applicationGroup(hits=applicationSearch.hits,title="Apps",shownCount=resultLayout().rows.filter(isApp).length) {
   const box = element("section", "app-group"+(isAppsMode()?"":" app-group-mixed")); box.setAttribute("aria-label", "Applications");
   const heading=element("div", "app-group-heading");
   heading.append(element("h2", "app-group-title", title));
@@ -369,11 +371,11 @@ function applicationGroup(hits=applicationSearch.hits,title="Apps") {
     list.append(row);
   }
   box.append(list);
-  if (applicationSearch.total > (isAppsMode()?hits.length:appPlacement().before.length+appPlacement().after.length)) {
+  if (applicationSearch.total > (isAppsMode() ? hits.length : shownCount)) {
     const more = element("button", "app-more", isAppsMode() ? "Show more applications" : `Show all ${applicationSearch.total} matching apps…`);
     more.onclick = () => isAppsMode() ? applicationSearch.more() : setFilter("apps"); box.append(more);
   }
-  if(!hits.length || applicationSearch.error) box.append(element("div", "app-status", applicationSearch.status()));
+  if((!hits.length && isAppsMode()) || applicationSearch.error) box.append(element("div", "app-status", applicationSearch.status()));
   if(isAppsMode()) {
     const manage=element("button","app-manage","Manage apps…"); manage.onclick=()=>invoke("open_settings",{tab:"apps"}).catch(failed); box.append(manage);
     box.append(element("p","app-keyboard-help","↑ ↓ Select · Enter Launch · Ctrl+8 Apps"));
@@ -381,9 +383,9 @@ function applicationGroup(hits=applicationSearch.hits,title="Apps") {
   return box;
 }
 
-function grid() {
+function grid(hits = state.ranked) {
   const box = element("div");
-  box.append(cells(state.ranked, "grid"));
+  box.append(cells(hits, "grid"));
   if (state.weaker.length) {
     box.append(weakerToggle());
     if (state.showWeaker) box.append(cells(state.weaker, "grid weaker-results"));
@@ -400,11 +402,11 @@ function cells(hits, className) {
 
 /// A result in the grid: its picture in a fixed box (a picture's own shape never sizes the cell), what kind it is,
 /// the page or moment that matched, its name and folder.
-function cell(hit) {
+function cell(hit, compact = false) {
   const key=resultKey(hit),signature=JSON.stringify(hit);
   const previous=fileCells.get(key);
   if(previous?.signature===signature){
-    previous.node.classList.toggle("selected",key===state.selection);
+    styleFileCell(previous.node, compact, key === state.selection);
     const image=previous.node.querySelector("img[data-render]");if(image&&!image.src)thumbnails.observe(image);
     return previous.node;
   }
@@ -424,9 +426,18 @@ function cell(hit) {
   if (place) picture.append(element("span", "place on-image", place));
   item.append(picture, element("div", "name", "‎" + nameOf(hit.path)), folderLine(folderOf(hit)));
   wire(item, hit);
+  styleFileCell(item, compact, key === state.selection);
   fileCells.set(key,{signature,node:item});
   if(fileCells.size>240)fileCells.delete(fileCells.keys().next().value);
   return item;
+}
+
+function styleFileCell(item, compact, selected) {
+  item.classList.toggle("best-file-row", compact); item.classList.toggle("selected", selected);
+  item.setAttribute("role", compact ? "row" : "option"); item.setAttribute("aria-selected", String(selected));
+  for (const child of item.children) {
+    if (compact) child.setAttribute("role", "gridcell"); else child.removeAttribute("role");
+  }
 }
 
 /// The picture of a cell: the photo or screenshot, the frame or page that matched (from the helper, once the cell
@@ -609,7 +620,7 @@ function move(step) {
 
 /// The grid's columns right now (↑ ↓ move by a row); a list has one.
 function columns() {
-  if (isLauncher(selectedHit())) return 1;
+  if (isLauncher(selectedHit()) || $content.querySelector(".best-matches .selected")) return 1;
   const grid = $content.querySelector(".grid");
   return grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 1;
 }
