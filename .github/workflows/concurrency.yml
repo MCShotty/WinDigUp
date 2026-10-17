@@ -1,0 +1,29 @@
+name: Discovery and inference concurrency
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: concurrency-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Record reference machine and storage fixture
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors | ConvertTo-Json > reference-machine.json
+          Get-Disk | Select-Object Number, FriendlyName, BusType, Size | ConvertTo-Json >> reference-machine.json
+          cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml discovery::benchmark::baseline -- --ignored --nocapture 2>&1 | Tee-Object -FilePath discovery-baseline.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: discovery-concurrency-measurements
+          path: |
+            reference-machine.json
+            discovery-baseline.txt
