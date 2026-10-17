@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real service scheduling with explicitly synthetic vectors; never a hardware/model benchmark."""
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -157,14 +158,16 @@ def main():
                     wait(45)
                     send(46,op="summaries")
                     assert wait(46)[1]["roots"][0]["files"]==0
-                    with sqlite3.connect(index_path) as db:
+                    with closing(sqlite3.connect(index_path)) as db:
                         db.execute("INSERT INTO files(path,kind,size,mtime,inode,device,state) VALUES(?,?,?,?,?,?,?)",
-                                   (str(files/"lease.txt"),"doc",100,1,1,1,"partial"))
+                                   ((files/"lease.txt").as_posix(),"doc",100,1,1,1,"partial"))
+                        db.commit()
                     send(47,op="summaries")
                     summary=wait(47)[1]["roots"][0]
                     assert summary["files"]==1 and summary["unfinished"]==1,summary
-                    with sqlite3.connect(index_path) as db:
+                    with closing(sqlite3.connect(index_path)) as db:
                         db.execute("UPDATE files SET state='done'")
+                        db.commit()
                     send(48,op="summaries")
                     summary=wait(48)[1]["roots"][0]
                     assert summary["indexed"]==1 and summary["unfinished"]==0,summary
