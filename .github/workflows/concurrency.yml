@@ -58,7 +58,7 @@ jobs:
 
   shared-engine:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Select an installed Swift 6.2 or newer toolchain
@@ -89,4 +89,29 @@ jobs:
       - name: Bounded worker startup and response deadlines
         run: swift test --filter 'WorkerDeadlineTests'
       - name: Storage, prepared inference and long-file contracts with synthetic embedders
-        run: swift test --filter 'IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|LongFilesTests'
+        run: swift test --filter 'IndexPipelineTests|IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|LongFilesTests'
+      - name: Compare actual indexer before and after on this runner
+        env:
+          DIGUP_PIPELINE_BENCHMARK: '1'
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/digup-indexing-base"
+          git fetch --no-tags origin ecaf1a6f4d5ec5bc5a4683d266c17f4067976a61
+          git worktree add --detach "$base" ecaf1a6f4d5ec5bc5a4683d266c17f4067976a61
+          cp Tests/DigUpKitTests/IndexPipelineBenchmarkTests.swift "$base/Tests/DigUpKitTests/"
+          mkdir -p "$base/Vendor"
+          for name in llama llama.cpp llama-build; do
+            ln -s "$GITHUB_WORKSPACE/Vendor/$name" "$base/Vendor/$name"
+          done
+          swift test --package-path "$base" --filter IndexPipelineBenchmarkTests 2>&1 | tee indexing-before.txt
+          swift test --filter IndexPipelineBenchmarkTests 2>&1 | tee indexing-after.txt
+          python3 scripts/compare-index-pipeline.py indexing-before.txt indexing-after.txt > indexing-comparison.json
+          cat indexing-comparison.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: asynchronous-indexing-measurements
+          path: |
+            indexing-before.txt
+            indexing-after.txt
+            indexing-comparison.json

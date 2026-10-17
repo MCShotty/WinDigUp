@@ -258,6 +258,7 @@ final class IndexService: @unchecked Sendable {
     /// built with other settings).
     private func run(_ part: Part, only ids: Set<Int64>?) -> Bool {
         let started = Date()
+        defer { emitPipeline(part) }
         let isNew = ids != nil
         do {
             let states = try part.indexer.run(limit:24,only: ids, shouldStop: { [self] in
@@ -285,6 +286,7 @@ final class IndexService: @unchecked Sendable {
     /// The rest of long files (`Indexer.finishLongFiles`), yielding as the backfill does. False when indexing has to
     /// stop.
     private func finishLongFiles() -> Bool {
+        defer { emitPipeline(main) }
         let started = Date()
         do {
             let states = try main.indexer.finishLongFiles(shouldStop: { [self] in
@@ -306,6 +308,13 @@ final class IndexService: @unchecked Sendable {
             emit(["event": "error", "message": "\(error)", "fatal": true])
             return false
         }
+    }
+
+    private func emitPipeline(_ part: Part) {
+        guard let snapshot = part.indexer.lastPipeline,
+              let data = try? JSONEncoder().encode(snapshot),
+              let fields = try? JSONSerialization.jsonObject(with: data) else { return }
+        emit(["event": "index_pipeline", "code": part.code, "pipeline": fields])
     }
 
     /// Waits up to `linger` seconds for something to do. False: time's up, or told to stop.
