@@ -72,6 +72,7 @@ let browser;
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='open_path').at(-1).args.page),2,'A delayed segment update redirected the selected PDF page');
   await page.evaluate(()=>{window.replacement=null;window.blockMeaning=true;});
   await page.fill('#query','Firefox');await page.waitForFunction(()=>document.querySelector('.app-group-title')?.textContent==='Best matches');
+  await page.waitForSelector('.cell');
   assert.ok(await page.evaluate(()=>document.querySelector('.app-row').compareDocumentPosition(document.querySelector('.cell'))&Node.DOCUMENT_POSITION_FOLLOWING));
   await page.evaluate(()=>{window.collision=true;});await page.fill('#query','Firefox ');
   await page.waitForFunction(()=>document.querySelector('.cell .name')?.textContent.includes('Firefox.txt'));

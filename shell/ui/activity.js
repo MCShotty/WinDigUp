@@ -179,7 +179,7 @@ window.ActivityUI = (() => {
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="discovery-section" hidden><h3>Application sources</h3>
-            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Application source settings</button>
+            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Application source settings</button><button data-key="drive-settings" type="button">Choose drives</button>
             <p data-key="discovery-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="gpu-work"></section><section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
@@ -210,6 +210,7 @@ window.ActivityUI = (() => {
       this.get = key => host.querySelector(`[data-key="${key}"]`);
       this.driveList=new PipelineUI.DriveList(this.get("drive-list"));
       this.inferenceView=new PipelineUI.InferenceView(this.get("gpu-work"));
+      this.get("drive-settings").onclick=()=>options.onSettings ? options.onSettings("drives") : invoke("open_settings",{tab:"drives"});
       this.get("source-settings").onclick=()=>options.onSettings ? options.onSettings("apps") : invoke("open_settings",{tab:"apps"});
       this.get("close").hidden = !options.onClose;
       this.get("close").onclick = () => options.onClose?.();

@@ -1,3 +1,6 @@
+#[cfg(not(windows))]
+#[path = "../../../shell/src-tauri/src/discovery_manager.rs"]
+pub mod discovery_manager;
 #[path = "../../../shell/src-tauri/src/enrichment_manager.rs"]
 pub mod enrichment_manager;
 #[path = "../../../shell/src-tauri/src/discovery/mod.rs"]

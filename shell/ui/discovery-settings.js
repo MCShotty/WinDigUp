@@ -13,13 +13,14 @@ const DiscoverySettings = {
         this.accept(key,payload);
         if(key==="enrichment"&&payload.progress?.cleared)this.message("enrichment","Saved descriptions cleared. Your aliases and purpose notes are kept.");
         this.render();
-        if(key==="discovery"&&payload.progress?.phase==="watching"&&!this.el("apps").hidden){
+        if(key==="discovery"&&payload.progress?.phase==="watching"&&!this.el("drives").hidden){
           clearTimeout(this.refreshTimer);this.refreshTimer=setTimeout(()=>this.candidates(),400);
         }
       });
     }
     for(const id of ["drive-enabled","drive-paused"])this.el(id).onchange=()=>this.edit();
     this.el("drive-save").onclick=()=>this.save();
+    this.el("drive-list-refresh").onclick=()=>this.refreshVolumes();
     this.el("drive-revert").onclick=()=>{this.dirty=false;this.draft=null;this.render();};
     this.el("drive-refresh").onclick=()=>this.action("discovery","refresh_discovery",{full:true},"discovery","Drive refresh scheduled.");
     this.el("drive-install").onclick=()=>this.action("discovery","install_discovery_component",{},"discovery","Fast discovery installed. Drive refresh scheduled.");
@@ -48,14 +49,21 @@ const DiscoverySettings = {
     const d=info.discovery||{},e=info.enrichment||{},w=this.providerDrafts.get("windows")||info.windowsSettings||{};
     const s=info.windowsSettingsSemantic||{},p=d.progress||{},ep=e.progress||{};
     this.el("extra-app-sources").hidden=!d.supported;
+    this.el("drives-tab").hidden=!d.supported;
+    this.el("open-drives").hidden=!d.supported;
     if(!d.supported)return;
     const driveBusy=this.pending.has("discovery"),windowsBusy=this.pending.has("windows"),descriptionsBusy=this.pending.has("enrichment");
     if(!this.dirty&&!driveBusy)this.draft=structuredClone(d.options||{enabled:false,paused:false,volumes:[],included:[],hidden:[]});
     const draft=this.draft||{};
     this.el("drive-enabled").checked=Boolean(draft.enabled);this.el("drive-paused").checked=Boolean(draft.paused);
+    const volumeState=d.volumeCatalog?.state;
+    this.el("drive-list-refresh").disabled=this.pending.has("volumes")||volumeState==="loading";
+    this.text("drive-volumes-state",volumeState==="loading"?"Checking mounted drives. Existing choices remain available.":
+      volumeState==="failed"?"Could not refresh the drive list. "+(d.volumeCatalog.message||"Select Refresh drive list to retry."):
+      "Choose the drives where DigUp should discover applications.");
     const volumes=d.volumes||[];
     const all=[...volumes,...(draft.volumes||[]).filter(id=>!volumes.some(v=>v.id===id)).map(id=>({id,name:"Disconnected volume",paths:[],available:false}))];
-    const signature=JSON.stringify([all.map(v=>[v.id,v.paths,v.name,v.filesystem,v.available]),draft.volumes]);
+    const signature=JSON.stringify([all.map(v=>[v.id,v.paths,v.name,v.filesystem,v.available]),draft.volumes,all.length?null:volumeState]);
     if(signature!==this.volumeSignature){
       this.volumeSignature=signature;
       const box=this.el("drive-volumes"),focused=document.activeElement?.value;
@@ -67,7 +75,7 @@ const DiscoverySettings = {
         label.append(check,element("span","",[(volume.paths||[]).join(", "),volume.name,volume.filesystem,volume.available===false?"Unavailable":""].filter(Boolean).join(" · ")));
         box.append(label);
       }
-      if(!all.length)box.append(element("p","note","No mounted volumes were reported. Installed applications remain searchable."));
+      if(!all.length)box.append(element("p","note",volumeState==="loading"?"Waiting for Windows to report mounted drives.":volumeState==="failed"?"The drive list is unavailable. Refresh the list to retry.":"No mounted drives were reported. Connect a drive, then refresh the list."));
       if(focused)for(const check of box.querySelectorAll("input"))if(check.value===focused)check.focus();
     }
     for(const check of this.el("drive-volumes").querySelectorAll("input"))check.disabled=driveBusy;
@@ -102,6 +110,10 @@ const DiscoverySettings = {
     if(phases!==this.phases){this.phases=phases;this.text("sources-announcement","Drive discovery "+(p.phase||"waiting")+". Online descriptions "+(ep.state||"off")+".");}
     if(!this.loaded&&!this.el("apps").hidden){this.loaded=true;this.candidates();}
   },
+  async refreshVolumes(){
+    if(this.pending.has("volumes")||info.discovery?.volumeCatalog?.state==="loading")return;
+    await this.action("volumes","refresh_discovery_volumes",{},"discovery","Drive list refresh requested.");
+  },
   edit(){
     this.draft={...(this.draft||{}),enabled:this.el("drive-enabled").checked,paused:this.el("drive-paused").checked,
       volumes:[...this.el("drive-volumes").querySelectorAll("input:checked")].map(el=>el.value)};
@@ -121,6 +133,7 @@ const DiscoverySettings = {
     let ok=false;
     try{
       const reply=await invoke(command,args);
+      if(!reply||typeof reply!=="object")throw new Error("DigUp did not return the requested status. Try again.");
       if(this.pending.get(source)!==token)return false;
       this.accept(key,reply);ok=true;this.message(source,success||"Options saved.");
     }catch(error){this.message(source,error?.message||String(error));}

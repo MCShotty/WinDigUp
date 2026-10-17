@@ -8,6 +8,10 @@ pub fn discovery_status(shell:State<'_,Arc<Shell>>)->Value{shell.discovery.info(
 #[tauri::command]
 pub fn discovery_volumes(shell:State<'_,Arc<Shell>>)->Value{shell.discovery.info()["volumes"].clone()}
 #[tauri::command]
+pub fn refresh_discovery_volumes(shell:State<'_,Arc<Shell>>)->Value{
+    shell.discovery.request_volumes();shell.discovery.info()
+}
+#[tauri::command]
 pub fn refresh_discovery(shell:State<'_,Arc<Shell>>,full:Option<bool>)->Value{
     shell.discovery.schedule(full.unwrap_or(false));shell.discovery.info()
 }
