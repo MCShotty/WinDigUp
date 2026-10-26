@@ -1,6 +1,8 @@
 "use strict";
 const {chromium} = require("playwright");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const {setup} = require("./application-fixtures.cjs");
 const base = process.env.DIGUP_UI_URL || "http://127.0.0.1:8765";
 (async () => {
@@ -48,7 +50,27 @@ const base = process.env.DIGUP_UI_URL || "http://127.0.0.1:8765";
       assert.equal(await useful.textContent(),"Useful result");
       assert.ok((await page.locator(details).textContent()).includes("Alias match"));
       const selected=await page.evaluate(()=>state.selection);
-      await useful.click();
+      for(const scheme of ["light","dark"]) {
+        await page.emulateMedia({colorScheme:scheme});
+        for(const width of [1120,760]) {
+          await page.setViewportSize({width,height:800});
+          assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"Result details overflowed the viewport");
+          assert.ok(await useful.isVisible());
+        }
+        const evidence=process.env.DIGUP_ACTIVITY_SCREENSHOTS;
+        if(evidence) {
+          fs.mkdirSync(evidence,{recursive:true});
+          const label=await page.evaluateHandle(()=>{
+            const note=document.createElement("div");note.textContent="Synthetic personalization fixture";
+            Object.assign(note.style,{position:"fixed",bottom:"0",left:"0",padding:"3px 6px",background:"Canvas",color:"CanvasText",fontSize:"11px",zIndex:"99999"});
+            document.body.append(note);return note;
+          });
+          await page.screenshot({path:path.join(evidence,"personalization-"+view.replace(".html","")+"-"+scheme+".png")});
+          await label.evaluate(node=>node.remove());
+        }
+      }
+      await useful.focus();
+      await useful.press("Enter");
       assert.equal(await useful.textContent(),"Feedback saved");
       assert.equal(await useful.isDisabled(),true);
       assert.equal(await page.evaluate(()=>state.selection),selected);

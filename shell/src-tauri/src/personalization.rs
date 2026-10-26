@@ -132,7 +132,7 @@ impl Personalization {
             }
         }
         prune(&mut state.entries, now());
-        let signals = Arc::new(state.entries.iter().map(|(key, entry)| (key.clone(), entry.signal())).collect());
+        let signals: Arc<BTreeMap<String, u32>> = Arc::new(state.entries.iter().map(|(key, entry)| (key.clone(), entry.signal())).collect());
         state.sessions.insert(session.into(), Frozen { generation, touched: Instant::now(), signals: signals.clone() });
         signals
     }

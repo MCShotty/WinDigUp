@@ -322,6 +322,7 @@ function appendUsefulResult(container, hit, fail) {
     try {
       await invoke("useful_result", {token:hit.feedbackToken});
       hit.usefulSaved = true; button.textContent = "Feedback saved";
+      button.setAttribute("aria-label", "Useful feedback saved for " + titleOf(hit));
     } catch (error) { button.disabled = false; fail(error); }
   };
   container.append(button);
