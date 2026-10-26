@@ -32,8 +32,8 @@ deduplicate repeated submission of that receipt. Repeated accepted opens within 
 multiply the signal. Search views receive only bounded signals and receipt tokens.
 
 Native file/code opening rechecks the file on a background thread before dispatch. A missing or
-inaccessible file reports a readable error and retains the panel; a stale availability hint cannot
-silently open a different target.
+inaccessible file reports a readable error and retains the panel. Availability hints do not bypass
+this open-time check; it checks path availability rather than a retained physical file identity.
 
 Hosted native/browser tests establish ordering, bounds, persistence and UI behavior. They do not
 establish that personalization improves semantic relevance. Real held-out corpus and physical
