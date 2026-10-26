@@ -96,12 +96,20 @@ extension Crawler {
             let path=folder.standardizedFileURL.path
             guard path==root || FolderSelection.isInside(path,root) else{return false}
             if path==root {return true}
-            let excluded=options.excludedFolders.filter {FolderSelection.isInside($0,root)}
+            let canonicalRoot=FolderSelection.realPath(root)
+            let excluded=options.excludedFolders.flatMap {skip -> [String] in
+                let canonical=FolderSelection.realPath(skip)
+                if FolderSelection.isInside(canonical,canonicalRoot) {
+                    return [skip,canonical,root+String(canonical.dropFirst(canonicalRoot.count))]
+                }
+                return FolderSelection.isInside(skip,root) ? [skip] : []
+            }
             guard Rules.isWalked(path,root:root,home:FileManager.default.homeDirectoryForCurrentUser.path,excluded:excluded) else{return false}
             var current=folder
             while current.path != root {
                 if options.code && Rules.codeSkipReason(forFolder:current) != nil {return false}
-                let values=try? current.resourceValues(forKeys:[.isPackageKey])
+                let values=try? current.resourceValues(forKeys:[.isPackageKey,.isHiddenKey,.isSymbolicLinkKey])
+                if values?.isHidden==true || values?.isSymbolicLink==true {return false}
                 if FileSystem.isPackage(current,values) {return false}
                 let parent=current.deletingLastPathComponent()
                 if parent.path==current.path {return false}

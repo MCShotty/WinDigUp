@@ -652,7 +652,7 @@ fn choose_folders(app: AppHandle) {
 
 #[tauri::command]
 async fn index_now(app: AppHandle) {
-    let _ = tauri::async_runtime::spawn_blocking(move |batch| changed_paths(&app, batch, false)).await;
+    let _ = tauri::async_runtime::spawn_blocking(move || run_index(&app)).await;
 }
 
 #[tauri::command]
@@ -1023,7 +1023,7 @@ fn watch_folders(app: &AppHandle) {
     let index = shell.index_folder();
     *shell.watcher.lock().unwrap() = (!folders.is_empty()).then(|| {
         let app = app.clone();
-        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::MAX, move || run_index(&app))
+        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::MAX, move |batch| changed_paths(&app, batch, false))
     });
     *shell.code_watcher.lock().unwrap() = (!code_folders.is_empty()).then(|| {
         let app = app.clone();

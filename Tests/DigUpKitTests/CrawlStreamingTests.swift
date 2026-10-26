@@ -248,5 +248,24 @@ struct CrawlStreamingTests {
         #expect(streamed.map{URL(fileURLWithPath:$0.path).lastPathComponent}==["kept.py"])
     }
 
+    #if !os(Windows)
+    @Test func canonicalExclusionsApplyThroughSelectedRootAliases() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let alias=root.deletingLastPathComponent().appendingPathComponent("alias-\(UUID().uuidString)")
+        defer {try? FileManager.default.removeItem(at:alias)}
+        try FileManager.default.createSymbolicLink(at:alias,withDestinationURL:root)
+        let excluded=root.appendingPathComponent("excluded")
+        try FileManager.default.createDirectory(at:excluded,withIntermediateDirectories:true)
+        try write(excluded.appendingPathComponent("note.txt"))
+        var options=IndexOptions();options.excludedFolders=[excluded.path]
+        let target=alias.appendingPathComponent("excluded")
+        #expect(!Crawler.canScanSubtree(target,selectedRoots:[alias],options:options))
+        var candidates:[Candidate]=[]
+        _=try Crawler.scan([target],options:options,selectedRoots:[alias],onBatch:{candidates += $0})
+        #expect(candidates.isEmpty)
+    }
+    #endif
+
     enum FixtureError:Error {case noModel}
 }
