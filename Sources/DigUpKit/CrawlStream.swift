@@ -100,7 +100,7 @@ extension Crawler {
                 size INTEGER NOT NULL,mtime REAL NOT NULL,inode INTEGER NOT NULL,device INTEGER NOT NULL);
             """)
         let selections=selectedRoots ?? roots
-        let rootPaths = Set(selections.map { $0.standardizedFileURL.path })
+        let rootPaths = Set(selections.flatMap { [$0.standardizedFileURL.path,FolderSelection.realPath($0.path)] })
         let home = fm.homeDirectoryForCurrentUser.path
         var report = CrawlReport()
         var repos = GitRepos()

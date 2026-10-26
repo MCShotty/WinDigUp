@@ -504,7 +504,7 @@ final class IndexService: @unchecked Sendable {
            request["command"] as? String=="changes" {
             let isCode=request["code"] as? Bool ?? false
             guard let part=parts.first(where:{$0.code==isCode}) else {return}
-            let paths=request["paths"] as? [String] ?? []
+            let paths=(request["paths"] as? [String] ?? []).map {URL(fileURLWithPath:$0).standardizedFileURL.path}
             let dirty=request["dirtyRoots"] as? [String] ?? []
             let valid=Set(paths.filter {path in
                 part.roots.contains {root in path==root.path || FolderSelection.isInside(path,root.path)}

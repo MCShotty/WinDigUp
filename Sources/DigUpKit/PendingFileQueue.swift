@@ -88,7 +88,16 @@ final class PendingFileQueue {
         exhausted=false
     }
 
-    func prioritize(_ path: String) {
+    private func flushConsumed() throws {
+        let ordinals=buffer.prefix(offset).map {SQLValue.int($0.ordinal)}
+        guard !ordinals.isEmpty else {return}
+        try store.db.run("DELETE FROM \(table) WHERE ord IN (\(ordinals.map {_ in "?"}.joined(separator:",")))",ordinals)
+        buffer.removeFirst(offset)
+        offset=0
+    }
+
+    func prioritize(_ path: String) throws {
+        try flushConsumed()
         preferredPath=path
         buffer.removeAll(keepingCapacity:true)
         offset=0;after=0;exhausted=false
@@ -97,6 +106,7 @@ final class PendingFileQueue {
     func peek() throws -> Entry? {
         guard !closed else { return nil }
         if offset == buffer.count {
+            try flushConsumed()
             guard !exhausted else { return nil }
             buffer.removeAll(keepingCapacity: true)
             offset = 0
@@ -131,7 +141,6 @@ final class PendingFileQueue {
 
     func take() throws -> Entry? {
         guard let entry = try peek() else { return nil }
-        try store.db.run("DELETE FROM \(table) WHERE ord=?",[.int(entry.ordinal)])
         offset += 1
         return entry
     }

@@ -167,7 +167,7 @@ struct CrawlStreamingTests {
         _=try indexer.sync([first,second])
         let queue=try store.pendingQueue()
         defer {queue.close()}
-        queue.prioritize(second.path)
+        try queue.prioritize(second.path)
         #expect(try queue.take()?.file.path==second.appendingPathComponent("b.txt").path)
         #expect(try queue.take()?.file.path==first.appendingPathComponent("a.txt").path)
         #expect(try queue.take()==nil)

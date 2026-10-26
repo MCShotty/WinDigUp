@@ -198,7 +198,7 @@ public final class Indexer {
         var states = Array(repeating: [String: Int](), count: sources.count)
         var done = Array(repeating: 0, count: sources.count)
         func nextJob() throws -> Job? {
-            if let (source,path)=priority(),queues.indices.contains(source) {queues[source].prioritize(path)}
+            if let (source,path)=priority(),queues.indices.contains(source) {try queues[source].prioritize(path)}
             let updates = try admit()
             for index in queues.indices where index < updates.count { try queues[index].append(updates[index]) }
             var priorities: [Int: Int] = [:]

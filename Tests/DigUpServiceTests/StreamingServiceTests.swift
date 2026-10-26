@@ -9,6 +9,8 @@ struct StreamingServiceTests {
         let condition=NSCondition()
         var indexed=false
         var sawOverlap=false
+        var folders:[String]=[]
+        func visit(_ folder:URL) {condition.lock();folders.append(folder.path);condition.unlock()}
         func waitForIndex() {
             condition.lock()
             let deadline=Date().addingTimeInterval(5)
@@ -78,6 +80,62 @@ struct StreamingServiceTests {
         #expect(gate.sawOverlap)
         #expect(try store.counts().vectors==1)
         #expect(try codeStore.counts().vectors==1)
+    }
+
+    @Test func ordinaryChangesReconcileTheirSubtreeWithoutRecrawlingASibling() throws {
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        let left=files.appendingPathComponent("left"),right=files.appendingPathComponent("right")
+        try FileManager.default.createDirectory(at:left,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:right,withIntermediateDirectories:true)
+        let changed=left.appendingPathComponent("note.txt")
+        try "An original timetable document.".write(to:changed,atomically:false,encoding:.utf8)
+        try "A separate useful travel document.".write(to:right.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory)
+        let shared=SharedEmbedder{Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        let gate=Gate()
+        var requested=false
+        var service:IndexService?
+        service=IndexService(main:.init(store:store,indexer:indexer,roots:[files],keepOnly:nil),code:nil,
+            folder:directory,model:shared,modelReady:{true},backfill:true,newFilesLimit:50,linger:0,
+            output:{event in
+                if event["event"] as? String=="idle" && !requested {
+                    requested=true
+                    try? "A revised longer timetable document with meaningful changes.".write(to:changed,atomically:false,encoding:.utf8)
+                    let data=try? JSONSerialization.data(withJSONObject:["command":"changes","code":false,
+                        "paths":[changed.path],"dirtyRoots":[]])
+                    if let data,let line=String(data:data,encoding:.utf8){service?.accept(line)}
+                }
+            },beforeScanFolder:{gate.visit($0)})
+        #expect(service?.serve(commandInput:false)==0)
+        #expect(requested)
+        #expect(gate.folders.filter{$0==right.path}.count==1)
+        #expect(gate.folders.filter{$0==left.path}.count==2)
+        #expect(try store.counts().vectors==2)
+    }
+
+    @Test func alreadyReadyFileAndCodeQueuesAlternate() throws {
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:code,withIntermediateDirectories:true)
+        for index in 0..<4 {
+            try "A useful railway document.".write(to:files.appendingPathComponent("note-\(index).txt"),atomically:false,encoding:.utf8)
+            try "def railway():\n    return departure\n".write(to:code.appendingPathComponent("schedule-\(index).py"),atomically:false,encoding:.utf8)
+        }
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory),codeStore=try IndexStore(directory:directory,file:IndexStore.codeFile)
+        var options=IndexOptions();options.code=true
+        let first=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{Model()})
+        let second=try Indexer(store:codeStore,options:options,makeEmbedder:{Model()})
+        _=try first.sync([files]);_=try second.sync([code])
+        var order:[Int]=[]
+        _=try Indexer.runScheduled([.init(indexer:first),.init(indexer:second)],onEvent:{source,_,_ in order.append(source)})
+        #expect(Array(order.prefix(4))==[0,1,0,1])
     }
 
 }
