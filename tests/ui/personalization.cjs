@@ -65,7 +65,9 @@ const base = process.env.DIGUP_UI_URL || "http://127.0.0.1:8765";
             Object.assign(note.style,{position:"fixed",bottom:"0",left:"0",padding:"3px 6px",background:"Canvas",color:"CanvasText",fontSize:"11px",zIndex:"99999"});
             document.body.append(note);return note;
           });
-          await page.screenshot({path:path.join(evidence,"personalization-"+view.replace(".html","")+"-"+scheme+".png")});
+          const png=await page.screenshot({path:path.join(evidence,"personalization-"+view.replace(".html","")+"-"+scheme+".png")});
+          if(process.env.DIGUP_PERSONALIZATION_SCREENSHOT_LOG==="1")
+            console.log("PERSONALIZATION_SCREENSHOT_BASE64 "+view.replace(".html","")+"-"+scheme+" "+png.toString("base64"));
           await label.evaluate(node=>node.remove());
         }
       }

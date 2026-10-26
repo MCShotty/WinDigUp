@@ -7,7 +7,7 @@ pub fn verify_file(path: &Path) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
             Err("This file is no longer available. Reconnect its drive or refresh its folder and search again.".into()),
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied =>
-            Err("Windows could not access this file. Check its permissions and try again.".into()),
+            Err("This file could not be accessed. Check its permissions and try again.".into()),
         Err(_) => Err("This file could not be checked. Reconnect its drive and try again.".into()),
     }
 }
