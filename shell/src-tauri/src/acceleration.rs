@@ -4,13 +4,30 @@ use std::path::{Path, PathBuf};
 
 pub const SCHEMA: u32 = 2;
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ResourceProfile { Quiet, #[default] Balanced, Faster }
+const PROFILE_ERROR: &str = "The saved background resource profile is not supported. Choose Quiet, Balanced or Faster in General settings; other preferences were kept.";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ResourceProfile { Quiet, #[default] Balanced, Faster, Unsupported(String) }
 
 impl ResourceProfile {
-    pub fn as_str(self) -> &'static str {
-        match self { Self::Quiet => "quiet", Self::Balanced => "balanced", Self::Faster => "faster" }
+    pub fn as_str(&self) -> &str {
+        match self { Self::Quiet => "quiet", Self::Balanced => "balanced", Self::Faster => "faster", Self::Unsupported(value) => value }
+    }
+    pub fn is_supported(&self) -> bool { !matches!(self, Self::Unsupported(_)) }
+}
+
+impl Serialize for ResourceProfile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for ResourceProfile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "quiet" => Self::Quiet, "balanced" => Self::Balanced, "faster" => Self::Faster,
+            _ => Self::Unsupported(value),
+        })
     }
 }
 
@@ -69,10 +86,11 @@ impl Acceleration {
     }
 
     pub fn ready(&self) -> bool {
-        self.version <= SCHEMA && !self.discovery_pending && !self.selection_required && self.discovery_error.is_none()
+        self.version <= SCHEMA && self.resource_profile.is_supported() && !self.discovery_pending && !self.selection_required && self.discovery_error.is_none()
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if !self.resource_profile.is_supported() { return Err(PROFILE_ERROR.into()); }
         if self.jobs>3{return Err("Concurrent GPU jobs must be automatic, 1, 2, or 3.".into())}
         if self.version > SCHEMA { return Err("These accelerator settings require a newer DigUp.".into()); }
         if self.backend == "nvidia-vulkan" {
@@ -103,7 +121,7 @@ impl Acceleration {
     }
 
     pub fn background_jobs(&self) -> u8 {
-        if self.resource_profile == ResourceProfile::Quiet || matches!(self.backend.as_str(), "openvino-npu" | "metal") { return 1; }
+        if !self.resource_profile.is_supported() || self.resource_profile == ResourceProfile::Quiet || matches!(self.backend.as_str(), "openvino-npu" | "metal") { return 1; }
         if self.jobs == 0 { 3 } else { self.jobs.min(3) }
     }
 
@@ -114,7 +132,8 @@ impl Acceleration {
             ("DIGUP_ACCELERATOR_DISCOVERY_PENDING".into(), if self.discovery_pending { "1" } else { "0" }.into()),
             ("DIGUP_ACCELERATOR_ERROR".into(), if self.version > SCHEMA {
                 "These accelerator settings require a newer DigUp.".into()
-            } else { self.discovery_error.clone().unwrap_or_default() })]
+            } else if !self.resource_profile.is_supported() { PROFILE_ERROR.into() }
+            else { self.discovery_error.clone().unwrap_or_default() })]
     }
 
     /// A one-time default resolution; never used to recover from an explicit backend's inference failure.
@@ -211,7 +230,7 @@ mod tests {
         assert_eq!(original.background_jobs(), 2);
         for profile in [ResourceProfile::Balanced, ResourceProfile::Faster] {
             for (jobs, expected) in [(0,3),(1,1),(2,2),(3,3)] {
-                let config = Acceleration { jobs, resource_profile: profile, ..original.clone() };
+                let config = Acceleration { jobs, resource_profile: profile.clone(), ..original.clone() };
                 assert_eq!(config.background_jobs(), expected);
                 assert_eq!(config.jobs, jobs);
                 assert!(config.environment().contains(&("DIGUP_GPU_JOBS".into(), jobs.to_string())));
@@ -223,12 +242,45 @@ mod tests {
         assert_eq!(quiet.jobs, 2);
         assert_eq!(quiet.gpu, "VK-stable");
         assert_eq!(quiet.index_directory(Path::new("base")), original.index_directory(Path::new("base")));
-        assert!(serde_json::from_value::<Acceleration>(json!({"resourceProfile":"unbounded"})).is_err());
+        let unsupported: Acceleration = serde_json::from_value(json!({"resourceProfile":"unbounded"})).unwrap();
+        assert_eq!(unsupported.resource_profile.as_str(), "unbounded");
+        assert!(unsupported.validate().is_err());
         let roundtrip: Acceleration = serde_json::from_value(serde_json::to_value(&quiet).unwrap()).unwrap();
         assert_eq!(roundtrip.resource_profile, ResourceProfile::Quiet);
         for backend in ["openvino-npu", "metal"] {
             assert_eq!(Acceleration { backend: backend.into(), jobs:3, resource_profile:ResourceProfile::Faster, ..original.clone() }.background_jobs(), 1);
         }
+    }
+
+    #[test]
+    fn future_profile_roundtrip_preserves_the_original_value_and_other_preferences() {
+        let root = std::env::temp_dir().join(format!("digup-future-profile-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        let mut settings = crate::settings::Settings::default();
+        settings.folders = vec!["selected-folder".into()];
+        settings.skipped = vec!["selected-folder/private".into()];
+        settings.hotkey = "Control+Alt+Space".into();
+        settings.applications.enabled = false;
+        settings.acceleration = Acceleration { backend:"amd-vulkan".into(), jobs:2, discovery_pending:false,
+            resource_profile:ResourceProfile::Unsupported("future-quiet-v7".into()), ..Default::default() };
+        settings.save(&path).unwrap();
+        let loaded = crate::settings::Settings::load(&path);
+        assert_eq!(loaded.folders, settings.folders);
+        assert_eq!(loaded.skipped, settings.skipped);
+        assert_eq!(loaded.hotkey, settings.hotkey);
+        assert!(!loaded.applications.enabled);
+        assert_eq!(loaded.acceleration.jobs, 2);
+        assert_eq!(loaded.acceleration.resource_profile.as_str(), "future-quiet-v7");
+        assert!(!loaded.acceleration.ready());
+        assert!(loaded.acceleration.validate().unwrap_err().contains("Choose Quiet, Balanced or Faster"));
+        assert!(loaded.acceleration.environment().iter().any(|(key,value)| key == "DIGUP_ACCELERATOR_ERROR" && value.contains("other preferences")));
+        loaded.save(&path).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["acceleration"]["resourceProfile"], "future-quiet-v7");
+        assert_eq!(crate::settings::Settings::load(&path).folders, settings.folders);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
 }
