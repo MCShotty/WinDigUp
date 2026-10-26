@@ -311,6 +311,30 @@ struct StreamingServiceTests {
         return (events,try store.counts().vectors,try store.files(under:roots.flatMap {[$0.path,$0.resolvingSymlinksInPath().path]}))
     }
 
+    @Test(arguments:[false,true])
+    func emptyAndUnavailableScansDoNotRestartDiscoveryAfterCompletion(unavailable:Bool) throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files"),index=root.appendingPathComponent("index")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        if unavailable {
+            try "A cached railway document.".write(to:files.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
+            #expect(try runFolders([files],index:index).vectors==1)
+            try FileManager.default.moveItem(at:files,to:root.appendingPathComponent("away"))
+        }
+        let result=try runFolders([files],index:index)
+        var discoveryActive=false,checkedIdle=false
+        for event in result.events {
+            if let active=event["discoveryActive"] as? Bool {discoveryActive=active}
+            if event["event"] as? String=="idle" {
+                checkedIdle=true
+                #expect(!discoveryActive)
+                #expect(event["files"] as? Int == (unavailable ? 1 : 0))
+            }
+        }
+        #expect(checkedIdle)
+    }
+
     @Test func disconnectedWholeRootKeepsCachedCountsAfterHelperRestart() throws {
         let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
