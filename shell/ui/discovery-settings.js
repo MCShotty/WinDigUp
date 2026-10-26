@@ -93,7 +93,11 @@ const DiscoverySettings = {
           label.append(check,document.createTextNode(source==="files"?"Files":"Applications"));controls.append(label);checks[source]=check;
         }
         const actions=element("div","drive-actions"),activity=element("button","link","View activity");
-        activity.type="button";activity.onclick=()=>{showTab("activity");activityView.focusDrive(volume.id);};
+        activity.type="button";activity.onclick=()=>{
+          showTab("activity");
+          if(row.hasDriveDetails)activityView.focusDrive(volume.id);
+          else {activityView.setTab("overview");const heading=activityView.get("phase");heading.tabIndex=-1;heading.focus();}
+        };
         actions.append(activity);root.append(description,controls,actions);
         row={root,name,state,selection,counts,checks,activity};this.volumeRows.set(volume.id,row);
       }
@@ -117,7 +121,9 @@ const DiscoverySettings = {
       const changed=row.checks.files.checked!==savedFiles||row.checks.applications.checked!==savedApps;
       const note=changed?"Unsaved choices for this drive.":volume.available===false?"Saved choices are kept while this drive is disconnected.":"Choices saved";
       if(row.selection.textContent!==note)row.selection.textContent=note;
-      row.activity.setAttribute("aria-label","View activity for "+title);
+      row.hasDriveDetails=savedApps&&d.version===2;
+      row.activity.textContent=row.hasDriveDetails?"View drive activity":"Open Activity";
+      row.activity.setAttribute("aria-label",row.hasDriveDetails?"View activity for "+title:"Open Activity");
     }
     for(const[id,row]of this.volumeRows)if(!present.has(id)){row.root.remove();this.volumeRows.delete(id);}
     let empty=box.querySelector(".drive-list-empty");

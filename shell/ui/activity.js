@@ -286,8 +286,9 @@ window.ActivityUI = (() => {
       const search=snapshot.search?.last;
       put("search-total",search?`${Math.round(search.total||0)} ms input to render · ${search.phase.replace(/_/g," ")}${search.cacheHit?" · Cached query":""}`:"No search timing reported yet.");
       put("search-breakdown",search?searchBreakdown(search):"");
-      const scanning = f.discoveryActive === true || ["discovering", "preparing_queue", "starting"].includes(f.phase);
-      const title = f.discoveryActive === true && ["discovering", "preparing_queue", "indexing"].includes(f.phase)
+      const overlap = f.discoveryActive === true && !f.paused && ["discovering", "preparing_queue", "indexing"].includes(f.phase);
+      const scanning = overlap || ["discovering", "preparing_queue", "starting"].includes(f.phase);
+      const title = overlap
         ? "Discovering and indexing files" : phases[f.phase] || "File indexing";
       put("phase", title);
       const explanations = {
@@ -307,7 +308,7 @@ window.ActivityUI = (() => {
         preparing_model: "File indexing is waiting for model files. Application names and launching remain available.",
         unavailable: "The selected accelerator cannot run inference. Application names and launching remain available.",
       };
-      put("explanation", f.discoveryActive === true ? "Discovery is still running while prepared files become searchable. The final eligible total is not known yet." : explanations[f.phase] || "Waiting for the next file-worker update.");
+      put("explanation", overlap ? "Discovery is still running while prepared files become searchable. The final eligible total is not known yet." : explanations[f.phase] || "Waiting for the next file-worker update.");
       const known = !scanning && typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
       const meter = this.get("meter"); meter.classList.toggle("indeterminate", !known);
       meter.hidden = !known && !scanning && !["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
@@ -317,8 +318,8 @@ window.ActivityUI = (() => {
       meter.setAttribute("aria-valuetext", known ? `${number(f.done)} of ${number(f.total)}` : "Working; total not known yet");
       put("progress-label", known ? `${number(f.done)} of ${number(f.total)} ${f.phase === "finishing" ? "pages and chunks" : "files"}` : meter.hidden ? "" : "Total not known yet");
       const stage = f.phase === "idle" ? 2 : ["indexing", "finishing", "waiting"].includes(f.phase) ? 1 : 0;
-      this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (f.discoveryActive === true && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
-      this.host.querySelector(".activity-stages").setAttribute("aria-label", f.discoveryActive === true ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");
+      this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (overlap && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
+      this.host.querySelector(".activity-stages").setAttribute("aria-label", overlap ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");
       this.host.querySelector(".activity-stages").hidden = ["not_configured", "failed", "unavailable", "preparing_model"].includes(f.phase);
       put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
       put("second-value", number(scanning ? f.candidates : f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
