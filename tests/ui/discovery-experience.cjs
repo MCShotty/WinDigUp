@@ -160,10 +160,15 @@ let browser;
     }
   }
   await page.emulateMedia({forcedColors:"active"});await page.evaluate(()=>showTab("drives"));
-  await page.locator("#drive-save").focus();
-  assert.ok(await page.locator("#drive-save").evaluate(node=>getComputedStyle(node).outlineStyle!=="none"||getComputedStyle(node).borderStyle!=="none"));
-  await page.goto(base+"/window.html");
-  assert.equal(await page.getByRole("button",{name:"Toggle result details",exact:true}).count(),1);
+  await page.locator("#drive-list-refresh").focus();
+  assert.equal(await page.locator("#drive-list-refresh").evaluate(node=>node===document.activeElement),true);
+  assert.ok(await page.locator("#drive-list-refresh").evaluate(node=>getComputedStyle(node).outlineStyle!=="none"||getComputedStyle(node).borderStyle!=="none"));
+  await page.setViewportSize({width:760,height:800});await page.goto(base+"/window.html");
+  const previewButton=page.locator("#toggle-preview");await previewButton.waitFor({state:"visible"});
+  assert.match(await previewButton.getAttribute("aria-label"),/^(Show|Hide) Preview$/);
+  const previousPreview=await previewButton.getAttribute("aria-pressed");await previewButton.click();
+  assert.notEqual(await previewButton.getAttribute("aria-pressed"),previousPreview);
+  assert.match(await previewButton.getAttribute("aria-label"),/^(Show|Hide) Preview$/);
   assert.deepEqual(errors,[]);
   console.log("PASS: source navigation, stable drive rows/drafts, overlap counts, truthful device counters, resource/personalization controls, keyboard tabs, themes and scaling");
 })().finally(async()=>{await browser?.close();}).catch(error=>{console.error(error);process.exit(1);});
