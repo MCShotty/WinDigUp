@@ -1,0 +1,37 @@
+name: Search storage and availability
+on:
+  pull_request:
+    paths:
+      - 'Sources/digup/SearchService.swift'
+      - 'Sources/digup/FileAvailability.swift'
+      - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'
+      - 'scripts/benchmark-search-scale.py'
+      - '.github/workflows/search-storage.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: search-storage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  availability:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Select Swift toolchain
+        run: |
+          selected=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -print | sort | tail -1)
+          test -n "$selected"
+          echo "DEVELOPER_DIR=$selected/Contents/Developer" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Build native dependency
+        run: bash scripts/build-llama.sh
+      - name: Delayed availability evidence without model inference
+        run: swift test --filter SearchAvailabilityTests

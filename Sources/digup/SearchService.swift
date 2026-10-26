@@ -14,6 +14,7 @@ final class SearchService: @unchecked Sendable {
     private var semanticSearcher: Searcher?, semanticCodeSearcher: Searcher?
     private var roots: [String], skipped: [String], types: Set<String>, codeRoots: [String], codeSkipped: [String]
     private let idleSeconds: Double
+    private let fileExists: @Sendable (String) -> Bool
     private let log: URL
     private var encoder: (any Embedder)?
     private var encoderState = "stopped"
@@ -51,7 +52,8 @@ final class SearchService: @unchecked Sendable {
 
     init(
         index: URL, baseIndex: URL, roots: [String], skipped: [String], types: Set<String>, codeRoots: [String],
-        codeSkipped: [String], idleSeconds: Double
+        codeSkipped: [String], idleSeconds: Double,
+        fileExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) throws {
         directory = index
         baseDirectory = baseIndex
@@ -64,6 +66,7 @@ final class SearchService: @unchecked Sendable {
         self.codeRoots = codeRoots
         self.codeSkipped = codeSkipped
         self.idleSeconds = idleSeconds
+        self.fileExists = fileExists
         log = index.appendingPathComponent("worker-query.log")
         previews = index.appendingPathComponent("previews")
         try? FileManager.default.removeItem(at: previews)
@@ -444,7 +447,7 @@ final class SearchService: @unchecked Sendable {
         default: throw CLIError("Unknown op \(op)")
         }
     }
-    private func fileSearch(_ request: [String: Any], in index: Searcher?, vector: [Float]?, source: String?) throws
+    func fileSearch(_ request: [String: Any], in index: Searcher?, vector: [Float]?, source: String?) throws
         -> [String: Any]
     {
         let text = request["q"] as? String ?? ""
@@ -460,12 +463,19 @@ final class SearchService: @unchecked Sendable {
             warning = "Meaning search is unavailable for incompatible index vectors"
         }
         let options = configLock.withLock { (code ? codeRoots : roots, code ? codeSkipped : skipped, types) }
+        var availabilityMs = 0.0
+        var availabilityChecks = 0
+        func exists(_ path: String) -> Bool {
+            let began = Self.now
+            defer { availabilityMs += (Self.now - began) * 1000; availabilityChecks += 1 }
+            return fileExists(path)
+        }
         let exactNames = try index.exactNamePaths(text)
         let exactCollision =
             exactNames?.contains { path in
                 (options.0.isEmpty || FolderSelection.isSearched(path, folders: options.0, skipped: options.1))
                     && !options.2.contains((path as NSString).pathExtension.lowercased())
-                    && FileManager.default.fileExists(atPath: path)
+                    && exists(path)
             } ?? false
         if code && options.0.isEmpty { return ["hits": [], "strong": 0, "meaning": false] }
         let hits = try index.search(
@@ -475,9 +485,11 @@ final class SearchService: @unchecked Sendable {
         ).filter {
             (options.0.isEmpty || FolderSelection.isSearched($0.path, folders: options.0, skipped: options.1))
                 && (code || !options.2.contains(($0.path as NSString).pathExtension.lowercased()))
-                && FileManager.default.fileExists(atPath: $0.path)
+                && exists($0.path)
         }
         var timing = index.timings
+        timing["availability_probe"] = availabilityMs
+        timing["availability_checks"] = Double(availabilityChecks)
         timing["search"] = (Self.now - started) * 1000
         var reply: [String: Any] = [
             "hits": hits.map(hitFields), "strong": Searcher.strongCount(hits), "meaning": vector != nil,
