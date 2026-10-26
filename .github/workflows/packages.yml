@@ -20,8 +20,8 @@ permissions:
 
 concurrency:
   group: packages-${{ github.event.pull_request.number || github.ref }}
-  # Build the latest installer; native dependencies are cached independently.
-  cancel-in-progress: true
+  # Let active native dependency builds finish and publish their cache.
+  cancel-in-progress: false
 
 jobs:
   linux:
