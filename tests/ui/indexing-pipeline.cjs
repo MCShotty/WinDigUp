@@ -22,7 +22,7 @@ let browser;
     window.__TAURI__.core.invoke=async(command,args={})=>{
       const reply=await old(command,args);
       if(command==="activity_snapshot"){
-        reply.files.phase="indexing";reply.files.pipeline={files:structuredClone(window.pipelineFixture)};
+        reply.files.phase=window.pipelinePhase||"indexing";reply.files.pipeline={files:structuredClone(window.pipelineFixture)};
         reply.files.paused=Boolean(window.pausedFixture);
         reply.inference.model={state:"ready"};
       }
@@ -62,6 +62,15 @@ let browser;
   await section.waitFor({state:"hidden"});
   await page.evaluate(()=>{window.pipelineFixture.schemaVersion=2;emit("state",{});});
   await section.waitFor({state:"visible"});
+  for(const [phase,label] of [["failed","Indexing failed"],["stopped","File worker stopped"],["unavailable","File inference unavailable"]]){
+    await page.evaluate(phase=>{window.pipelinePhase=phase;window.pipelineFixture.blockedBy="running";emit("state",{});},phase);
+    await page.waitForFunction(label=>document.querySelector('[data-key="indexing-work"]').textContent.includes(label),label);
+    assert.match(await section.locator(":scope > p").nth(1).innerText(),/Last reported:/);
+    assert.ok(!(await section.locator(":scope > p").first().innerText()).includes("Inference requests in progress"));
+  }
+  await page.evaluate(()=>{window.pipelinePhase="unavailable";window.pipelineFixture.runningJobs=null;emit("state",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="indexing-work"]').textContent.includes("Not reported inference requests"));
+  await page.evaluate(()=>{window.pipelinePhase="indexing";window.pipelineFixture.runningJobs=2;emit("state",{});});
   await page.emulateMedia({forcedColors:"active",reducedMotion:"reduce"});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.emulateMedia({forcedColors:"none",reducedMotion:"no-preference"});

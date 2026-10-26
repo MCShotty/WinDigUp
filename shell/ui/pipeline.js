@@ -174,12 +174,27 @@ window.PipelineUI = (() => {
     return Object.values(files.pipeline || {}).filter(value => value?.schemaVersion === 2)
       .sort((a,b) => (b.receivedAt || b.capturedAt || 0) - (a.receivedAt || a.capturedAt || 0))[0];
   }
+  function heldSummary(files = {}) {
+    return [[files.heldPending,"pending files"],[files.heldUnfinished,"long files"]]
+      .filter(([value]) => Number.isFinite(value) && value > 0)
+      .map(([value,label]) => count(value)+" "+label+" held until folders are checked").join(" · ");
+  }
+  function heldFiles(files = {}) {
+    return files.knownCountsComplete !== false && files.phase === "waiting" && Boolean(heldSummary(files))
+      && files.runnablePending === 0 && files.runnableUnfinished === 0;
+  }
+  const stoppedPipeline = {
+    failed:"Indexing failed",stopped:"File worker stopped",unavailable:"File inference unavailable",
+    not_configured:"File search is not configured",preparing_model:"Waiting for model files",
+    checking_accelerator:"Checking the accelerator",starting:"Waiting for a pipeline update",
+    idle:"No active file indexing reported",waiting:"No active file operation reported",
+  };
   function indexSummary(files = {}) {
     const sample = indexingSample(files);
     if (!sample) return "";
-    return "Indexing pipeline: " + (indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
-      "; " + sample.readyJobs + " ready; " + sample.runningJobs + " inference requests; " +
-      sample.completedJobs + " awaiting publication; admission capacity " + sample.capacity;
+    return "Indexing pipeline: " + (heldFiles(files) ? "Queued work held until folders are checked" : stoppedPipeline[files.phase] || indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
+      "; last reported " + count(sample.readyJobs) + " ready; " + count(sample.runningJobs) + " inference requests; " +
+      count(sample.completedJobs) + " awaiting publication; admission capacity " + count(sample.capacity);
   }
   class IndexingView {
     constructor(host) {
@@ -209,12 +224,14 @@ window.PipelineUI = (() => {
       const sample=indexingSample(files);this.host.hidden=!sample;
       if(!sample)return;
       const phase=files.paused?"Indexing paused":files.phase==="scheduled"?"Waiting for the indexing schedule":
-        indexingReasons[sample.blockedBy] || "Pipeline status unavailable";
+        heldFiles(files)?"Queued work held until folders are checked":
+        stoppedPipeline[files.phase] || "Latest pipeline report: "+(indexingReasons[sample.blockedBy] || "Status unavailable");
       text(this.state,phase);
-      text(this.counts,sample.readyJobs+" ready · "+sample.runningJobs+" inference requests · "+
-        sample.completedJobs+" awaiting publication");
-      text(this.note,"Admission capacity "+sample.capacity+" jobs · "+sample.preparationWorkers+
-        " preparation workers · Up to "+sample.inferenceWorkers+" inference requests. "+
+      text(this.counts,"Last reported: "+count(sample.readyJobs)+" ready · "+count(sample.runningJobs)+" inference requests · "+
+        count(sample.completedJobs)+" awaiting publication");
+      text(this.note,(stoppedPipeline[files.phase] ? "Historical counters; current worker state is reported above. " : "")+
+        "Last reported admission capacity "+count(sample.capacity)+" jobs · "+count(sample.preparationWorkers)+
+        " preparation workers · Up to "+count(sample.inferenceWorkers)+" inference requests. "+
         (inference.error ? "See the inference error below." : ""));
       for(const [key,element] of this.fields){
         const value=sample[key];
@@ -229,5 +246,5 @@ window.PipelineUI = (() => {
     return entries(discovery).map(({ volume, progress }) =>
       "Volume: " + label(volume) + "\nActivity: " + phase(discovery, progress) + "; " + metrics(progress)).join("\n");
   }
-  return { DriveList, InferenceView, IndexingView, indexSummary, summary, entries, phase, metrics };
+  return { DriveList, InferenceView, IndexingView, indexSummary, summary, entries, phase, metrics, heldFiles, heldSummary };
 })();

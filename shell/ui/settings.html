@@ -85,6 +85,7 @@
       </div>
       <label for="resource-profile">Background GPU resource use</label>
       <select id="resource-profile" class="field" aria-describedby="resource-profile-note"><option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="faster">Faster</option></select>
+      <p id="resource-profile-message" class="note problem" role="status" hidden></p>
       <p id="resource-profile-note" class="note">Quiet uses one background GPU model owner. Balanced and Faster currently preserve the same GPU-job ceiling, subject to available memory. This GPU-only choice is kept when using NPU or Metal. Search keeps priority; it does not cap device power or clocks.</p>
       <div id="gpu-jobs-control" class="gpu-jobs-control">
         <label for="gpu-jobs">Concurrent GPU jobs</label>
