@@ -1,14 +1,16 @@
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
-    io::Read,
-    process::{Command, Stdio},
     sync::{mpsc::{self, SyncSender}, Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(any(windows, test))]
+use std::{io::Read, process::{Command, Stdio}};
+
 const INTERVAL: Duration = Duration::from_secs(1);
 const DEMAND_LIFETIME: Duration = Duration::from_secs(4);
+#[cfg(any(windows, test))]
 const OUTPUT_LIMIT: u64 = 4096;
 const HISTORY_LIMIT: usize = 120;
 type Sampler = dyn Fn(&str) -> Result<Metrics, String> + Send + Sync;
@@ -155,6 +157,7 @@ fn valid_uuid(id: &str) -> bool {
     })
 }
 
+#[cfg(any(windows, test))]
 fn parse_metrics(output: &[u8], expected: &str) -> Result<Metrics, String> {
     let invalid = || "The NVIDIA driver returned an invalid device metrics response.".to_string();
     if output.len() as u64 > OUTPUT_LIMIT { return Err(invalid()); }
@@ -215,9 +218,11 @@ fn sample_nvidia(id: &str) -> Result<Metrics, String> {
     { Err("Live vendor counters are currently supported only by the Windows NVIDIA provider.".into()) }
 }
 
+#[cfg(any(windows, test))]
 fn run_bounded(command: &mut Command, timeout: Duration) -> Result<Vec<u8>, String> {
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
         .map_err(|_| "The NVIDIA driver metrics tool could not start.".to_string())?;
+    crate::helper::adopt(&child);
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill(); let _ = child.wait();
         return Err("The metrics output stream is unavailable.".into());

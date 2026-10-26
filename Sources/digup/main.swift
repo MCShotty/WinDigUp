@@ -228,6 +228,7 @@ private final class WorkerLogs: @unchecked Sendable {
 
 /// Strict GPU llama.cpp, or the worker that verifies every OpenVINO graph on Intel NPU.
 func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) throws -> any Embedder {
+    try Acceleration.requireInferenceReady()
     try FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
     if var config = try WorkerConfig.fromEnvironment() {
         config.log = log

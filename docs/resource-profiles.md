@@ -33,7 +33,8 @@ and recent Activity demand. The snapshot path only reads/updates bounded memory.
 On Windows, the sampler invokes the driver's nvidia-smi.exe from the Windows system directory
 returned by Windows. It never searches PATH or runs a shell. It requests the exact physical GPU UUID
 and rejects replies for another UUID. Each subprocess has a two-second deadline and a 4 KiB output
-limit. Readings are at most once per second, failures retry no faster than ten seconds, and no more
+limit. The metrics child joins DigUp's worker job, so exit/update cleanup ends it.
+Readings are at most once per second, failures retry no faster than ten seconds, and no more
 than 120 successful samples are retained in memory.
 
 The reported GPU utilization and memory are device-wide, including other applications. They are not
