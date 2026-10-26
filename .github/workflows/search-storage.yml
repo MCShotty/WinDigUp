@@ -4,6 +4,7 @@ on:
     paths:
       - 'Sources/digup/SearchService.swift'
       - 'Sources/digup/FileAvailability.swift'
+      - 'Sources/digup/SearchRetirement.swift'
       - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'
       - 'Tests/DigUpServiceTests/SearchNameRefreshTests.swift'
       - 'scripts/benchmark-search-scale.py'
