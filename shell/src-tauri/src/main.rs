@@ -1067,14 +1067,16 @@ fn run_index(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn index_folder_first(app: AppHandle, path: String, code: bool) -> Result<Value,String> {
-    let shell=app.state::<Arc<Shell>>();
-    let roots=if code {shell.code_folders()} else {shell.folders()};
-    if !roots.contains(&path) {return Err("Choose a folder that is selected for indexing.".into());}
-    shell.index.prioritize(path,code)?;
-    let active=may_index(&shell);
-    if active {run_index(&app);}
-    Ok(json!({"queued":true,"active":active}))
+async fn index_folder_first(app: AppHandle, path: String, code: bool) -> Result<Value,String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Value,String> {
+        let shell=app.state::<Arc<Shell>>();
+        let roots=if code {shell.code_folders()} else {shell.folders()};
+        if !roots.contains(&path) {return Err("Choose a folder that is selected for indexing.".into());}
+        shell.index.prioritize(path,code)?;
+        let active=may_index(&shell);
+        if active {run_index(&app);}
+        Ok(json!({"queued":true,"active":active}))
+    }).await.map_err(|error|error.to_string())?
 }
 
 fn changed_paths(app: &AppHandle, batch: ChangeBatch, code: bool) {
