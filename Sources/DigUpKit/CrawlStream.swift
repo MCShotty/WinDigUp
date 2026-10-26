@@ -85,6 +85,27 @@ public final class CrawlStream: @unchecked Sendable {
 }
 
 extension Crawler {
+    private static func scanProjectRoot(_ folder:String) -> Bool {
+        if FileManager.default.fileExists(atPath:folder+"/.git") {return true}
+        let url=URL(fileURLWithPath:folder,isDirectory:true)
+        #if os(Windows)
+        guard let walker=FileSystem.directory(url) else {return false}
+        #else
+        guard let walker=FileManager.default.enumerator(at:url,includingPropertiesForKeys:[.isDirectoryKey],
+            options:[.skipsHiddenFiles,.skipsPackageDescendants]) else {return false}
+        #endif
+        while let child=autoreleasepool(invoking:{walker.nextObject() as? URL}) {
+            let name=child.lastPathComponent
+            if Rules.projectMarkers.contains(name) || Rules.projectBundleExtensions.contains(child.pathExtension.lowercased()) {return true}
+            #if os(Windows)
+            if walker.currentIsDirectory {walker.skipDescendants()}
+            #else
+            if (try? child.resourceValues(forKeys:[.isDirectoryKey]).isDirectory)==true {walker.skipDescendants()}
+            #endif
+        }
+        return false
+    }
+
     /// A directory is classified before its media can enter inference.
     public static func scan(_ roots: [URL], options: IndexOptions, selectedRoots: [URL]? = nil,
         shouldStop: () -> Bool = { false },
@@ -96,6 +117,7 @@ extension Crawler {
         try db.execute("""
             PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-2048;
             CREATE TEMP TABLE seen(path TEXT PRIMARY KEY);
+            CREATE TEMP TABLE folders(id INTEGER PRIMARY KEY,path TEXT NOT NULL,project INTEGER NOT NULL);
             CREATE TEMP TABLE candidates(id INTEGER PRIMARY KEY,path TEXT NOT NULL,kind TEXT NOT NULL,
                 size INTEGER NOT NULL,mtime REAL NOT NULL,inode INTEGER NOT NULL,device INTEGER NOT NULL);
             """)
@@ -126,24 +148,31 @@ extension Crawler {
                     where FolderSelection.isInside(root.path, selected) {
                     var ancestor = (root.path as NSString).deletingLastPathComponent
                     while ancestor.count >= selected.count {
-                        if Rules.isProjectRoot(ancestor) { inheritedProject = true; break }
+                        if Crawler.scanProjectRoot(ancestor) { inheritedProject = true; break }
                         let parent = (ancestor as NSString).deletingLastPathComponent
                         if parent == ancestor { break }
                         ancestor = parent
                     }
                 }
             }
-            var pending: [(URL, Bool)] = [(root, inheritedProject)]
-            while let (folder, inherited) = pending.popLast() {
+            try db.run("INSERT INTO folders(path,project) VALUES(?,?)",[.text(root.path),.int(inheritedProject ? 1 : 0)])
+            while true {
+                var nextFolder:(Int64,String,Bool)?
+                try db.query("SELECT id,path,project FROM folders ORDER BY id DESC LIMIT 1") {
+                    nextFolder=($0.int(0),$0.text(1) ?? "",$0.int(2) != 0)
+                }
+                guard let (folderID,path,inherited)=nextFolder else {break}
+                try db.run("DELETE FROM folders WHERE id=?",[.int(folderID)])
+                let folder=URL(fileURLWithPath:path,isDirectory:true)
                 if shouldStop() { return report }
                 beforeFolder?(folder)
                 if shouldStop() { return report }
                 scanGate?.lock()
                 defer { scanGate?.unlock() }
-                let inProject = !options.code && (inherited || Rules.isProjectRoot(folder.path))
+                let inProject = !options.code && (inherited || Crawler.scanProjectRoot(folder.path))
                 if options.code { repos.enter(folder.path) }
                 #if os(Windows)
-                guard let walker = FileSystem.walk(folder, keys: FileSystem.crawlKeys) else {
+                guard let walker = FileSystem.directory(folder) else {
                     report.unreadable.insert(folder.path); continue
                 }
                 #else
@@ -177,7 +206,10 @@ extension Crawler {
                             else if let reason = Rules.skipReason(forFolder: url, home: home, excluded: skips)
                                 ?? (options.code ? Rules.codeSkipReason(forFolder: url) : nil) {
                                 report.skippedFolders[reason, default: 0] += 1
-                            } else { pending.append((url, inProject)) }
+                            } else {
+                                try db.run("INSERT INTO folders(path,project) VALUES(?,?)",
+                                    [.text(url.path),.int(inProject ? 1 : 0)])
+                            }
                             continue
                         }
                         if package { report.skipped["app or bundle", default: 0] += 1; continue }

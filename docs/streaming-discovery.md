@@ -4,7 +4,7 @@ This stage starts from merged main 4aa0e49. File/code schemas, neural profiles, 
 
 ## Discovery and database ownership
 
-The scanner publishes immutable batches of at most 64 candidates through a four-message channel. Each scanner owns a separate disposable SQLite TEMP spool. Metadata read connections, model contexts and the index writer are never shared. File and code scans serialize directory work through a common gate; a slow source does not hold foreground search or another ready inference source.
+The scanner publishes immutable batches of at most 64 candidates through a four-message channel. Each scanner owns a separate disposable SQLite TEMP spool for candidates, seen paths and pending directories. Windows uses a single-directory native cursor rather than retaining a complete child list. These bounds cover scanner-owned queues and metadata; they are not a strict process RSS bound for SQLite or OS/framework allocations. Metadata read connections, model contexts and the index writer are never shared. File and code scans serialize directory work through a common gate; a slow source does not hold foreground search or another ready inference source.
 
 Documents, screenshots and explicitly selected media folders can publish immediately. Other media waits for its folder's dataset classification. Dataset, project, secret, cloud-placeholder, reparse-point and git-ignore behavior remains part of the admission path. Selected roots retain their existing dataset exemption during targeted subtree scans.
 

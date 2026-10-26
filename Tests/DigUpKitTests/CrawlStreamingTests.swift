@@ -179,5 +179,20 @@ struct CrawlStreamingTests {
         #expect(try queue.take()?.file.id==id)
     }
 
+    @Test func wideDirectoryFanoutCompletesWithBoundedCandidateBatches() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        for index in 0..<400 {
+            let folder=root.appendingPathComponent("folder-\(index)")
+            try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+            try write(folder.appendingPathComponent("note.txt"))
+        }
+        var count=0,peak=0
+        let report=try Crawler.scan([root],options:IndexOptions(),onBatch:{count += $0.count;peak=max(peak,$0.count)})
+        #expect(count==400)
+        #expect(report.candidateCount==400)
+        #expect(peak<=64)
+    }
+
     enum FixtureError:Error {case noModel}
 }

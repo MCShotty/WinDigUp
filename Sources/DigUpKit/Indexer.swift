@@ -403,7 +403,7 @@ public final class Indexer {
                     guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
                     return try ComputedEmbedding(calls: calls, worker: owners.models[prepared.source])
                 }
-                while let result = pipeline.next(shouldStop: shouldStop, onTick: { progress() }) {
+                while let result = pipeline.next(shouldStop: shouldStop, onTick: { tick() }) {
                     try publish(result.item, computed: result.result.get(), inferenceMs: result.inferenceMs)
                 }
                 break
