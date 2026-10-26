@@ -154,7 +154,7 @@ final class IndexService: @unchecked Sendable {
                 if lock.withLock({ backfillAllowed }), parts.contains(where: { ((try? $0.store.pendingCount()) ?? 0) > 0 }) { continue }
             }
             if lock.withLock({ backfillAllowed }), (try? main.store.pendingCount()) ?? 1 == 0,
-               (try? code?.store.pendingCount() ?? 0) ?? 1 == 0, (try? main.store.unfinishedCount().files) ?? 0 > 0 {
+               (try? code?.store.pendingCount() ?? 0) ?? 1 == 0, (try? main.store.runnableUnfinishedCount()) ?? 0 > 0 {
                 guard finishLongFiles() else { exitStatus = 1; break }
                 if lock.withLock({ syncRequested || codeSyncRequested && code != nil }) { continue }
             }
@@ -241,6 +241,7 @@ final class IndexService: @unchecked Sendable {
     }
 
     private func rootsForChanges(_ paths: Set<String>, part: Part, available: [URL]) -> [URL] {
+        if part.store.pendingExcludedPaths.count>64 {return available}
         var selected=Set<String>()
         for path in paths {
             let url=URL(fileURLWithPath:path).standardizedFileURL
@@ -250,7 +251,12 @@ final class IndexService: @unchecked Sendable {
                 Rules.projectMarkerChanged(url.lastPathComponent) {
                 selected.insert(root.path);continue
             }
-            var parent=url.deletingLastPathComponent()
+            let held=part.store.pendingExcludedPaths.filter {prefix in
+                url.path==prefix || FolderSelection.isInside(url.path,prefix)
+                    || FolderSelection.realPath(url.path)==prefix || FolderSelection.isInside(FolderSelection.realPath(url.path),prefix)
+            }.min(by:{$0.count<$1.count})
+            var parent=held.map {URL(fileURLWithPath:$0,isDirectory:true)} ?? url.deletingLastPathComponent()
+            if let held,!Arguments.isFolder(parent) {parent=URL(fileURLWithPath:held).deletingLastPathComponent()}
             if url.path==root.path {parent=root}
             while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
             if parent.path.count<root.path.count {parent=root}
@@ -268,7 +274,12 @@ final class IndexService: @unchecked Sendable {
         var work: [ScanWork] = []
         defer {
             for item in work { item.stream.cancel() }
-            for item in work { item.stream.close();item.session.close() }
+            for item in work {
+                if !item.finished {
+                    item.part.store.pendingExcludedPaths=Array(Set(item.part.store.pendingExcludedPaths+item.session.rootPrefixes)).sorted()
+                }
+                item.stream.close();item.session.close()
+            }
             lock.withLock { yieldAt=Date()+max(Date().timeIntervalSince(started),2) }
         }
         var result: [Bool:Set<Int64>] = [:]
@@ -312,6 +323,11 @@ final class IndexService: @unchecked Sendable {
                         }
                     case .finished(let report):
                         item.summary=try item.session.finish(report)
+                        let completed=item.session.rootPrefixes
+                        let previous=item.part.store.pendingExcludedPaths.filter {path in
+                            !completed.contains {root in path==root || FolderSelection.isInside(path,root)}
+                        }
+                        item.part.store.pendingExcludedPaths=Array(Set(previous+item.session.incompletePrefixes)).sorted()
                         item.finished=true
                         if let summary=item.summary {
                             emitCounts("sync",[
@@ -324,6 +340,7 @@ final class IndexService: @unchecked Sendable {
                                 "discoveryActive":false])
                         }
                     case .failed(let message):
+                        item.part.store.pendingExcludedPaths=Array(Set(item.part.store.pendingExcludedPaths+item.session.rootPrefixes)).sorted()
                         item.finished=true
                         emit(["event":"error","message":"sync failed: \(message)","code":item.part.code,
                             "discoveryActive":false])
@@ -388,6 +405,10 @@ final class IndexService: @unchecked Sendable {
             }
             if inferenceFailure { lock.withLock {stopRequested=true} }
         } catch {
+            for part in requested {
+                let roots=part.roots.flatMap {[$0.standardizedFileURL.path,FolderSelection.realPath($0.path)]}
+                part.store.pendingExcludedPaths=Array(Set(part.store.pendingExcludedPaths+roots)).sorted()
+            }
             emit(["event":"error","message":"sync failed: \(error)","discoveryActive":false])
         }
         return result
@@ -491,7 +512,7 @@ final class IndexService: @unchecked Sendable {
             if stop { return false }
             if sync || codeSync && code != nil { return true }
             if backfill, parts.contains(where: { (try? $0.store.pendingCount()) ?? 0 > 0 })
-                || (try? main.store.unfinishedCount().files) ?? 0 > 0 {
+                || (try? main.store.runnableUnfinishedCount()) ?? 0 > 0 {
                 return true
             }
         }

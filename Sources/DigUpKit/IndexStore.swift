@@ -40,6 +40,41 @@ public final class IndexStore {
             scopeValues = ranges.flatMap { [SQLValue.text($0.from), .text($0.to)] }
         }
     }
+    /// Unenumerated paths retain their cached rows but cannot supply background work.
+    public var pendingExcludedPaths: [String] = [] {
+        didSet {
+            let scopes=scope?.map {root in (root,[root,FolderSelection.realPath(root)])}
+            if pendingExcludedPaths.count>64,let scopes {
+                pendingExcludedPaths=Array(Set(pendingExcludedPaths.map {path in
+                    scopes.first(where: {entry in entry.1.contains {root in path==root || FolderSelection.isInside(path,root)}})?.0 ?? path
+                })).sorted()
+            }
+            var conditions:[String]=[]
+            var values:[SQLValue]=[]
+            for path in Set(pendingExcludedPaths) {
+                if let scopes,!scopes.contains(where: {entry in
+                    entry.1.contains {root in path==root || FolderSelection.isInside(path,root) || FolderSelection.isInside(root,path)}
+                }) {continue}
+                let variants=Set([path,FolderSelection.realPath(path)])
+                for variant in variants {
+                    let prefix=variant.hasSuffix("/") ? variant : variant+"/"
+                    if conditions.count>=128 {
+                        excludedPendingSQL=" AND 0";excludedPendingValues=[]
+                        return
+                    }
+                    conditions.append("(path=? OR (path>=? AND path<?))")
+                    values += [.text(variant),.text(prefix),.text(prefix+"\u{10FFFF}")]
+                }
+            }
+            excludedPendingSQL=conditions.isEmpty ? "" : " AND NOT ("+conditions.joined(separator:" OR ")+")"
+            excludedPendingValues=values
+        }
+    }
+    private var excludedPendingSQL=""
+    private var excludedPendingValues:[SQLValue]=[]
+    private var runnableSQL:String {scopeSQL+excludedPendingSQL}
+    private var runnableValues:[SQLValue] {scopeValues+excludedPendingValues}
+
     private var scopeSQL = ""
     private var scopeValues: [SQLValue] = []
 
@@ -330,23 +365,29 @@ public final class IndexStore {
         if let ids, ids.isEmpty { return out }
         let filter = ids.map { " AND id IN (\($0.map(String.init).joined(separator: ",")))" } ?? ""
         try db.query("""
-            SELECT \(Self.fileColumns) FROM files WHERE state = 'pending'\(filter)\(scopeSQL)
+            SELECT \(Self.fileColumns) FROM files WHERE state = 'pending'\(filter)\(runnableSQL)
             ORDER BY \(FileKind.indexingOrderSQL), mtime DESC, id ASC LIMIT ?
-            """, scopeValues + [.int(Int64(limit ?? -1))]) { out.append(Self.record($0)) }
+            """, runnableValues + [.int(Int64(limit ?? -1))]) { out.append(Self.record($0)) }
         return out
     }
 
     func pendingQueue(priorityIDs: Set<Int64> = [], includePending: Bool = true, limit: Int? = nil,
                       state: String = "pending", pageSize: Int = 128) throws -> PendingFileQueue {
         try PendingFileQueue(store: self, priorityIDs: priorityIDs, includePending: includePending, limit: limit,
-                             state: state, scopeSQL: scopeSQL, scopeValues: scopeValues, pageSize: pageSize)
+                             state: state, scopeSQL: runnableSQL, scopeValues: runnableValues, pageSize: pageSize)
     }
 
     public func pendingCount() throws -> Int {
         var count = 0
-        try db.query("SELECT COUNT(*) FROM files WHERE state = 'pending'\(scopeSQL)", scopeValues) {
+        try db.query("SELECT COUNT(*) FROM files WHERE state = 'pending'\(runnableSQL)", runnableValues) {
             count = Int($0.int(0))
         }
+        return count
+    }
+
+    public func runnableUnfinishedCount() throws -> Int {
+        var count=0
+        try db.query("SELECT COUNT(*) FROM files WHERE state='partial'\(runnableSQL)",runnableValues) {count=Int($0.int(0))}
         return count
     }
 

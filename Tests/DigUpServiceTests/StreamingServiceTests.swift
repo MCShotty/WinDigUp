@@ -242,4 +242,53 @@ struct StreamingServiceTests {
         #expect(try codeStore.counts().vectors==4)
     }
 
+    #if !os(Windows)
+    @Test func partialScanHoldsOldPendingRowsAndARecoveredChangeResumesThem() throws {
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let files=root.appendingPathComponent("files"),blocked=files.appendingPathComponent("blocked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:blocked.path)
+            try? FileManager.default.removeItem(at:root)
+        }
+        try FileManager.default.createDirectory(at:blocked,withIntermediateDirectories:true)
+        let good=files.appendingPathComponent("good.txt"),held=blocked.appendingPathComponent("held.txt")
+        try "A readable railway document.".write(to:good,atomically:false,encoding:.utf8)
+        try "A temporarily inaccessible railway document.".write(to:held,atomically:false,encoding:.utf8)
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory)
+        let shared=SharedEmbedder{Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        _=try indexer.sync([files])
+        try FileManager.default.setAttributes([.posixPermissions:0],ofItemAtPath:blocked.path)
+        #expect(!FileManager.default.isReadableFile(atPath:blocked.path))
+        var requested=false,keptPending=false,knownCount=0
+        var service:IndexService?
+        service=IndexService(main:.init(store:store,indexer:indexer,roots:[files],keepOnly:nil),
+            code:nil,folder:directory,model:shared,modelReady:{true},backfill:true,newFilesLimit:50,linger:0,
+            output:{event in
+                if event["event"] as? String=="idle" && !requested {
+                    requested=true
+                    let rows=(try? store.files(under:[files.path])) ?? []
+                    keptPending=rows.first{$0.path==held.path}?.state=="pending"
+                    knownCount=rows.count
+                    try? FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:blocked.path)
+                    let data=try? JSONSerialization.data(withJSONObject:["command":"changes","code":false,
+                        "paths":[held.path],"dirtyRoots":[]])
+                    if let data,let line=String(data:data,encoding:.utf8) {service?.accept(line)}
+                }
+            })
+        let runningService=service
+        let watchdog=DispatchWorkItem {runningService?.accept("stop")}
+        DispatchQueue.global().asyncAfter(deadline:.now()+10,execute:watchdog)
+        defer {watchdog.cancel()}
+        #expect(service?.serve(commandInput:false)==0)
+        #expect(requested)
+        #expect(keptPending)
+        #expect(knownCount==2)
+        #expect(try store.counts().vectors==2)
+        #expect(try store.pendingCount()==0)
+        #expect(store.pendingExcludedPaths.isEmpty)
+    }
+    #endif
+
 }
