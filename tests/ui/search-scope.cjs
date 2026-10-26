@@ -39,6 +39,7 @@ let browser;
     const fileRows=view==="window.html"?".cell":".row";
     await page.waitForSelector(fileRows);await page.waitForSelector('[data-result-key^="app:"]');
     await page.locator('[data-result-key^="app:"]').first().click();
+    if(view==="index.html"){await page.press("#query","Space");await page.waitForFunction(()=>!document.querySelector("#big").hidden);}
     await page.waitForTimeout(170);
     assert.ok(await page.evaluate(()=>window.delayedFiles.length>0));
     const selected=await page.evaluate(()=>state.selection);
@@ -46,6 +47,7 @@ let browser;
     await page.evaluate(()=>{window.selectedFolders=[];window.emit("search-scope",{folders:[],hasCode:true});});
     await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
     assert.equal(await page.evaluate(()=>state.selection),selected,"Scope change moved the selected application");
+    if(view==="index.html")assert.equal(await page.locator("#big").isVisible(),true,"File scope change closed app details");
     assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="search_apps").length),namesBefore,"File scope restarted app discovery");
     await page.evaluate(()=>window.releaseOldFiles());await page.waitForTimeout(160);
     assert.equal(await page.locator(fileRows).count(),0,"A delayed old-index reply restored removed files");

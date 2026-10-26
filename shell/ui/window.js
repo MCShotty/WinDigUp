@@ -142,7 +142,7 @@ function run(filesOnly = false) {
   state.chosen = retained?.chosen || null;
   state.error = null;
   state.fileError = null;
-  state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = retained?.selection || null;
+  state.ranked = []; state.weaker = []; state.hasResults = Boolean(filesOnly && (applicationSearch.hits.length || settingsSearch.visible().length)); state.filesPending = false; state.selection = retained?.selection || null;
   if(filesOnly)state.counts={apps:applicationSearch.total,settings:settingsSearch.total};
   const typed = state.query.trim();
   const mode = Apps.parse(typed, state.filter);
