@@ -14,7 +14,12 @@ public final class CrawlStream: @unchecked Sendable {
     private var events: [CrawlStreamEvent] = []
     private var cancelled = false
     private var ended = false
-    public private(set) var peakQueuedBatches = 0
+    private var peakQueued = 0
+    public var peakQueuedBatches: Int {
+        condition.lock()
+        defer {condition.unlock()}
+        return peakQueued
+    }
     public let capacity: Int
 
     public init(roots: [URL], options: IndexOptions, selectedRoots: [URL]? = nil, capacity: Int = 4,
@@ -52,7 +57,7 @@ public final class CrawlStream: @unchecked Sendable {
         while !cancelled && events.count >= capacity { condition.wait() }
         guard !cancelled else { return }
         events.append(event)
-        peakQueuedBatches = max(peakQueuedBatches, events.count)
+        peakQueued = max(peakQueued, events.count)
         condition.broadcast()
     }
 
