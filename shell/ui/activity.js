@@ -317,7 +317,8 @@ window.ActivityUI = (() => {
       meter.setAttribute("aria-valuetext", known ? `${number(f.done)} of ${number(f.total)}` : "Working; total not known yet");
       put("progress-label", known ? `${number(f.done)} of ${number(f.total)} ${f.phase === "finishing" ? "pages and chunks" : "files"}` : meter.hidden ? "" : "Total not known yet");
       const stage = f.phase === "idle" ? 2 : ["indexing", "finishing", "waiting"].includes(f.phase) ? 1 : 0;
-      this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (f.discoveryActive === true && (i === 0 || i === 1)); el.classList.toggle("current", current); el.setAttribute("aria-current", current ? "step" : "false"); });
+      this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (f.discoveryActive === true && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
+      this.host.querySelector(".activity-stages").setAttribute("aria-label", f.discoveryActive === true ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");
       this.host.querySelector(".activity-stages").hidden = ["not_configured", "failed", "unavailable", "preparing_model"].includes(f.phase);
       put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
       put("second-value", number(scanning ? f.candidates : f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");

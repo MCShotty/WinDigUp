@@ -59,6 +59,8 @@ let browser;
   await page.waitForFunction(()=>document.activeElement?.classList.contains("pipeline-drive-name")&&document.activeElement.textContent.includes("Local SSD"));
   assert.equal(await page.locator("#activity").isVisible(),true);
   assert.match(await page.locator('[data-key="phase"]').innerText(),/Discovering and indexing/);
+  assert.equal(await page.locator(".activity-stages [aria-current=step]").count(),1);
+  assert.match(await page.locator(".activity-stages").getAttribute("aria-label"),/overlap/);
   assert.equal(await page.locator('[data-key="meter"]').getAttribute("aria-valuenow"),null);
   assert.match(await page.locator('[data-key="progress-label"]').innerText(),/not known/);
   assert.equal(await page.locator('[data-key="known-files"]').innerText(),"83");
