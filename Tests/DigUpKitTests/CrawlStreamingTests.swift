@@ -297,7 +297,7 @@ struct CrawlStreamingTests {
         let queue=try store.pendingQueue(includePending:false)
         defer {queue.close()}
         try queue.append(ids)
-        let batch=try #require(queue.takeBatch())
+        let batch=try #require(try queue.takeBatch())
         #expect(batch.files.count==8)
         #expect(batch.files.allSatisfy{$0.kind == .image})
     }
@@ -320,10 +320,10 @@ struct CrawlStreamingTests {
         defer {queue.close()}
         try queue.prioritize(preferred.path)
         try queue.append(store.files(under:[ordinary.path,preferred.path]).map(\.id))
-        let pictures=try #require(queue.takeBatch())
+        let pictures=try #require(try queue.takeBatch())
         #expect(pictures.files.count==8)
         #expect(pictures.files.allSatisfy{$0.path.hasPrefix(preferred.path+"/") && $0.kind == .image})
-        let document=try #require(queue.takeBatch())
+        let document=try #require(try queue.takeBatch())
         #expect(document.files.first?.kind == .doc)
         #expect(document.files.first?.path.hasPrefix(preferred.path+"/")==true)
     }

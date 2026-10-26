@@ -99,7 +99,7 @@ impl Status {
             self.pending = count("pending");
             self.unfinished = count("unfinished");
         }
-        if let active = event["discoveryActive"].as_bool() { self.discovery_active=active; }
+        if let Some(active) = event["discoveryActive"].as_bool() { self.discovery_active=active; }
         match event["event"].as_str().unwrap_or_default() {
             "started" => { self.discovery_active=false; self.scan = Value::Null; self.activity = Activity::Starting; }
             "phase" | "scanning" | "scan_progress" => {
