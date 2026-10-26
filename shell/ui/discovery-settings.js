@@ -51,7 +51,6 @@ const DiscoverySettings = {
   },
   message(source,value){
     this.messages.set(source,value);
-    this.text("source-message",value);
     this.text("source-message-"+source,value);
   },
   render(){
@@ -285,9 +284,9 @@ const DiscoverySettings = {
     this.candidatePending.add(id);this.renderCandidates();
     try{
       this.accept("discovery",await invoke("set_discovery_candidate",{candidateId:id,action}));
-      this.message("discovery",action==="include"?"Application included.":"Review choice saved.");
+      this.message("review",action==="include"?"Application included.":"Review choice saved.");
       this.render();await this.candidates();
-    }catch(error){this.message("discovery",error?.message||String(error));}
+    }catch(error){this.message("review",error?.message||String(error));}
     finally{this.candidatePending.delete(id);this.renderCandidates();}
   },
 };

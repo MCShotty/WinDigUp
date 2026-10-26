@@ -11,7 +11,7 @@ let browser;
     const old=window.__TAURI__.core.invoke,time=Date.now()/1000;
     window.personalization={version:1,enabled:true,entries:3};
     window.activityMode="indexing";window.activityPaused=false;
-    window.holdSettings=false;window.settingsWaiters=[];
+    window.holdSettings=false;window.settingsWaiters=[];window.failDriveSave=false;window.failReview=false;window.reviewHit=null;
     window.sourceDrive={version:2,supported:true,catalogEnabled:true,options:{enabled:true,paused:false,revision:1,volumes:["volume-a"],included:[],hidden:[]},
       volumes:[{id:"volume-a",name:"Local SSD",paths:["C:\\"],filesystem:"NTFS",available:true},
         {id:"volume-b",name:"Offline backup",paths:["E:\\"],filesystem:"NTFS",available:false}],
@@ -37,11 +37,12 @@ let browser;
         if(window.activityMode==="unavailable"){reply.inference.error="Fixture accelerator unavailable";reply.inference.encoder="unavailable";}
         return reply;
       }
-      if(["refresh_discovery_volumes","discovery_candidates","set_discovery_options","set_windows_settings_options","set_personalization","clear_personalization","set_acceleration","index_folder_first"].includes(command)){
+      if(["refresh_discovery_volumes","discovery_candidates","set_discovery_options","set_windows_settings_options","set_personalization","clear_personalization","set_acceleration","index_folder_first","set_discovery_candidate"].includes(command)){
         calls.push({command,args});
         if(command==="refresh_discovery_volumes")return structuredClone(sourceDrive);
-        if(command==="discovery_candidates")return {generation:args.generation,hits:[],total:0,catalogTotal:0};
-        if(command==="set_discovery_options"){sourceDrive.options=args.options;return structuredClone(sourceDrive);}
+        if(command==="discovery_candidates")return {generation:args.generation,hits:reviewHit?[reviewHit]:[],total:reviewHit?1:0,catalogTotal:reviewHit?1:0};
+        if(command==="set_discovery_candidate"){if(failReview)throw new Error("Fixture application could not be included");return structuredClone(sourceDrive);}
+        if(command==="set_discovery_options"){if(failDriveSave)throw new Error("Fixture drive choices could not be saved");sourceDrive.options=args.options;return structuredClone(sourceDrive);}
         if(command==="set_windows_settings_options"){Object.assign(windowsCatalog,args.options);return structuredClone(windowsCatalog);}
         if(command==="set_personalization"){personalization.enabled=args.enabled;return structuredClone(personalization);}
         if(command==="clear_personalization"){personalization.entries=0;return structuredClone(personalization);}
@@ -64,7 +65,13 @@ let browser;
   assert.equal(await choice.evaluate(node=>node===document.activeElement),true);
   assert.equal(await choice.isChecked(),false);
   await page.evaluate(()=>{sourceDrive.volumes.reverse();emit("discovery",structuredClone(sourceDrive));});
+  await page.evaluate(()=>{failDriveSave=true;});await page.locator("#drive-save").click();
+  await page.waitForFunction(()=>document.querySelector("#source-message-discovery").textContent.includes("could not be saved"));
+  assert.equal(await page.locator("#source-message-discovery").isVisible(),true,"Drive save errors must stay in Drives");
+  assert.equal(await choice.isChecked(),false,"Failed save erased the draft");
+  await page.evaluate(()=>{failDriveSave=false;});
   await page.locator("#drive-revert").click();assert.equal(await choice.isChecked(),true);
+  await page.evaluate(()=>DiscoverySettings.message("discovery",""));
   await first.getByRole("button",{name:/View activity/}).click();
   await page.waitForFunction(()=>document.activeElement?.classList.contains("pipeline-drive-name")&&document.activeElement.textContent.includes("Local SSD"));
   assert.equal(await page.locator("#activity").isVisible(),true);
@@ -107,6 +114,13 @@ let browser;
   await page.evaluate(()=>{sourceDrive.running=false;sourceDrive.progress.phase="watching";emit("discovery",structuredClone(sourceDrive));});
   await page.evaluate(()=>DiscoverySettings.candidates());
   assert.match(await page.locator("#drive-list-state").innerText(),/No executable candidates/);
+  await page.evaluate(()=>{reviewHit={id:"exe:review",name:"Fixture app",path:"C:/Fixture/App.exe",portable:true,classification:"review"};failReview=true;return DiscoverySettings.candidates();});
+  await page.locator("#drive-candidates button").first().click();
+  await page.waitForFunction(()=>document.querySelector("#source-message-review").textContent.includes("could not be included"));
+  assert.equal(await page.locator("#source-message-review").isVisible(),true,"Review errors must stay in Review apps");
+  assert.equal(await page.locator("#source-message-discovery").textContent(),"","Review failure leaked into drive action feedback");
+  await page.evaluate(()=>{reviewHit=null;failReview=false;DiscoverySettings.message("review","");return DiscoverySettings.candidates();});
+
   await page.locator("#review-drive-settings").click();assert.equal(await page.locator("#drives").isVisible(),true);
   await page.getByRole("tab",{name:"General",exact:true}).click();
   await page.evaluate(()=>{holdSettings=true;window.dispatchEvent(new Event("focus"));});
