@@ -72,7 +72,7 @@ does not decode whole videos or extract PDF pages. Hash the exact prepared asset
 
 The eight evaluation groups are text, code, image, document, audio, video, application and
 windows-settings. Query records contain id, q, modality, language and expected document IDs.
-Empty expected lists are unrelated negative queries. Multiple relevant targets are supported;
+Empty expected lists are unrelated negative queries. Code, application and settings queries search their own document scopes; ordinary file queries exclude those scopes. Multiple relevant targets are supported;
 document recall is reported separately from the fraction of queries finding an answer.
 
 The corpus hash includes judgments, sources and preprocessing fields. Keep tuning and held-out

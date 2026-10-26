@@ -189,6 +189,53 @@ class ModelEvaluationTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 contract.validate_corpus(altered)
 
+    def test_collector_uses_real_scopes_and_marks_synthetic_corpus(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        info = self.receipt()
+        class FakeWorker:
+            def __init__(self, *args):
+                self.info = info
+                self.identity = contract.validate_receipt(info, "amd-vulkan", "fixture-gpu")
+                self.cold_ms = 1
+            def embed(self, operation, value, budget=None):
+                return [1, 0, 0]
+            def close(self):
+                pass
+        corpus = {"schemaVersion": 1, "origin": "synthetic", "split": "test",
+            "documents": [
+                {"id": "app", "modality": "application", "language": "en", "operation": "text", "input": "app"},
+                {"id": "file", "modality": "text", "language": "en", "operation": "text", "input": "file"}],
+            "queries": [
+                {"id": "app-q", "q": "app", "modality": "application", "language": "en", "expected": ["app"]},
+                {"id": "file-q", "q": "file", "modality": "text", "language": "en", "expected": ["file"]}]}
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            models = root / "models"
+            models.mkdir()
+            (models / "weights.bin").write_bytes(b"fake-test-weights")
+            manifest = root / "corpus.json"
+            manifest.write_text(json.dumps(corpus))
+            args = SimpleNamespace(corpus=manifest, prompt_profile=None, output=root / "output",
+                models=models, helper=Path(sys.executable), backend="amd-vulkan", device="fixture-gpu",
+                machine_id="fixture-host", timeout=1, trials=5, minimum_cosine=.6, distance_from_best=.08)
+            with patch.object(runner, "Worker", FakeWorker):
+                report = runner.collect(args)
+            self.assertEqual(report["corpusOrigin"], "synthetic")
+            self.assertEqual([row["ranked"] for row in report["queries"]], [["app"], ["file"]])
+            self.assertEqual(len(report["documentTrials"]), 5)
+            self.assertTrue((args.output / "model-evaluation.json").is_file())
+            self.assertNotIn("physicalValidated", report)
+
+    def test_candidate_inventory_and_smoke_corpus_are_not_adoption_claims(self):
+        root = Path(__file__).resolve().parents[2]
+        contract.validate_corpus(contract.load_json(root / "evals/model-evaluation.example.json"))
+        inventory = contract.load_json(root / "evals/model-candidates.json")
+        self.assertFalse(inventory["productionSelectionChanged"])
+        qwen = next(row for row in inventory["models"] if row["id"] == "Qwen/Qwen3-VL-Embedding-2B")
+        self.assertNotIn("audio", qwen["modalities"])
+        self.assertIn("blocked", qwen["adoptionStatus"])
+
     def test_prompt_profile_is_explicit_and_code_prompt_matches_production(self):
         self.assertIn("code retrieval", runner.DEFAULT_PROMPTS["codeQuery"])
         self.assertEqual(runner.prompt(runner.DEFAULT_PROMPTS["document"], "body", "title"),

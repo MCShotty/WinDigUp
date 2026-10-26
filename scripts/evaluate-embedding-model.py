@@ -208,7 +208,14 @@ def collect(args):
                 template = profile["codeQuery" if query["modality"] == "code" else "query"]
                 vector = worker.embed("text", prompt(template, query["q"]))
                 elapsed = (time.perf_counter() - began) * 1000
-                scores = sorted(((key, sum(a * b for a, b in zip(vector, values))) for key, values in vectors.items()),
+                scoped = {"code", "application", "windows-settings"}
+                eligible = {doc["id"] for doc in documents if doc["modality"] == query["modality"]} if query["modality"] in scoped else set()
+                if query["modality"] not in scoped:
+                    eligible = {doc["id"] for doc in documents if doc["modality"] not in scoped}
+                if not eligible:
+                    raise ValueError("Query scope has no candidate documents: " + query["id"])
+                scores = sorted(((key, sum(a * b for a, b in zip(vector, values))) for key, values in vectors.items()
+                                 if key in eligible),
                                 key=lambda item: (-item[1], item[0]))
                 best = scores[0][1]
                 matches = [key for key, score in scores if score >= args.minimum_cosine
