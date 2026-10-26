@@ -7,9 +7,10 @@ import DigUpKit
 struct SearchAvailabilityTests {
     final class Probes: @unchecked Sendable {
         let lock = NSLock()
-        var calls = 0
+        private var recordedCalls = 0
+        var calls: Int { lock.lock(); defer { lock.unlock() }; return recordedCalls }
         func delayed(_ path: String) -> Bool {
-            lock.lock(); calls += 1; lock.unlock()
+            lock.lock(); recordedCalls += 1; lock.unlock()
             Thread.sleep(forTimeInterval: 0.2)
             return !path.hasSuffix("report-missing.txt")
         }
@@ -18,7 +19,7 @@ struct SearchAvailabilityTests {
     func fixture() throws -> (URL, IndexStore, Searcher) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("digup-availability-\(UUID().uuidString)")
         let store = try IndexStore(directory: root.appendingPathComponent("index"))
-        for (number, name) in ["report.txt", "report-missing.txt"].enumerated() {
+        for (number, name) in ["report.txt", "private/report-missing.txt"].enumerated() {
             let id = Int64(number + 1)
             try store.db.run("INSERT INTO files(id,path,kind,size,mtime,inode,device,state) VALUES(?,?,'doc',1,1,?,1,'done')",
                              [.int(id), .text(root.appendingPathComponent(name).path), .int(id)])
@@ -38,8 +39,85 @@ struct SearchAvailabilityTests {
         let began = ProcessInfo.processInfo.systemUptime
         let reply = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
         let elapsed = (ProcessInfo.processInfo.systemUptime - began) * 1000
-        #expect(elapsed >= 500)
+        let hits = try #require(reply["hits"] as? [[String: Any]])
+        #expect(elapsed < 150)
+        #expect(hits.count == 2)
+        #expect(hits.allSatisfy { $0["availability"] as? String == "unknown" })
+        Thread.sleep(forTimeInterval: 0.5)
+        let checked = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
+        let known = try #require(checked["hits"] as? [[String: Any]])
+        #expect(known.count == 1)
+        #expect(known.first?["availability"] as? String == "available")
+        print("AVAILABILITY_EVIDENCE: synchronous=false elapsedMs=\(elapsed) probes=\(probes.calls) injectedProbeMs=200")
+    }
+
+    func waitFor(_ condition: () -> Bool) throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while !condition() && ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        #expect(condition())
+    }
+
+    @Test func blockedProbesHaveBoundedOwnersAndPendingWork() throws {
+        let gate = DispatchSemaphore(value: 0)
+        let cache = FileAvailability(probe: { _ in gate.wait(); return true })
+        for number in 0..<5000 { #expect(cache.observation("path-\(number)").state == "unknown") }
+        #expect(cache.snapshot["active"] as? Int == 2)
+        #expect(cache.snapshot["queued"] as? Int == 256)
+        cache.stop()
+        gate.signal(); gate.signal()
+        try waitFor { cache.snapshot["active"] as? Int == 0 }
+        #expect(cache.snapshot["queued"] as? Int == 0)
+        #expect(cache.snapshot["cached"] as? Int == 0)
+    }
+
+    final class Clock: @unchecked Sendable {
+        let lock = NSLock()
+        var value = 10.0
+        func read() -> Double { lock.lock(); defer { lock.unlock() }; return value }
+        func advance(_ delta: Double) { lock.lock(); value += delta; lock.unlock() }
+    }
+
+    @Test func staleChecksAreExplicitAndCacheSizeIsBounded() throws {
+        let clock = Clock()
+        let cache = FileAvailability(cacheLimit: 2, clock: { clock.read() }, probe: { _ in true })
+        defer { cache.stop() }
+        #expect(cache.observation("one").state == "unknown")
+        try waitFor { cache.snapshot["completed"] as? Int == 1 }
+        #expect(cache.observation("one").state == "available")
+        clock.advance(6)
+        let stale = cache.observation("one")
+        #expect(stale.state == "unknown" && stale.stale)
+        #expect(stale.ageMilliseconds == 6000)
+        try waitFor { cache.snapshot["completed"] as? Int == 2 }
+        _ = cache.observation("two")
+        _ = cache.observation("three")
+        try waitFor { cache.snapshot["completed"] as? Int == 4 }
+        #expect(cache.snapshot["cached"] as? Int == 2)
+    }
+
+    @Test func exclusionsRemainImmediateAndAreNotProbed() throws {
+        let (root, store, searcher) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let probes = Probes()
+        let service = try SearchService(index: store.directory, baseIndex: store.directory,
+            roots: [root.path], skipped: [root.appendingPathComponent("private").path], types: [],
+            codeRoots: [], codeSkipped: [], idleSeconds: 300, fileExists: { probes.delayed($0) })
+        let reply = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
         #expect((reply["hits"] as? [[String: Any]])?.count == 1)
-        print("AVAILABILITY_EVIDENCE: synchronous=true elapsedMs=\(elapsed) probes=\(probes.calls) injectedProbeMs=200")
+        Thread.sleep(forTimeInterval: 0.3)
+        #expect(probes.calls == 1)
+    }
+
+    @Test func clearingWhileAProbeRunsCannotRepublishAnOlderObservation() throws {
+        let gate = DispatchSemaphore(value: 0)
+        let cache = FileAvailability(concurrency: 1, probe: { _ in gate.wait(); return true })
+        #expect(cache.observation("one").state == "unknown")
+        cache.clear()
+        gate.signal()
+        try waitFor { cache.snapshot["completed"] as? Int == 1 }
+        #expect(cache.snapshot["cached"] as? Int == 0)
+        cache.stop()
     }
 }

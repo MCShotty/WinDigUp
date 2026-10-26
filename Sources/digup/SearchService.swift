@@ -14,7 +14,7 @@ final class SearchService: @unchecked Sendable {
     private var semanticSearcher: Searcher?, semanticCodeSearcher: Searcher?
     private var roots: [String], skipped: [String], types: Set<String>, codeRoots: [String], codeSkipped: [String]
     private let idleSeconds: Double
-    private let fileExists: @Sendable (String) -> Bool
+    private let availability: FileAvailability
     private let log: URL
     private var encoder: (any Embedder)?
     private var encoderState = "stopped"
@@ -66,7 +66,7 @@ final class SearchService: @unchecked Sendable {
         self.codeRoots = codeRoots
         self.codeSkipped = codeSkipped
         self.idleSeconds = idleSeconds
-        self.fileExists = fileExists
+        self.availability = FileAvailability(probe: fileExists)
         log = index.appendingPathComponent("worker-query.log")
         previews = index.appendingPathComponent("previews")
         try? FileManager.default.removeItem(at: previews)
@@ -97,6 +97,7 @@ final class SearchService: @unchecked Sendable {
             activeWorker?.interrupt()
             if let loadingProcess { EmbeddingWorker.interrupt(loadingProcess) }
         }
+        availability.stop()
         for queue in [lexical, inference, retrieval, maintenance, loader, previewsQueue] { queue.stop() }
         return 0
     }
@@ -403,6 +404,7 @@ final class SearchService: @unchecked Sendable {
                     ?? NSNull()
             ]
         case "folders":
+            availability.clear()
             configLock.withLock {
                 if let v = request["roots"] as? [String] { roots = v.map { Arguments.folderURL($0).path } }
                 if let v = request["skipped"] as? [String] { skipped = v.map { Arguments.folderURL($0).path } }
@@ -443,6 +445,7 @@ final class SearchService: @unchecked Sendable {
                 ]) { $1 }
             }
             reply["refreshing"] = stateLock.withLock { refreshing }
+            reply["availability"] = availability.snapshot
             return reply
         default: throw CLIError("Unknown op \(op)")
         }
@@ -464,18 +467,21 @@ final class SearchService: @unchecked Sendable {
         }
         let options = configLock.withLock { (code ? codeRoots : roots, code ? codeSkipped : skipped, types) }
         var availabilityMs = 0.0
-        var availabilityChecks = 0
-        func exists(_ path: String) -> Bool {
+        var observations: [String: FileAvailability.Observation] = [:]
+        func observation(_ path: String) -> FileAvailability.Observation {
+            if let value = observations[path] { return value }
             let began = Self.now
-            defer { availabilityMs += (Self.now - began) * 1000; availabilityChecks += 1 }
-            return fileExists(path)
+            let value = availability.observation(path)
+            availabilityMs += (Self.now - began) * 1000
+            observations[path] = value
+            return value
         }
         let exactNames = try index.exactNamePaths(text)
         let exactCollision =
             exactNames?.contains { path in
                 (options.0.isEmpty || FolderSelection.isSearched(path, folders: options.0, skipped: options.1))
                     && !options.2.contains((path as NSString).pathExtension.lowercased())
-                    && exists(path)
+                    && !observation(path).unavailable
             } ?? false
         if code && options.0.isEmpty { return ["hits": [], "strong": 0, "meaning": false] }
         let hits = try index.search(
@@ -485,14 +491,18 @@ final class SearchService: @unchecked Sendable {
         ).filter {
             (options.0.isEmpty || FolderSelection.isSearched($0.path, folders: options.0, skipped: options.1))
                 && (code || !options.2.contains(($0.path as NSString).pathExtension.lowercased()))
-                && exists($0.path)
+                && !observation($0.path).unavailable
         }
         var timing = index.timings
-        timing["availability_probe"] = availabilityMs
-        timing["availability_checks"] = Double(availabilityChecks)
+        timing["availability"] = availabilityMs
+        timing["availability_checks"] = Double(observations.count)
         timing["search"] = (Self.now - started) * 1000
         var reply: [String: Any] = [
-            "hits": hits.map(hitFields), "strong": Searcher.strongCount(hits), "meaning": vector != nil,
+            "hits": hits.map { hit in
+                var fields = hitFields(hit)
+                if let value = observations[hit.path] { fields.merge(value.fields) { $1 } }
+                return fields
+            }, "strong": Searcher.strongCount(hits), "meaning": vector != nil,
             "ms": timing, "facets": index.facetCounts, "count_scope": "ranked_candidates",
             "category_query": Searcher.terms(text).isEmpty && !Searcher.kindHints(text).isEmpty,
             "exact_filename_known": exactNames != nil, "exact_filename": exactCollision,
