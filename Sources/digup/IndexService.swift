@@ -41,6 +41,18 @@ final class IndexService: @unchecked Sendable {
     private let model: SharedEmbedder
     /// The last report of folders that aren't there or can't be read, by index (said again only when it changes).
     private var unavailable: [Bool: (missing: [String], unreadable: [String])] = [:]
+    private var rootAliases:[Bool:[String:String]]=[:]
+    private var aliasLoaded=Set<Bool>()
+    private var invalidAliasCache=Set<Bool>()
+    private var uncertainAliasCache=Set<Bool>()
+    private var expectedAliasText:[Bool:String]=[:]
+    private var knownCountsComplete:[Bool:Bool]=[:]
+    private static let aliasKey="scan_root_aliases_v1"
+    private static func aliasID(_ path:String) -> String {Data(path.utf8).base64EncodedString()}
+    private struct RootAliasCache:Codable {
+        let schemaVersion:Int
+        let roots:[String:String]
+    }
     private let modelReady: () -> Bool
     private let newFilesLimit: Int
     private let linger: Double
@@ -110,8 +122,8 @@ final class IndexService: @unchecked Sendable {
             if again > 0 { emit(["event": "rescan", "files": again]) }
             for part in parts {
                 try part.indexer.checkModel()   // a new model: everything is queued again
-                if let keepOnly = part.keepOnly {
-                    let pruned = try part.store.prune(keepingUnder: keepOnly.map(\.path))
+                if let keepOnly = part.keepOnly, canPrune(part,roots:keepOnly) {
+                    let pruned = try part.store.prune(keepingUnder: namespacePaths(part,roots:keepOnly),literalPaths:true)
                     if pruned > 0 { emit(["event": "pruned", "files": pruned, "code": part.code]) }
                 }
             }
@@ -194,22 +206,181 @@ final class IndexService: @unchecked Sendable {
         #endif
     }
 
-    /// A part's chosen folders that are there and readable right now; also what `pending` and the counts look at.
+    private func aliases(_ part:Part) -> [String:String] {
+        #if os(Windows)
+        return [:]
+        #else
+        if aliasLoaded.insert(part.code).inserted {
+            let wanted=Set((part.keepOnly ?? part.roots).map {IndexService.aliasID($0.standardizedFileURL.path)})
+            let text=try? part.store.meta(IndexService.aliasKey)
+            expectedAliasText[part.code]=text
+            var result:[String:String]=[:]
+            var valid=text==nil
+            if let text,text.utf8.count<=256*1024,let data=text.data(using:.utf8),
+               let cache=try? JSONDecoder().decode(RootAliasCache.self,from:data),
+               cache.schemaVersion==1,cache.roots.count<=256 {
+                valid=true
+                for (identity,resolved) in cache.roots {
+                    guard let data=Data(base64Encoded:identity),let root=String(data:data,encoding:.utf8),
+                          root.hasPrefix("/"),resolved.hasPrefix("/"),!root.utf8.contains(0),!resolved.utf8.contains(0),
+                          root.utf8.count<=32768,resolved.utf8.count<=32768,
+                          URL(fileURLWithPath:root).standardizedFileURL.path==root,
+                          URL(fileURLWithPath:resolved).standardizedFileURL.path==resolved else {valid=false;continue}
+                    if wanted.contains(identity) {result[identity]=resolved}
+                }
+            }
+            if valid {invalidAliasCache.remove(part.code)} else {invalidAliasCache.insert(part.code);result=[:]}
+            uncertainAliasCache.remove(part.code)
+            rootAliases[part.code]=result
+            if valid {saveAliases(part)}
+        }
+        return rootAliases[part.code] ?? [:]
+        #endif
+    }
+
+    private func saveAliases(_ part:Part) {
+        #if !os(Windows)
+        guard !invalidAliasCache.contains(part.code) else{return}
+        do {
+            try part.store.db.transaction {
+                let latest=try part.store.meta(IndexService.aliasKey)
+                let expected=expectedAliasText[part.code]
+                let same:Bool
+                switch (latest,expected) {
+                case (nil,nil):same=true
+                case let (left?,right?):same=left.utf8.elementsEqual(right.utf8)
+                default:same=false
+                }
+                guard same else {uncertainAliasCache.insert(part.code);return}
+                var merged:[String:String]=[:]
+                if part.keepOnly==nil,let latest,let data=latest.data(using:.utf8),
+                   let cache=try? JSONDecoder().decode(RootAliasCache.self,from:data),cache.schemaVersion==1 {
+                    merged=cache.roots
+                }
+                for (identity,path) in rootAliases[part.code] ?? [:] {merged[identity]=path}
+                let owned=Set(rootAliases[part.code]?.keys.map {$0} ?? [])
+                for identity in merged.keys.sorted() where merged.count>256 && !owned.contains(identity) {merged[identity]=nil}
+                let cache=RootAliasCache(schemaVersion:1,roots:merged)
+                let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+                let data=try encoder.encode(cache)
+                guard merged.count<=256,data.count<=256*1024,let value=String(data:data,encoding:.utf8) else {
+                    uncertainAliasCache.insert(part.code);return
+                }
+                if latest?.utf8.elementsEqual(value.utf8) != true {try part.store.setMeta(IndexService.aliasKey,value)}
+                expectedAliasText[part.code]=value
+            }
+        } catch {uncertainAliasCache.insert(part.code)}
+        #endif
+    }
+
+    private func canPrune(_ part:Part,roots:[URL]) -> Bool {
+        #if os(Windows)
+        return true
+        #else
+        let cached=aliases(part)
+        return roots.allSatisfy {root in
+            let path=root.standardizedFileURL.path
+            guard Arguments.isFolder(root) && Arguments.isReadable(root) else {return false}
+            let resolved=FolderSelection.realPath(path)
+            if let previous=cached[IndexService.aliasID(path)],previous != resolved {return false}
+            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {
+                return resolved==path
+            }
+            return true
+        }
+        #endif
+    }
+
+    private func namespacePaths(_ part:Part,roots:[URL]) -> [String] {
+        let cached=aliases(part)
+        return Array(Set(roots.flatMap {root -> [String] in
+            let path=root.standardizedFileURL.path
+            #if os(Windows)
+            return [path]
+            #else
+            if let resolved=cached[IndexService.aliasID(path)] {return [path,resolved]}
+            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {return [path]}
+            return [path,FolderSelection.realPath(path)]
+            #endif
+        })).sorted()
+    }
+
+    private func scanPath(_ path:String,part:Part) -> String {
+        #if os(Windows)
+        return path
+        #else
+        let cached=aliases(part)
+        for root in part.roots.sorted(by:{$0.path.count>$1.path.count}) {
+            if let resolved=cached[IndexService.aliasID(root.path)],path==root.path || FolderSelection.isInside(path,root.path) {
+                return resolved+String(path.dropFirst(root.path.count))
+            }
+        }
+        return path
+        #endif
+    }
+
     private func availableRoots(_ part: Part) -> [URL] {
-        var missing: [URL] = [], unreadable: [URL] = []
+        var missing:[URL]=[],unreadable:[URL]=[],available:[URL]=[]
+        if uncertainAliasCache.contains(part.code) {aliasLoaded.remove(part.code)}
+        var cached=aliases(part)
+        var complete=true
+        var allLiteralAndAvailable=true
         for root in part.roots {
-            emit(["event": "phase", "stage": "checking_folder", "path": root.path, "code": part.code,
-                  "message": "Checking selected folders…"])
-            if !Arguments.isFolder(root) { missing.append(root) }
-            else if !Arguments.isReadable(root) { unreadable.append(root) }
+            let path=root.standardizedFileURL.path
+            let identity=IndexService.aliasID(path)
+            emit(["event":"phase","stage":"checking_folder","path":path,"code":part.code,
+                  "message":"Checking selected folders…"])
+            if !Arguments.isFolder(root) {missing.append(root);allLiteralAndAvailable=false}
+            else if !Arguments.isReadable(root) {unreadable.append(root);allLiteralAndAvailable=false}
+            else {
+                #if os(Windows)
+                available.append(root)
+                #else
+                let resolved=FolderSelection.realPath(path)
+                if resolved != path {allLiteralAndAvailable=false}
+                let changed=cached[identity].map {$0 != resolved} ?? false
+                let unverified=(invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code))
+                    && resolved != path && cached[identity]==nil
+                if changed || unverified {
+                    unreadable.append(root)
+                    if unverified {complete=false}
+                    emit(["event":"source_unavailable","code":part.code,"path":path,
+                        "message":changed
+                            ? "This selected folder now points elsewhere. Choose its current folder in Settings."
+                            : "This folder's cached location cannot be verified. Choose its current folder in Settings."])
+                } else {
+                    cached[identity]=resolved
+                    available.append(URL(fileURLWithPath:resolved,isDirectory:true))
+                }
+                #endif
+            }
+            #if !os(Windows)
+            if (missing.contains(root) || unreadable.contains(root)) && cached[identity]==nil {complete=false}
+            #endif
         }
-        let report = (missing.map(\.path), unreadable.map(\.path))
-        if unavailable[part.code].map({ $0 != report }) ?? !(missing.isEmpty && unreadable.isEmpty) {
-            emit(["event": "missing", "folders": report.0, "unreadable": report.1, "code": part.code])
+        #if !os(Windows)
+        rootAliases[part.code]=cached
+        if allLiteralAndAvailable {invalidAliasCache.remove(part.code)}
+        saveAliases(part)
+        if uncertainAliasCache.contains(part.code) {
+            available.removeAll {folder in
+                let originals=part.roots.filter {cached[IndexService.aliasID($0.standardizedFileURL.path)]==folder.path && $0.path != folder.path}
+                if originals.isEmpty {return false}
+                unreadable += originals
+                complete=false
+                return true
+            }
         }
-        unavailable[part.code] = report
-        let available = part.roots.filter { !missing.contains($0) && !unreadable.contains($0) }
-        part.store.scope = available.map(\.path)
+        #endif
+        knownCountsComplete[part.code]=complete
+        let report=(missing.map(\.path),unreadable.map(\.path))
+        if unavailable[part.code].map({$0 != report}) ?? !(missing.isEmpty && unreadable.isEmpty) {
+            emit(["event":"missing","folders":report.0,"unreadable":report.1,"code":part.code])
+        }
+        unavailable[part.code]=report
+        part.store.setLiteralScope(namespacePaths(part,roots:part.roots))
+        let blocked=namespacePaths(part,roots:missing+unreadable)
+        part.store.pendingExcludedPaths=Array(Set(part.store.pendingExcludedPaths+blocked)).sorted()
         return available
     }
 
@@ -221,7 +392,7 @@ final class IndexService: @unchecked Sendable {
                 if revision != priorityRevision {
                     revision=priorityRevision
                     pending=active.indices.compactMap {source in
-                        preferredFolders[active[source].code].map {(source,$0)}
+                        preferredFolders[active[source].code].map {(source,scanPath($0,part:active[source]))}
                     }
                 }
                 return pending.isEmpty ? nil : pending.removeFirst()
@@ -244,7 +415,7 @@ final class IndexService: @unchecked Sendable {
         if part.store.pendingExcludedPaths.count>64 {return available}
         var selected=Set<String>()
         for path in paths {
-            let url=URL(fileURLWithPath:path).standardizedFileURL
+            let url=URL(fileURLWithPath:scanPath(path,part:part)).standardizedFileURL
             guard let root=available.filter({url.path==$0.path || FolderSelection.isInside(url.path,$0.path)})
                 .max(by:{$0.path.count<$1.path.count}) else {continue}
             if url.lastPathComponent==".gitignore" || url.path.contains("/.git/") ||
@@ -260,7 +431,7 @@ final class IndexService: @unchecked Sendable {
             if url.path==root.path {parent=root}
             while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
             if parent.path.count<root.path.count {parent=root}
-            if !Crawler.canScanSubtree(parent,selectedRoots:part.roots,options:part.indexer.scanOptions) {parent=root}
+            if !Crawler.canScanSubtree(parent,selectedRoots:namespacePaths(part,roots:part.roots).map {URL(fileURLWithPath:$0,isDirectory:true)},options:part.indexer.scanOptions) {parent=root}
             let canonical=parent.resolvingSymlinksInPath().standardizedFileURL.path
             if !canonical.utf8.elementsEqual(parent.path.utf8) {selected.insert(root.path)}
             else {selected.insert(parent.path)}
@@ -288,7 +459,7 @@ final class IndexService: @unchecked Sendable {
             for part in requested {
                 let available=availableRoots(part)
                 let requestedRoots=changed[part.code].map {rootsForChanges($0,part:part,available:available)} ?? available
-                let preferred=lock.withLock {preferredFolders[part.code]}
+                let preferred=lock.withLock {preferredFolders[part.code]}.map {scanPath($0,part:part)}
                 let roots=requestedRoots.enumerated().sorted {left,right in
                     let rank:(URL)->Int={root in
                         guard let preferred else{return 1}
@@ -298,7 +469,8 @@ final class IndexService: @unchecked Sendable {
                     return first==second ? left.offset<right.offset : first<second
                 }.map(\.element)
                 let session=try part.indexer.beginScan(roots)
-                let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,selectedRoots:part.roots,
+                let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,
+                    selectedRoots:namespacePaths(part,roots:part.roots).map {URL(fileURLWithPath:$0,isDirectory:true)},
                     beforeFolder:beforeScanFolder,scanGate:gate)
                 work.append(ScanWork(part:part,session:session,stream:stream))
                 emit(["event":"scanning","code":part.code,"discoveryActive":true])
@@ -580,7 +752,8 @@ final class IndexService: @unchecked Sendable {
         var fields = extra
         fields["event"] = event
         for part in parts {
-            guard let counts = try? part.store.counts() else { continue }
+            guard let work=try? part.store.workCounts() else { continue }
+            let counts=work.counts
             let prefix = part.code ? "code_" : ""
             var files = 0, searchable = 0, pending = 0
             for states in counts.byKindAndState.values {
@@ -594,6 +767,11 @@ final class IndexService: @unchecked Sendable {
             fields[prefix + "searchable"] = searchable
             fields[prefix + "pending"] = pending
             fields[prefix + "vectors"] = counts.vectors
+            fields[prefix + "known_counts_complete"]=knownCountsComplete[part.code] ?? true
+            fields[prefix + "runnable_pending"]=work.runnablePending
+            fields[prefix + "held_pending"]=max(0,pending-work.runnablePending)
+            fields[prefix + "runnable_unfinished"]=work.runnableUnfinished
+            fields[prefix + "held_unfinished"]=max(0,counts.unfinished-work.runnableUnfinished)
             if !part.code { fields["unfinished"] = counts.unfinished }   // long files with pages or chunks left to read
         }
         emit(fields)

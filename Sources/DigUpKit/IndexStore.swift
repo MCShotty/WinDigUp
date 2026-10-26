@@ -34,16 +34,26 @@ public final class IndexStore {
     public var scope: [String]? {
         didSet {
             guard let scope else { (scopeSQL, scopeValues) = ("", []); return }
-            let ranges = scope.flatMap(Self.pathRanges(under:))
+            let ranges = scope.flatMap {literalScope ? [Self.literalRange(under:$0)] : Self.pathRanges(under:$0)}
             scopeSQL = ranges.isEmpty ? " AND 0"
                 : " AND (" + ranges.map { _ in "(path >= ? AND path < ?)" }.joined(separator: " OR ") + ")"
             scopeValues = ranges.flatMap { [SQLValue.text($0.from), .text($0.to)] }
         }
     }
+    private var literalScope=false
+    public func setLiteralScope(_ roots:[String]) {
+        literalScope=true
+        scope=roots
+    }
+    private static func literalRange(under path:String) -> (from:String,to:String) {
+        let prefix=path.hasSuffix("/") ? path : path+"/"
+        return (prefix,prefix+"\u{10FFFF}")
+    }
+
     /// Unenumerated paths retain their cached rows but cannot supply background work.
     public var pendingExcludedPaths: [String] = [] {
         didSet {
-            let scopes=scope?.map {root in (root,[root,FolderSelection.realPath(root)])}
+            let scopes=scope?.map {root in (root,literalScope ? [root] : [root,FolderSelection.realPath(root)])}
             if pendingExcludedPaths.count>64,let scopes {
                 pendingExcludedPaths=Array(Set(pendingExcludedPaths.map {path in
                     scopes.first(where: {entry in entry.1.contains {root in path==root || FolderSelection.isInside(path,root)}})?.0 ?? path
@@ -55,7 +65,7 @@ public final class IndexStore {
                 if let scopes,!scopes.contains(where: {entry in
                     entry.1.contains {root in path==root || FolderSelection.isInside(path,root) || FolderSelection.isInside(root,path)}
                 }) {continue}
-                let variants=Set([path,FolderSelection.realPath(path)])
+                let variants=Set(literalScope ? [path] : [path,FolderSelection.realPath(path)])
                 for variant in variants {
                     let prefix=variant.hasSuffix("/") ? variant : variant+"/"
                     if conditions.count>=128 {
@@ -335,8 +345,8 @@ public final class IndexStore {
 
     /// Removes every file that isn't under one of `roots` (folders taken out of the app). Returns how many went.
     @discardableResult
-    public func prune(keepingUnder roots: [String]) throws -> Int {
-        let prefixes = roots.flatMap { Self.pathRanges(under: $0).map(\.from) }   // a folder under /var: /private/var too
+    public func prune(keepingUnder roots: [String], literalPaths:Bool = false) throws -> Int {
+        let prefixes = roots.flatMap { literalPaths ? [Self.literalRange(under:$0).from] : Self.pathRanges(under: $0).map(\.from) }   // a folder under /var: /private/var too
         var gone: [Int64] = []
         try db.query("SELECT id, path FROM files") { row in
             let path = row.text(1) ?? ""
@@ -533,6 +543,10 @@ public final class IndexStore {
         /// Long files still being read (`unfinishedCount`), and their pages and chunks left.
         public var unfinished = 0
         public var left = 0
+    }
+
+    public func workCounts() throws -> (counts:Counts,runnablePending:Int,runnableUnfinished:Int) {
+        try db.transaction {(try counts(),try pendingCount(),try runnableUnfinishedCount())}
     }
 
     public func counts() throws -> Counts {
