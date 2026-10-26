@@ -120,7 +120,7 @@ function matchedMeaning(hit) {
 
 /// Why it's here, in a few words: "Matches the picture", "Matches the frame at 0:06".
 function reasonOf(hit) {
-  if (isLauncher(hit)) return hit.reason === "semantic" ? "Matches what this application does" : "Matches its name or alias";
+  if (isLauncher(hit)) return matchLabel(hit);
   const words = hit.keyword_rank != null;
   if (!matchedMeaning(hit)) return words ? "Has your words" : "Matches its name";
   const at = hit.loc != null ? clock(hit.loc) : "";
@@ -298,3 +298,32 @@ const ICONS = {
   image: '<svg viewBox="0 0 24 24"><path d="M4 5 H20 V19 H4 Z M4 16 L9 11 L13 15 L16 12 L20 16"/></svg>',
   screenshot: '<svg viewBox="0 0 24 24"><path d="M4 8 V4 H8 M16 4 H20 V8 M20 16 V20 H16 M8 20 H4 V16 M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12"/></svg>',
 };
+
+function matchLabel(hit) {
+  const labels = {name:"Name match",alias:"Alias match",content:"Content match",purpose:"Purpose match"};
+  if (labels[hit.matchSource]) return labels[hit.matchSource];
+  if (isLauncher(hit)) return hit.reason === "semantic" ? "Purpose match" : "Name or alias match";
+  return matchedMeaning(hit) || hit.keyword_rank != null ? "Content match" : "Name match";
+}
+
+function availabilityLabel(hit) {
+  return !isLauncher(hit) && (hit.availability === "unknown" || hit.availability_stale === true)
+    ? "Availability checked when opened" : "";
+}
+
+function appendUsefulResult(container, hit, fail) {
+  if (!hit.feedbackToken) return;
+  const button = element("button", "relevance-feedback", hit.usefulSaved ? "Feedback saved" : "Useful result");
+  button.type = "button";
+  button.disabled = hit.usefulSaved === true;
+  button.setAttribute("aria-label", "Mark " + titleOf(hit) + " as a useful result");
+  button.onclick = async event => {
+    event.stopPropagation(); button.disabled = true;
+    try {
+      await invoke("useful_result", {token:hit.feedbackToken});
+      hit.usefulSaved = true; button.textContent = "Feedback saved";
+      button.setAttribute("aria-label", "Useful feedback saved for " + titleOf(hit));
+    } catch (error) { button.disabled = false; fail(error); }
+  };
+  container.append(button);
+}

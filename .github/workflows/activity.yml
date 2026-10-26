@@ -39,6 +39,7 @@ jobs:
           node --check shell/ui/activity.js
           node --check shell/ui/applications-settings.js
           node tests/ui/mixed-ordering-contract.cjs
+          DIGUP_PERSONALIZATION_SCREENSHOT_LOG=1 node tests/ui/personalization.cjs
           export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
           DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/mixed-ordering.cjs
           DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/drive-picker.cjs

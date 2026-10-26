@@ -15,7 +15,8 @@ const WindowsSettings = {
     if(hit.availability==="unknown")box.append(element("p","note","Availability depends on this PC's hardware and Windows configuration."));
     const button=element("button","primary","Open settings");button.onclick=async()=>{button.disabled=true;
       try{await this.open(hit);}catch(error){fail(error);}finally{button.disabled=false;}};
-    box.append(button);return box;},
+    box.append(element("p","app-description",matchLabel(hit)),button);
+    appendUsefulResult(box,hit,fail);return box;},
 };
 class WindowsSettingsSearch {
   constructor(changed){

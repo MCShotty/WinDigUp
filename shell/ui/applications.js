@@ -92,11 +92,11 @@ const Apps = {
     text.append(title);
     if (expanded && hit.publisher) text.append(element("div", "app-publisher", hit.publisher));
     text.append(element("div", "app-description", hit.purpose || hit.description || hit.publisher || "Windows application"));
-    if(hit.reason==="semantic")text.append(element("span","app-purpose-tag","Purpose match"));
+    text.append(element("span","app-purpose-tag",matchLabel(hit)));
     const icon = this.icon(hit); row.append(icon, text);
     if (expanded) {
       row.classList.add("app-row-expanded"); icon.setAttribute("role","gridcell"); text.setAttribute("role","gridcell");
-      const reason = element("span", "app-match-reason", hit.reason === "semantic" ? "Purpose match" : ""); reason.setAttribute("role","gridcell"); row.append(reason);
+      const reason = element("span", "app-match-reason", matchLabel(hit)); reason.setAttribute("role","gridcell"); row.append(reason);
       const actions = element("span", "app-row-actions"); actions.setAttribute("role","gridcell");
       const button = element("button", "app-launch", isSetting(hit)?"Open settings":"Launch"); button.setAttribute("aria-label",`${isSetting(hit)?"Open settings":"Launch"} ${hit.name}`);
       button.disabled = this.launching.has(hit.id); button.tabIndex = selected ? 0 : -1;
@@ -118,7 +118,7 @@ const Apps = {
       source.onclick=()=>invoke("open_app_description_source",{appId:hit.id}).catch(fail);box.append(source);}
     if (hit.aliases?.length) box.append(element("p", "app-description", `Aliases: ${hit.aliases.join(", ")}`));
     box.append(element("p", "app-description", hit.shortcut || (hit.source?.startsWith("drive:") ? "Discovered on a selected drive" : "Registered with Windows")));
-    box.append(element("p", "app-description", hit.reason === "semantic" ? "Matches what this application does" : "Matches the application name or alias"));
+    box.append(element("p", "app-description", matchLabel(hit)));
     const launch = element("button", "primary", "Launch");
     launch.onclick = async () => { launch.disabled = true; try { await this.launch(hit); } catch (e) { fail(e); } finally { launch.disabled = false; } };
     box.append(launch);
@@ -126,6 +126,7 @@ const Apps = {
       const reveal = element("button", "", "Show shortcut location");
       reveal.onclick = () => invoke("reveal", { path: hit.shortcut }).catch(fail); box.append(reveal);
     }
+    appendUsefulResult(box, hit, fail);
     return box;
   },
 };

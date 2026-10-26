@@ -12,7 +12,7 @@ async function setup(page, platform='Win32') {
     const overrides={};
     const model={state:'failed',message:'No accelerator available'};
     window.setupInfo={offered:[],chosen:[],skipped:[],codeOffered:[],hotkey:'Ctrl+Shift+Space',shortcut:{method:'grab',command:''},setUp:false,applicationsSupported:true,model,state:{model}};
-    const settings={applications:{supported:platform==='Win32',enabled:true,semanticEnabled:true,count:150,hiddenCount:1,totalCount:151,sourceErrors:{}},
+    const settings={personalization:{version:1,enabled:true,entries:0},applications:{supported:platform==='Win32',enabled:true,semanticEnabled:true,count:150,hiddenCount:1,totalCount:151,sourceErrors:{}},
       acceleration:{backend:'amd-vulkan',gpu:'',python:'',models:''},hotkey:'Ctrl+Shift+Space',shortcut:{method:'grab',command:''},
       folders:['C:/docs'],skipped:[],skipTypes:[],code:{folders:[],skipped:[],editors:[],editor:'default'},state:{model},
       indexHours:{on:false,start:60,end:420},storage:{index:'C:/test',models:'C:/models'},version:'test',updateChecks:false};
@@ -23,6 +23,9 @@ async function setup(page, platform='Win32') {
       window.calls.push({command,args});
       if(command==='window_info')return {folders:['C:/docs'],hotkey:'Ctrl+Shift+Space',hasCode:true,state:{model},debugQuery:null};
       if(command==='settings_info')return settings;
+      if(command==='set_personalization'){settings.personalization.enabled=args.enabled;return settings.personalization;}
+      if(command==='clear_personalization'){settings.personalization.entries=0;return settings.personalization;}
+      if(command==='useful_result')return {saved:true};
       if(command==='activity_snapshot')return {schemaVersion:1,capturedAt:Date.now()/1000,
         files:{phase:'unavailable',searchable:0,pending:0,unfinished:0,knownFiles:0,total:null,done:null,missing:[],unreadable:[]},
         applications:{catalog:settings.applications,purpose:{state:'unavailable',message:'No accelerator available',encoder:'unavailable'}},

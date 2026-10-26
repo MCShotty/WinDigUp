@@ -34,6 +34,10 @@ pub mod accelerator_probe;
 pub mod hours;
 #[path = "../../../shell/src-tauri/src/settings.rs"]
 pub mod settings;
+#[path = "../../../shell/src-tauri/src/personalization.rs"]
+pub mod personalization;
+#[path = "../../../shell/src-tauri/src/result_open.rs"]
+pub mod result_open;
 
 #[cfg(test)]
 mod tests {
