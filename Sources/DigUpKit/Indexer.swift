@@ -181,7 +181,8 @@ public final class Indexer {
         onVerified: (WorkerInfo) -> Void = { _ in },
         admit: @escaping () throws -> [[Int64]] = { [] },
         inputComplete: @escaping () -> Bool = { true },
-        priority: @escaping () -> (Int,String)? = { nil }) throws -> [[String: Int]] {
+        priority: @escaping () -> (Int,String)? = { nil },
+        maintenance: @escaping () throws -> Void = {}) throws -> [[String: Int]] {
         guard !sources.isEmpty else { return [] }
         guard Set(sources.map { $0.indexer.store.file.standardizedFileURL.path }).count == sources.count else {
             throw Database.Failure(message: "Each scheduled index must have one database owner.")
@@ -215,7 +216,7 @@ public final class Indexer {
             return Job(files: batch.files, source: selected, priority: batch.priority,
                        options: sources[selected].indexer.options)
         }
-        try processOwned(sources.map(\.indexer), nextJob: nextJob, inputComplete: inputComplete, shouldStop: shouldStop,
+        try processOwned(sources.map(\.indexer), nextJob: nextJob, inputComplete: inputComplete, maintenance: maintenance, shouldStop: shouldStop,
             decorate: { snapshot in for queue in queues { queue.decorate(&snapshot) } },
             onSnapshot: onSnapshot, onVerified: onVerified, committed: { _, job, results, seconds in
                 let source = job.source
@@ -297,7 +298,7 @@ public final class Indexer {
     }
 
     private static func processOwned(_ indexers: [Indexer], nextJob: @escaping () throws -> Job?,
-        inputComplete: @escaping () -> Bool = { true }, shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
+        inputComplete: @escaping () -> Bool = { true }, maintenance: () throws -> Void = {}, shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
         onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
         onVerified: (WorkerInfo) -> Void = { _ in },
         committed: (Int, Job, [(String, String?)], Double) -> Void,
@@ -349,6 +350,11 @@ public final class Indexer {
             progress(force: true)
         }
 
+        func tick() {
+            do {try maintenance()} catch {pipeline.fail(error)}
+            progress()
+        }
+
         func publish(_ item: IndexPipeline<Job, Prepared, ComputedEmbedding?>.Item,
                      computed: ComputedEmbedding?, inferenceMs: Double) throws {
             let start = ProcessInfo.processInfo.systemUptime
@@ -378,7 +384,7 @@ public final class Indexer {
         do {
             while let item = pipeline.nextPrepared(shouldStop: shouldStop, canStartWith: {
                 Indexer.embeddingCalls($0, options: $0.options).contains(where: { !$0.inputs.isEmpty })
-            }, onTick: { progress() }) {
+            }, onTick: { tick() }) {
                 if skip(item.input) || !Indexer.embeddingCalls(item.value, options: item.value.options).contains(where: { !$0.inputs.isEmpty }) {
                     try publish(item, computed: nil, inferenceMs: 0)
                     continue

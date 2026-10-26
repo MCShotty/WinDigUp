@@ -284,6 +284,7 @@ final class IndexService: @unchecked Sendable {
             }
             var lastCounts=0.0
             func drain() throws {
+                for _ in 0..<8 {
                 for item in work where !item.finished {
                     guard let event=item.stream.take() else { continue }
                     switch event {
@@ -317,6 +318,7 @@ final class IndexService: @unchecked Sendable {
                         emit(["event":"error","message":"sync failed: \(message)","code":item.part.code,
                             "discoveryActive":false])
                     }
+                }
                 }
             }
             let mayEmbed=modelReady() && lock.withLock { backfillAllowed }
@@ -356,7 +358,7 @@ final class IndexService: @unchecked Sendable {
                         },admit:{
                             try drain()
                             return try work.map { try $0.session.takeEligibleIDs() }
-                        },inputComplete:{work.allSatisfy(\.finished)},priority:priorityProvider(work.map(\.part)))
+                        },inputComplete:{work.allSatisfy(\.finished)},priority:priorityProvider(work.map(\.part)),maintenance:drain)
                 } catch {
                     inferenceFailure=true
                     lock.withLock {stopRequested=true}
