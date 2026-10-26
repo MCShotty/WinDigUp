@@ -63,7 +63,7 @@ pub fn snapshot(input: Input) -> Value {
         "schemaVersion":1,"capturedAt":crate::diagnostics::now(),
         "search":{"schemaVersion":1,"last":runtime["lastSearch"],"index":runtime["searchIndex"]},
         "files":{"schemaVersion":2,"phase":phase,
-            "discoveryActive":state["discoveryActive"] == true || scan["discoveryActive"] == true,"line":state["line"],"pipeline":runtime["indexPipeline"],"pipelineHistory":runtime["indexPipelineHistory"],
+            "discoveryActive":state["discoveryActive"].as_bool().unwrap_or(scan["discoveryActive"] == true),"line":state["line"],"pipeline":runtime["indexPipeline"],"pipelineHistory":runtime["indexPipelineHistory"],
             "searchable":state["searchable"],"knownFiles":state["files"],"pending":state["pending"],"unfinished":state["unfinished"],
             "done":done,"total":total,"entriesChecked":scan["visited"],"candidates":scan["candidates"],
             "candidatesFinal":scan["event"] == "sync","root":scan["root"],"path":scan["path"],
@@ -106,6 +106,12 @@ mod tests {
         assert_eq!(report["files"]["discoveryActive"], true);
         assert_eq!(report["files"]["knownFiles"], 83);
         assert!(report["files"]["total"].is_null());
+    }
+    #[test]
+    fn explicit_stopped_discovery_overrides_the_last_scan_receipt() {
+        let report = fixture(json!({"activity":"idle","model":{"state":"ready"},
+            "discoveryActive":false,"files":83,"searchable":17,"scan":{"visited":500,"discoveryActive":true}}));
+        assert_eq!(report["files"]["discoveryActive"], false);
     }
     #[test]
     fn discovery_is_not_zero_percent_and_does_not_hide_available_apps() {
