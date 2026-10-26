@@ -136,24 +136,36 @@ impl Personalization {
         state.sessions.insert(session.into(), Frozen { generation, touched: Instant::now(), signals: signals.clone() });
         signals
     }
-    pub fn rank<T: Clone>(&self, session: &str, generation: u64, query: &str, hits: &mut [T],
+    pub fn rank<T>(&self, session: &str, generation: u64, query: &str, hits: &mut [T],
         key: impl Fn(&T) -> String, tier: impl Fn(&T) -> u8) {
         if query.trim().is_empty() { return; }
         let signals = self.signals(session, generation);
         if signals.is_empty() { return; }
-        for class in 0..=4 {
-            let indices: Vec<_> = hits.iter().enumerate().filter_map(|(i, hit)| (tier(hit) == class).then_some(i)).collect();
+        let mut classes: [Vec<usize>; 5] = std::array::from_fn(|_| Vec::new());
+        for (i, hit) in hits.iter().enumerate() {
+            if let Some(class) = classes.get_mut(tier(hit) as usize) { class.push(i); }
+        }
+        for indices in classes {
             let mut bucket: Vec<_> = indices.iter().enumerate().map(|(rank, &i)| {
                 let signal = signals.get(&digest(&key(&hits[i]))).copied().unwrap_or(0);
-                (rank, signal, hits[i].clone())
+                (rank, signal)
             }).collect();
             for at in 0..bucket.len() {
                 let end = (at + 3).min(bucket.len());
                 let best = (at..end).filter(|&i| bucket[i].0 <= at + 2)
                     .max_by_key(|&i| (bucket[i].1, std::cmp::Reverse(bucket[i].0))).unwrap_or(at);
-                let chosen = bucket.remove(best); bucket.insert(at, chosen);
+                bucket[at..=best].rotate_right(1);
             }
-            for (&i, (_, _, hit)) in indices.iter().zip(bucket) { hits[i] = hit; }
+            // Reorder owned payloads without cloning descriptions, icons or file metadata.
+            let mut current: Vec<_> = (0..indices.len()).collect();
+            let mut positions = current.clone();
+            for (at, &(wanted, _)) in bucket.iter().enumerate() {
+                let from = positions[wanted];
+                hits.swap(indices[at], indices[from]);
+                positions[current[at]] = from;
+                positions[wanted] = at;
+                current.swap(at, from);
+            }
         }
     }
     pub fn decorate(&self, session: &str, generation: u64, hits: &mut [Value]) {
@@ -276,6 +288,21 @@ mod tests {
         }
         assert!(ranked.iter().position(|hit| hit.0 == "file:5").unwrap() < 5);
         assert!(ranked.iter().position(|hit| hit.0 == "file:10").unwrap() >= 8);
+    }
+    #[test]
+    fn rank_moves_nonclone_payloads_without_losing_values() {
+        struct Hit { key: usize, payload: Box<[u8; 128]> }
+        let (history, _) = history();
+        seed(&history, "1999", 99);
+        let mut hits: Vec<_> = (0..2_000).map(|key| Hit { key, payload: Box::new([key as u8; 128]) }).collect();
+        history.rank("large", 1, "query", &mut hits, |hit| hit.key.to_string(), |_| 4);
+        assert_eq!(hits.iter().position(|hit| hit.key == 1999), Some(1997));
+        let mut keys: Vec<_> = hits.iter().map(|hit| {
+            assert!(hit.payload.iter().all(|value| *value == hit.key as u8));
+            hit.key
+        }).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, (0..2_000).collect::<Vec<_>>());
     }
     #[test]
     fn generation_and_pagination_share_a_frozen_signal() {

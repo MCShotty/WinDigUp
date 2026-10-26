@@ -16,8 +16,9 @@ pagination. Recording feedback does not reorder the current generation. Existing
 continues to determine what Enter opens during delayed refinements.
 
 The independently versioned relevance-history.json lives under the configured base index. Custom
-index/settings isolation follows the existing base-index resolver. At most 5,000 entries survive for
-90 days. Stored keys are SHA-256 digests of stable result identities; query text, names, raw file paths
+index/settings isolation follows the existing base-index resolver. At most 5,000 entries are retained
+in memory. Entries older than 90 days expire when history is loaded or updated and are removed from
+the next persisted snapshot. Stored keys are SHA-256 digests of stable result identities; query text, names, raw file paths
 and content are not stored. Hashing does not anonymize a predictable identity. The file stays local,
 and no interaction data is sent to description providers or update servers.
 
