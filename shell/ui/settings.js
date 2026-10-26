@@ -87,7 +87,7 @@ function renderGeneral() {
     $("npu-python").value = acceleration.python || "";
     $("npu-models").value = acceleration.models || "";
     $("gpu-jobs").value=String(acceleration.jobs||0);
-    $("resource-profile").value = acceleration.resourceProfile || "balanced";
+    renderResourceProfile(acceleration.resourceProfile);
   }
   $("accelerator").querySelector('option[value="metal"]').hidden = !/Mac/.test(navigator.platform);
   showAcceleratorOptions();
@@ -113,12 +113,29 @@ function renderGeneral() {
   renderUpdates();
 }
 
+function unsupportedResourceProfile(value) {
+  return !["quiet", "balanced", "faster"].includes(value);
+}
+function renderResourceProfile(value) {
+  const select=$("resource-profile"),raw=value === undefined ? "balanced" : String(value);
+  let unknown=select.querySelector("[data-unsupported-profile]");
+  const unsupported=unsupportedResourceProfile(raw);
+  if (unsupported) {
+    if (!unknown) { unknown=document.createElement("option"); unknown.dataset.unsupportedProfile="true"; unknown.disabled=true; select.prepend(unknown); }
+    unknown.value=raw;unknown.textContent="Unsupported saved profile";
+  } else unknown?.remove();
+  select.value=raw;
+  $("resource-profile-message").textContent=unsupported
+    ? "This saved resource profile is unsupported. Inference is blocked until you choose Quiet, Balanced or Faster. Other settings are kept." : "";
+  $("resource-profile-message").hidden=!unsupported;
+}
+
 function showAcceleratorOptions() {
   const npu = $("accelerator").value === "openvino-npu";
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
   $("gpu-jobs-control").hidden=npu||$("accelerator").value==="metal";
-  $("resource-profile").disabled = npu || $("accelerator").value === "metal";
+  $("resource-profile").disabled = (npu || $("accelerator").value === "metal") && !unsupportedResourceProfile($("resource-profile").value);
   $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
   renderGPUDevices();
 }
@@ -163,6 +180,7 @@ window.__TAURI__.event.listen("acceleration", ({ payload }) => {
   if (!accelerationDirty && info.shortcut) { info.acceleration = payload; renderGeneral(); }
 });
 for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs", "resource-profile"]) $(id).oninput = () => { accelerationDirty = true; };
+$("resource-profile").onchange = () => { accelerationDirty=true;renderResourceProfile($("resource-profile").value);showAcceleratorOptions(); };
 $("apply-accelerator").onclick = async () => {
   $("problem").hidden = true;
   $("apply-accelerator").disabled = true;

@@ -65,6 +65,8 @@ pub fn snapshot(input: Input) -> Value {
         "files":{"schemaVersion":2,"phase":phase,
             "discoveryActive":state["discoveryActive"].as_bool().unwrap_or(scan["discoveryActive"] == true),"line":state["line"],"pipeline":runtime["indexPipeline"],"pipelineHistory":runtime["indexPipelineHistory"],
             "searchable":state["searchable"],"knownFiles":state["files"],"pending":state["pending"],"unfinished":state["unfinished"],
+            "heldPending":state["heldPending"],"heldUnfinished":state["heldUnfinished"],
+            "runnablePending":state["runnablePending"],"runnableUnfinished":state["runnableUnfinished"],
             "done":done,"total":total,"entriesChecked":scan["visited"],"candidates":scan["candidates"],
             "candidatesFinal":scan["event"] == "sync","root":scan["root"],"path":scan["path"],
             "skipped":scan["skipped"],"skippedFolders":scan["skippedFolders"],
@@ -112,6 +114,18 @@ mod tests {
         let report = fixture(json!({"activity":"idle","model":{"state":"ready"},
             "discoveryActive":false,"files":83,"searchable":17,"scan":{"visited":500,"discoveryActive":true}}));
         assert_eq!(report["files"]["discoveryActive"], false);
+    }
+    #[test]
+    fn held_work_counts_are_explicit_and_legacy_unknowns_stay_unknown() {
+        let report = fixture(json!({"activity":"idle","model":{"state":"ready"},"files":83,"searchable":17,"pending":66,"unfinished":3,
+            "heldPending":66,"heldUnfinished":3,"runnablePending":0,"runnableUnfinished":0}));
+        assert_eq!(report["files"]["heldPending"], 66);
+        assert_eq!(report["files"]["heldUnfinished"], 3);
+        assert_eq!(report["files"]["runnablePending"], 0);
+        assert_eq!(report["files"]["runnableUnfinished"], 0);
+        let legacy = fixture(json!({"activity":"idle","model":{"state":"ready"}}));
+        assert!(legacy["files"]["heldPending"].is_null());
+        assert!(legacy["files"]["runnablePending"].is_null());
     }
     #[test]
     fn discovery_is_not_zero_percent_and_does_not_hide_available_apps() {

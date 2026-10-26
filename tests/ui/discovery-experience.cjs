@@ -10,7 +10,8 @@ let browser;
   await page.addInitScript(()=>{
     const old=window.__TAURI__.core.invoke,time=Date.now()/1000;
     window.personalization={version:1,enabled:true,entries:3};
-    window.activityMode="indexing";window.activityPaused=false;window.activityDiscovery=true;window.activityUnreadable=[];
+    window.activityMode="indexing";window.activityPaused=false;window.activityDiscovery=true;window.activityUnreadable=[];window.activityHeld={};
+    window.resourceFixtureProfile="balanced";
     window.holdSettings=false;window.settingsWaiters=[];window.failDriveSave=false;window.failReview=false;window.reviewHit=null;
     window.sourceDrive={version:2,supported:true,catalogEnabled:true,options:{enabled:true,paused:false,revision:1,volumes:["volume-a"],included:[],hidden:[]},
       volumes:[{id:"volume-a",name:"Local SSD",paths:["C:\\"],filesystem:"NTFS",available:true},
@@ -22,13 +23,13 @@ let browser;
     window.__TAURI__.core.invoke=async(command,args={})=>{
       if(command==="settings_info"){const snapshot={...await old(command,args),personalization:window.personalization,discovery:sourceDrive,
         windowsSettings:windowsCatalog,windowsSettingsSemantic:{state:"ready",embedded:38,total:38},
-        acceleration:{backend:"amd-vulkan",jobs:2,resourceProfile:"balanced",gpu:"fixture-device"},folders:["C:\\"]};
+        acceleration:{backend:"amd-vulkan",jobs:2,resourceProfile:window.resourceFixtureProfile,gpu:"fixture-device"},folders:["C:\\"]};
         if(window.holdSettings){const held=structuredClone(snapshot);return new Promise(resolve=>settingsWaiters.push(()=>resolve(held)));}
         return snapshot;
       }
       if(command==="activity_snapshot"){
         const reply=await old(command,args);
-        reply.files={...reply.files,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,total:100,done:17,
+        reply.files={...reply.files,...window.activityHeld,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,unfinished:3,total:100,done:17,
           discoveryActive:window.activityDiscovery,unreadable:window.activityUnreadable,entriesChecked:443831,candidates:107857,candidatesFinal:false,lastProgressAt:time};
         if(window.activityMode==="waiting")reply.files.pipeline={files:{schemaVersion:2,epoch:"held-fixture",blockedBy:"idle",capacity:8,
           preparationWorkers:2,inferenceWorkers:3,readyJobs:0,runningJobs:0,completedJobs:0}};
@@ -49,6 +50,7 @@ let browser;
         if(command==="set_personalization"){personalization.enabled=args.enabled;return structuredClone(personalization);}
         if(command==="clear_personalization"){personalization.entries=0;return structuredClone(personalization);}
         if(command==="index_folder_first")return new Promise(resolve=>{window.priorityResolve=()=>resolve({queued:true,active:false});});
+        if(command==="set_acceleration"&&!["quiet","balanced","faster"].includes(args.acceleration.resourceProfile))throw new Error("Fixture resource profile unsupported");
         return {};
       }
       return old(command,args);
@@ -98,12 +100,19 @@ let browser;
   assert.equal(await page.locator(".activity-stages").isVisible(),false);
   await page.evaluate(()=>{activityMode="indexing";activityPaused=false;emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
-  await page.evaluate(()=>{activityMode="waiting";activityDiscovery=false;activityUnreadable=["C:/Locked"];emit("helper",{});});
+  await page.evaluate(()=>{activityMode="waiting";activityDiscovery=false;activityUnreadable=["C:/Locked"];activityHeld={heldPending:66,heldUnfinished:3,runnablePending:0,runnableUnfinished:0};emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="explanation"]').textContent.includes("queued files are held"));
   assert.match(await page.locator('[data-key="indexing-work"]').innerText(),/Queued work held/);
   assert.equal(await page.locator('[data-key="pending"]').innerText(),"66");
   assert.ok(!(await page.locator('[data-key="indexing-work"]').innerText()).includes("Queue completed"));
-  await page.evaluate(()=>{activityMode="indexing";activityDiscovery=true;activityUnreadable=[];emit("helper",{});});
+  assert.match(await page.locator('[data-key="held-work"]').innerText(),/66 pending files held/);
+  assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",pending:0,heldPending:66,heldUnfinished:0,runnablePending:0,runnableUnfinished:0})),true);
+  await page.evaluate(()=>{activityMode="indexing";activityDiscovery=true;activityHeld.heldPending=62;activityHeld.runnablePending=4;emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
+  assert.match(await page.locator('[data-key="held-work"]').innerText(),/62 pending files held/);
+  assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",heldPending:66,heldUnfinished:0,runnablePending:4,runnableUnfinished:0})),false);
+
+  await page.evaluate(()=>{activityMode="indexing";activityDiscovery=true;activityUnreadable=[];activityHeld={};emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
   assert.match(await page.locator(".pipeline-device-measurements").innerText(),/Device utilization not reported/);
   assert.ok(!(await page.locator(".pipeline-device-measurements").innerText()).includes("0%"));
@@ -141,7 +150,15 @@ let browser;
   await page.locator("#clear-personalization").click();
   await page.waitForFunction(()=>document.querySelector("#personalization-status").textContent.includes("cleared"));
   assert.equal(await page.locator("#clear-personalization").isDisabled(),true);
+  await page.evaluate(()=>{resourceFixtureProfile="future-profile";window.dispatchEvent(new Event("focus"));});
+  await page.waitForFunction(()=>document.querySelector("#resource-profile").value==="future-profile");
+  assert.equal(await page.locator("#resource-profile option:checked").isDisabled(),true);
+  assert.match(await page.locator("#resource-profile-message").innerText(),/unsupported/);
+  await page.locator("#apply-accelerator").click();
+  await page.waitForFunction(()=>document.querySelector("#problem").textContent.includes("resource profile unsupported"));
+  assert.equal(await page.evaluate(()=>calls.filter(call=>call.command==="set_acceleration").at(-1).args.acceleration.resourceProfile),"future-profile");
   await page.locator("#resource-profile").selectOption("quiet");
+  assert.equal(await page.locator("#resource-profile-message").isVisible(),false);
   await page.evaluate(()=>window.dispatchEvent(new Event("focus")));await page.waitForTimeout(100);
   assert.equal(await page.locator("#resource-profile").inputValue(),"quiet");
   assert.equal(await page.locator("#gpu-jobs").inputValue(),"2");
@@ -151,7 +168,7 @@ let browser;
   await page.locator("#accelerator").selectOption("amd-vulkan");
   assert.equal(await page.locator("#resource-profile").isEnabled(),true);
   await page.locator("#apply-accelerator").click();
-  const sent=await page.evaluate(()=>calls.find(call=>call.command==="set_acceleration").args.acceleration);
+  const sent=await page.evaluate(()=>calls.filter(call=>call.command==="set_acceleration").at(-1).args.acceleration);
   assert.equal(sent.resourceProfile,"quiet");assert.equal(sent.jobs,2);
   const general=page.getByRole("tab",{name:"General",exact:true});await general.focus();await page.keyboard.press("ArrowRight");
   assert.equal(await page.locator("#folders").isVisible(),true);

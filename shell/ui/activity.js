@@ -166,14 +166,18 @@ window.ActivityUI = (() => {
             <p data-key="progress-label" class="activity-progress-label"></p>
             <div class="activity-metrics"><div><strong data-key="first-value"></strong><span data-key="first-label"></span></div>
               <div><strong data-key="second-value"></strong><span data-key="second-label"></span></div></div>
-            <p data-key="candidates-note" class="activity-muted"></p>
+            <p data-key="candidates-note" class="activity-muted"></p><p data-key="held-work" class="activity-muted" hidden></p>
             <div class="activity-location"><div><span data-key="root"></span><p data-key="path" class="activity-path"></p></div>
               <button data-key="pause" type="button">Pause indexing</button></div>
             <p data-key="freshness" class="activity-muted"></p>
             <p data-key="file-error" class="activity-error" hidden></p>
             <details data-key="file-details"><summary>File statistics and exclusions</summary>
               <dl><div><dt>Discovered file names</dt><dd data-key="known-files"></dd></div><div><dt>Content searchable</dt><dd data-key="searchable"></dd></div><div><dt>Queued files</dt><dd data-key="pending"></dd></div>
-              <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
+              <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div>
+              <div><dt>Queued files ready to process</dt><dd data-key="runnable-pending"></dd></div>
+              <div><dt>Long files ready to finish</dt><dd data-key="runnable-unfinished"></dd></div>
+              <div><dt>Queued files held for access</dt><dd data-key="held-pending"></dd></div>
+              <div><dt>Long files held for access</dt><dd data-key="held-unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
           </section>
           <section class="activity-section" data-key="indexing-work" hidden></section>
           <section class="activity-section"><h3>Last search</h3><p data-key="search-total">No search timing reported yet.</p>
@@ -330,6 +334,11 @@ window.ActivityUI = (() => {
       put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
       put("second-value", number(scanning ? f.candidates : f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
       put("candidates-note", scanning && !f.candidatesFinal ? "Candidates are checked against exclusions before indexing." : "");
+      const held=PipelineUI.heldSummary(f);
+      put("held-work",held ? held+". Existing searchable content is kept." : "");
+      this.get("held-work").hidden=!held;
+      put("runnable-pending",number(f.runnablePending));put("runnable-unfinished",number(f.runnableUnfinished));
+      put("held-pending",number(f.heldPending));put("held-unfinished",number(f.heldUnfinished));
       put("root", f.root ? `Scanning: ${shortPath(f.root)}` : scanning ? "Checking selected folders" : "");
       put("path", shortPath(f.path)); this.get("path").title = f.path || "";
       put("freshness", `Last progress: ${ago(f.lastProgressAt)}${snapshot.helpers.index?.pid ? " · File worker running" : snapshot.helpers.index?.busy ? " · Reading worker state" : " · File worker stopped"}`);
