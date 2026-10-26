@@ -105,7 +105,7 @@ extension Crawler {
                 return FolderSelection.isInside(skip,root) ? [skip] : []
             }
             guard Rules.isWalked(path,root:root,home:FileManager.default.homeDirectoryForCurrentUser.path,excluded:excluded) else{return false}
-            var current=folder
+            var current=folder.standardizedFileURL
             while current.path != root {
                 if options.code && Rules.codeSkipReason(forFolder:current) != nil {return false}
                 let values=try? current.resourceValues(forKeys:[.isPackageKey,.isHiddenKey,.isSymbolicLinkKey])

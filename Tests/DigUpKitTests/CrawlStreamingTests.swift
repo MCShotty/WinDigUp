@@ -210,6 +210,13 @@ struct CrawlStreamingTests {
         try FileManager.default.createDirectory(at:excluded,withIntermediateDirectories:true)
         try write(excluded.appendingPathComponent("note.txt"))
         var options=IndexOptions();options.excludedFolders=[excluded.path]
+        let ordinary=root.appendingPathComponent("ordinary")
+        try FileManager.default.createDirectory(at:ordinary,withIntermediateDirectories:true)
+        try write(ordinary.appendingPathComponent("note.txt"))
+        #expect(Crawler.canScanSubtree(ordinary,selectedRoots:[root],options:options))
+        var ordinaryCandidates:[Candidate]=[]
+        _=try Crawler.scan([ordinary],options:options,selectedRoots:[root],onBatch:{ordinaryCandidates += $0})
+        #expect(ordinaryCandidates.count==1)
         var hidden:[Candidate]=[]
         _=try Crawler.scan([excluded],options:options,selectedRoots:[root],onBatch:{hidden += $0})
         #expect(hidden.isEmpty)
