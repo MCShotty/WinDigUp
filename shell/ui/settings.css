@@ -100,5 +100,5 @@ select.field {
   .source-volume { grid-template-columns:minmax(0,1fr); }
   .source-drive-options label { min-height:44px; }
   main.settings { padding-inline:18px; }
-  .drive-actions button { min-height:44px; }
+  .drive-actions button, #windows-settings button, #executable-review button, #general button { min-height:44px; }
 }

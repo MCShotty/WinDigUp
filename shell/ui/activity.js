@@ -245,6 +245,7 @@ window.ActivityUI = (() => {
       this.get("acceleration").onclick = () => options.onSettings ? options.onSettings("general") : invoke("open_settings", { tab: "general" });
     }
     focusDrive(id) {
+      this.setTab("overview");
       this.pendingDrive = id;
       this.focusPendingDrive();
     }
