@@ -119,14 +119,15 @@ extension Crawler {
         }
     }
 
-    private static func scanProjectRoot(_ folder:String) -> Bool {
+    private static func scanProjectRoot(_ folder:String) -> Bool? {
         if FileManager.default.fileExists(atPath:folder+"/.git") {return true}
         let url=URL(fileURLWithPath:folder,isDirectory:true)
+        var failed=false
         #if os(Windows)
-        guard let walker=FileSystem.directory(url) else {return false}
+        guard let walker=FileSystem.directory(url) else {return nil}
         #else
         guard let walker=FileManager.default.enumerator(at:url,includingPropertiesForKeys:[.isDirectoryKey],
-            options:[.skipsHiddenFiles,.skipsPackageDescendants]) else {return false}
+            options:[.skipsHiddenFiles,.skipsPackageDescendants],errorHandler:{_,_ in failed=true;return true}) else {return nil}
         #endif
         while let child=autoreleasepool(invoking:{walker.nextObject() as? URL}) {
             let name=child.lastPathComponent
@@ -134,10 +135,15 @@ extension Crawler {
             #if os(Windows)
             if walker.currentIsDirectory {walker.skipDescendants()}
             #else
-            if (try? child.resourceValues(forKeys:[.isDirectoryKey]).isDirectory)==true {walker.skipDescendants()}
+            do {
+                if try child.resourceValues(forKeys:[.isDirectoryKey]).isDirectory==true {walker.skipDescendants()}
+            } catch {failed=true;walker.skipDescendants()}
             #endif
         }
-        return false
+        #if os(Windows)
+        failed = !walker.unreadable.isEmpty
+        #endif
+        return failed ? nil : false
     }
 
     /// A directory is classified before its media can enter inference.
@@ -178,18 +184,22 @@ extension Crawler {
             }.flatMap { [$0, FolderSelection.realPath($0)] }
             if options.code { repos.enterRoot(root.path) }
             var inheritedProject = false
+            var projectContextKnown=true
             if !options.code {
                 for selected in selections.flatMap({ [$0.standardizedFileURL.path,FolderSelection.realPath($0.path)] })
                     where FolderSelection.isInside(real, selected) {
                     var ancestor = (real as NSString).deletingLastPathComponent
                     while ancestor.count >= selected.count {
-                        if Crawler.scanProjectRoot(ancestor) { inheritedProject = true; break }
+                        guard let project=Crawler.scanProjectRoot(ancestor) else {projectContextKnown=false;break}
+                        if project {inheritedProject=true;break}
                         let parent = (ancestor as NSString).deletingLastPathComponent
                         if parent == ancestor { break }
                         ancestor = parent
                     }
+                    if inheritedProject || !projectContextKnown {break}
                 }
             }
+            if !projectContextKnown {report.unreadable.insert(root.path);continue}
             try db.run("INSERT INTO folders(path,project) VALUES(?,?)",[.text(root.path),.int(inheritedProject ? 1 : 0)])
             while true {
                 var nextFolder:(Int64,String,Bool)?
@@ -204,7 +214,11 @@ extension Crawler {
                 if shouldStop() { return report }
                 scanGate?.lock()
                 defer { scanGate?.unlock() }
-                let inProject = !options.code && (inherited || Crawler.scanProjectRoot(folder.path))
+                var inProject=inherited
+                if !options.code && !inherited {
+                    guard let project=Crawler.scanProjectRoot(folder.path) else {report.unreadable.insert(folder.path);continue}
+                    inProject=project
+                }
                 if options.code { repos.enter(folder.path) }
                 #if os(Windows)
                 guard let walker = FileSystem.directory(folder) else {
@@ -320,6 +334,14 @@ extension Crawler {
                 if !immediate.isEmpty {
                     report.candidateCount += immediate.count
                     onBatch(immediate)
+                }
+                let spellings=Set([folder.path,FolderSelection.realPath(folder.path)])
+                let incompleteFolder=report.unreadable.contains {path in
+                    spellings.contains(path) || spellings.contains((path as NSString).deletingLastPathComponent)
+                }
+                if !options.code && !options.includeDatasets && !rootPaths.contains(folder.path) && incompleteFolder {
+                    report.unreadable.insert(folder.path)
+                    continue
                 }
                 let isDataset = !options.code && !options.includeDatasets && !rootPaths.contains(folder.path)
                     && kindCounts.values.contains { $0.count >= 300 && Double($0.machine) / Double($0.count) >= 0.7 }

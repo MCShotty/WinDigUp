@@ -16,6 +16,8 @@ public final class IndexScanSession {
     private let ready: String
     private var readyAfter: Int64 = 0
     public private(set) var eligibleCount = 0
+    public var rootPrefixes:[String] {rootSpellings.flatMap {[$0.0]+$0.1}}
+    public private(set) var incompletePrefixes:[String]=[]
     private var closed = false
     private var added = 0, changed = 0, moved = 0, removed = 0, unchanged = 0
     public private(set) var queuedCount = 0
@@ -142,6 +144,7 @@ public final class IndexScanSession {
         }
         let unavailable=Array(report.unreadable).flatMap(aliases)
             + roots.filter {!FileManager.default.fileExists(atPath:$0.path)}.flatMap {aliases($0.standardizedFileURL.path)}
+        incompletePrefixes=Array(Set(unavailable)).sorted()
         func protected(_ path: String) -> Bool {
             unavailable.contains { path == $0 || FolderSelection.isInside(path,$0) }
         }

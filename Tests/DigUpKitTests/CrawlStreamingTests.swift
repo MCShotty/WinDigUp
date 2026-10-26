@@ -328,5 +328,50 @@ struct CrawlStreamingTests {
         #expect(document.files.first?.path.hasPrefix(preferred.path+"/")==true)
     }
 
+    @Test func heldPendingWorkDoesNotEraseKnownOrPartialCounts() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try write(files.appendingPathComponent("pending.txt"));try write(files.appendingPathComponent("partial.txt"))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let partial=try #require(store.files(under:[files.path]).first{$0.path.hasSuffix("partial.txt")})
+        try store.finish(partial.id,state:"partial",info:["read_to":"1","read_end":"3"])
+        store.pendingExcludedPaths=[files.path]
+        #expect(try store.pendingCount()==0)
+        #expect(try store.runnableUnfinishedCount()==0)
+        let queue=try store.pendingQueue()
+        #expect(try queue.take()==nil)
+        queue.close()
+        let counts=try store.counts()
+        #expect(counts.byKindAndState["doc"]?["pending"]==1)
+        #expect(counts.byKindAndState["doc"]?["partial"]==1)
+        #expect(counts.unfinished==1)
+        store.pendingExcludedPaths=[]
+        #expect(try store.pendingCount()==1)
+        #expect(try store.runnableUnfinishedCount()==1)
+    }
+
+    @Test func manyUnreadablePathsHoldOnlyTheirSourceRoot() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:second,withIntermediateDirectories:true)
+        try write(first.appendingPathComponent("a.txt"));try write(second.appendingPathComponent("b.txt"))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([first,second])
+        store.scope=[first.path,second.path]
+        store.pendingExcludedPaths=(0..<200).map {first.appendingPathComponent("missing-\($0).txt").path}
+        #expect(store.pendingExcludedPaths==[first.path])
+        #expect(try store.pendingCount()==1)
+        #expect(try store.counts().byKindAndState["doc"]?["pending"]==2)
+        store.scope=[second.path]
+        #expect(try store.pendingCount()==1)
+    }
+
     enum FixtureError:Error {case noModel}
 }

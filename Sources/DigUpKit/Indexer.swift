@@ -90,9 +90,22 @@ public final class Indexer {
     /// Crawls `roots` and reconciles the index: new files are queued, changed ones re-queued, moved ones re-pathed
     /// (no re-embedding), and files that are gone or newly excluded are removed.
     public func sync(_ roots: [URL], onProgress: (CrawlProgress) -> Void = { _ in }) throws -> SyncSummary {
+        let rootAliases=roots.map {root in
+            (root.standardizedFileURL.path,[root.standardizedFileURL.path,FolderSelection.realPath(root.path)])
+        }
+        let rootSpellings=rootAliases.flatMap {$0.1}
+        func aliases(_ path:String) -> [String] {
+            var variants=[path,FolderSelection.realPath(path)]
+            for (root,spellings) in rootAliases where path==root || FolderSelection.isInside(path,root) {
+                variants += spellings.map {$0+String(path.dropFirst(root.count))}
+            }
+            return variants
+        }
         let crawl = Crawler.crawl(roots, options: options, onProgress: onProgress)
         onProgress(CrawlProgress(stage: "reconciling", root: "", path: store.file.path,
                                 visited: crawl.visited, candidates: crawl.candidates.count))
+        let unavailable=Array(crawl.unreadable).flatMap(aliases)
+            + roots.filter {!FileManager.default.fileExists(atPath:$0.path)}.flatMap {aliases($0.standardizedFileURL.path)}
         let existing = try store.files(under: roots.map { $0.standardizedFileURL.path })
         var byPath: [String: FileRecord] = [:]
         var byInode: [String: FileRecord] = [:]
@@ -127,14 +140,16 @@ public final class Indexer {
                 }
             }
             // Failed listings and roots that disappeared mid-crawl are incomplete evidence, not deletions.
-            let unavailable = Array(crawl.unreadable) + roots.map { $0.standardizedFileURL.path }
-                .filter { !FileManager.default.fileExists(atPath: $0) }
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)
                 && !unavailable.contains(where: { row.path == $0 || FolderSelection.isInside(row.path, $0) }) {
                 try store.delete(row.id)
                 summary.removed += 1
             }
         }
+        let untouched=store.pendingExcludedPaths.filter {path in
+            !rootSpellings.contains {root in path==root || FolderSelection.isInside(path,root)}
+        }
+        store.pendingExcludedPaths=Array(Set(untouched+unavailable)).sorted()
         return summary
     }
 
