@@ -14,10 +14,12 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--helper',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
-    parser.add_argument('--samples',type=int,nargs=3,default=[100,20,10],metavar=('70k','250k','1M'))
+    parser.add_argument('--samples',type=int,nargs=3,default=[100,20,10],metavar=('small','medium','large'))
+    parser.add_argument('--vectors',type=int,nargs=3,default=[70_000,250_000,1_000_000],metavar=('small','medium','large'))
     args=parser.parse_args()
     if not sys.platform.startswith('linux'):parser.error('This /proc memory fixture is Linux-only; use benchmark-search-ui.js for installed Windows latency.')
     if args.samples[0]<100 or any(n<10 or n>199 for n in args.samples):parser.error('Use 100–199 primary samples and 10–199 samples at the other scales.')
+    if not (1 <= args.vectors[0] <= 100_000 < args.vectors[1] < args.vectors[2] <= 1_000_000):parser.error('Use a first scale up to 100k and increasing larger scales up to one million.')
     helper=args.helper.resolve();out=args.output
     out.parent.mkdir(parents=True,exist_ok=True)
     env=dict(os.environ,
@@ -28,11 +30,11 @@ def main():
         return {'samples':len(values),'medianMs':statistics.median(values),'p95Ms':values[(len(values)*95+99)//100-1],'maxMs':max(values)}
     report={'synthetic':True,'physicalAcceleratorValidated':False,'platform':platform.platform(),
             'scope':'Linux release helper roundtrips, no UI/debounce/model; 100k catalog rows, 200 real fixture files',
-            'build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip(),'stages':[]}
+            'build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip(),'stages':[],'requestedVectors':args.vectors,'requestedSamples':args.samples}
     report['binarySHA256']=hashlib.sha256(helper.read_bytes()).hexdigest()
-    report['sourcePatchSHA256']=hashlib.sha256(subprocess.check_output(['git','diff','HEAD','--','Sources/DigUpKit/Platform/Portable/Math+Portable.swift','Sources/digup/SearchService.swift','Tests/DigUpKitTests/SearchReadersTests.swift'],cwd=repo)).hexdigest()
+    report['sourcePatchSHA256']=hashlib.sha256(subprocess.check_output(['git','diff','HEAD','--','Sources/DigUpKit/Platform/Portable/Math+Portable.swift','Sources/digup/SearchService.swift','Sources/digup/FileAvailability.swift','Tests/DigUpKitTests/SearchReadersTests.swift'],cwd=repo)).hexdigest()
     source_hash=hashlib.sha256()
-    for name in ['Package.swift','Sources/CSearchMath/conversion.c','Sources/CSearchMath/include/CSearchMath.h','Sources/DigUpKit/Platform/Portable/Math+Portable.swift','Sources/digup/SearchService.swift']:
+    for name in ['Package.swift','Sources/CSearchMath/conversion.c','Sources/CSearchMath/include/CSearchMath.h','Sources/DigUpKit/Platform/Portable/Math+Portable.swift','Sources/digup/SearchService.swift','Sources/digup/FileAvailability.swift']:
         source_hash.update(name.encode()+b'\0'+(repo/name).read_bytes()+b'\0')
     report['sourceFilesSHA256']=source_hash.hexdigest()
     report['cpu']=next((line.split(':',1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name')),platform.processor())
@@ -90,7 +92,7 @@ def main():
             call(op='prewarm')
             vector=struct.pack('<'+'e'*768,1,*([0]*767))
             previous=0
-            for count,samples in zip([70_000,250_000,1_000_000],args.samples):
+            for count,samples in zip(args.vectors,args.samples):
                 if previous==0:db.execute('UPDATE segments SET vec=? WHERE id<=?',(vector,count))
                 else:
                     if previous<100_000:db.execute('UPDATE segments SET vec=? WHERE id>?',(vector,previous))
@@ -112,6 +114,7 @@ def main():
                     assert last['meaning'] and last.get('status')!='superseded',last
                     if n:latencies.append((time.perf_counter()-begin)*1000)
                 item={'vectors':count,'refreshMs':load_ms,'keywordDuringRefresh':stats(during),'retrievalRoundtrip':stats(latencies),
+                      'retrievalSamplesMs':latencies,'keywordDuringRefreshSamplesMs':during,
                       'peakHelperRssBytes':peak[0],'lastPhases':last['ms'],'databaseBytes':Path(path).stat().st_size}
                 report['stages'].append(item);out.write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(item),flush=True)
                 previous=count;db.execute('PRAGMA wal_checkpoint(PASSIVE)')
