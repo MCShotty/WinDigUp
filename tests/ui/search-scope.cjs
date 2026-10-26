@@ -39,7 +39,7 @@ let browser;
     const fileRows=view==="window.html"?".cell":".row";
     await page.waitForSelector(fileRows);await page.waitForSelector('[data-result-key^="app:"]');
     await page.locator('[data-result-key^="app:"]').first().click();
-    if(view==="index.html"){await page.press("#query","Space");await page.locator("#result-preview").waitFor({state:"visible"});}
+    if(view==="index.html"){await page.locator("#details-action").click();await page.locator("#result-preview").waitFor({state:"visible"});}
     await page.waitForTimeout(170);
     assert.ok(await page.evaluate(()=>window.delayedFiles.length>0));
     const selected=await page.evaluate(()=>state.selection);
