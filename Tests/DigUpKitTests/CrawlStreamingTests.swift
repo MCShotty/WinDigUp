@@ -276,5 +276,57 @@ struct CrawlStreamingTests {
     }
     #endif
 
+    @Test func interleavedReadyMetadataStillFormsFullImageBatches() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        for index in 0..<8 {
+            try Data([1]).write(to:files.appendingPathComponent("photo-\(index).jpg"))
+            try write(files.appendingPathComponent("note-\(index).txt"))
+        }
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let rows=try store.files(under:[files.path])
+        var ids:[Int64]=[]
+        for index in 0..<8 {
+            ids.append(try #require(rows.first{$0.path.hasSuffix("photo-\(index).jpg")}).id)
+            ids.append(try #require(rows.first{$0.path.hasSuffix("note-\(index).txt")}).id)
+        }
+        let queue=try store.pendingQueue(includePending:false)
+        defer {queue.close()}
+        try queue.append(ids)
+        let batch=try #require(queue.takeBatch())
+        #expect(batch.files.count==8)
+        #expect(batch.files.allSatisfy{$0.kind == .image})
+    }
+
+    @Test func folderUrgencyPrecedesOtherKindsWhileKeepingImageGroups() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let ordinary=root.appendingPathComponent("ordinary"),preferred=root.appendingPathComponent("preferred")
+        try FileManager.default.createDirectory(at:ordinary,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:preferred,withIntermediateDirectories:true)
+        for index in 0..<8 {
+            try Data([1]).write(to:ordinary.appendingPathComponent("ordinary-\(index).jpg"))
+            try Data([1]).write(to:preferred.appendingPathComponent("preferred-\(index).jpg"))
+            try write(preferred.appendingPathComponent("note-\(index).txt"))
+        }
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([ordinary,preferred])
+        let queue=try store.pendingQueue(includePending:false)
+        defer {queue.close()}
+        try queue.prioritize(preferred.path)
+        try queue.append(store.files(under:[ordinary.path,preferred.path]).map(\.id))
+        let pictures=try #require(queue.takeBatch())
+        #expect(pictures.files.count==8)
+        #expect(pictures.files.allSatisfy{$0.path.hasPrefix(preferred.path+"/") && $0.kind == .image})
+        let document=try #require(queue.takeBatch())
+        #expect(document.files.first?.kind == .doc)
+        #expect(document.files.first?.path.hasPrefix(preferred.path+"/")==true)
+    }
+
     enum FixtureError:Error {case noModel}
 }

@@ -77,9 +77,15 @@ final class PendingFileQueue {
 
     func append(_ ids: [Int64]) throws {
         guard !closed, !ids.isEmpty else { return }
+        guard ids.count<=256 else {throw Database.Failure(message:"The live queue batch is too large.")}
+        var ordered:[Int64]=[]
+        try store.db.query("""
+            SELECT id FROM files WHERE id IN (\(ids.map {_ in "?"}.joined(separator:",")))
+            ORDER BY \(FileKind.indexingOrderSQL),mtime DESC,id
+            """,ids.map(SQLValue.int)) {ordered.append($0.int(0))}
         var preferenceArrived=false
         try store.db.transaction {
-            for id in ids {
+            for id in ordered {
                 try store.db.run("""
                     INSERT OR IGNORE INTO \(table)(ord,file,priority)
                     SELECT ?,id,1 FROM files WHERE id=? AND state=?\(scopeSQL)
