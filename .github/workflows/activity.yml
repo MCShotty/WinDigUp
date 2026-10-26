@@ -42,6 +42,7 @@ jobs:
           export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
           DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/mixed-ordering.cjs
           DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/drive-picker.cjs
+          node tests/ui/discovery-experience.cjs
           node tests/ui/acceleration.cjs
           node tests/ui/applications.cjs
           node tests/ui/activity.cjs

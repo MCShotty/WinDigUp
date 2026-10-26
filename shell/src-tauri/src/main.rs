@@ -1376,7 +1376,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
-    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "drives" | "storage"));
+    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "drives" | "executable-review" | "windows-settings" | "storage"));
     if let Some(window) = app.get_webview_window("settings") {
         if let Some(tab) = tab { let _ = window.emit("settings-tab", tab); }
         let _ = window.show();

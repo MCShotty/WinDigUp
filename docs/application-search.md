@@ -25,7 +25,7 @@ becomes ready. Empty `apps:` listings still run without inference.
 
 ## Indexing diagnostics and recovery
 
-**Settings → Folders → Indexing diagnostics…** (also available in Apps) shows the running build, saved folders,
+**Settings → Activity** (also available from the search status bar, Folders, and Apps) shows the running build, saved folders,
 selected accelerator, scheduler blockers, helper PIDs, current scan stage, app preparation state, and bounded local
 log tails. **Copy report** copies it; if Windows denies clipboard access, the report is selected for Ctrl+C. Review
 the report before sharing: it includes local file/folder names. It does not start inference or scan folders, so it
@@ -33,7 +33,7 @@ also works when a helper is stalled. Logs rotate at about 1 MiB, retaining one p
 
 Worker exits, startup failures and synchronization errors remain visible instead of returning to “0 files indexed.”
 A successful empty scan shows why files were skipped (unsupported types, cloud placeholders, excluded folders, and
-other crawl rules). Scan progress reports checked entries and candidates before embedding begins. **Index now**
+other crawl rules). Scan progress reports checked entries and preliminary candidates independently of content-ready counts. **Index now**
 retries using the existing saved choices; model errors still require fixing the selected accelerator.
 
 App preparation uses an already-running query encoder and pauses when it becomes idle. **Prepare purpose matching**
@@ -55,7 +55,7 @@ defect; it does not establish which file or phase is blocking the reported Windo
 
 DigUp reads Windows Shell's AppsFolder and the current-user/shared Start menu Programs folders using Windows APIs.
 This covers registered desktop and packaged applications. A portable application is included when it has a Start menu
-shortcut. DigUp does not scan drives for executables or require Windows Search's content index.
+shortcut. Optional application discovery in **Settings → Drives** also finds unregistered executables; review uncertain entries in **Settings → Review apps**. DigUp does not require Windows Search's content index.
 
 Shortcuts remain shortcuts when launched, preserving arguments and working directories. Entries with different launch
 arguments stay separate. Windows handles packaged applications and activation of an already-running app. An accepted
@@ -103,7 +103,7 @@ and purpose-search quality must be measured before calling this feature hardware
 Model/runtime/precision/backend/prompt/profile fingerprints prevent incompatible vector reuse. Changed descriptions
 invalidate their own vectors; icon-only changes do not. The application cache has its own schema and never migrates
 or rebuilds the file/code indexes. Corrupt application SQLite caches are rebuilt without touching those indexes or
-Settings. `--index` and `--settings` isolate development/test data. All application metadata stays local.
+Settings. `--index` and `--settings` isolate development/test data. Optional online description fetching remains off by default and is explained in Apps settings.
 
 ## Validation
 

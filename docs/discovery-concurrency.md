@@ -69,7 +69,7 @@ Two extraction owners prepare bounded immutable batches. Inference owners take t
 
 Before publication, commits recheck source size, modification time, known physical file identity, the current database row, and the vector fingerprint. Changed sources stay pending for resynchronization. Incompatible configuration changes cannot publish old vectors. A failed later job does not erase already committed work, and long-document cursors advance only with their transaction.
 
-File and code demand use bounded 24-file turns. Application and Windows-settings documents stay incremental and use expiring atomic claims; two consumers cannot embed the same current document at once. Unchanged text and icon-only refreshes preserve vectors and live claims. Removed or changed documents invalidate stale work.
+File and code demand share a continuously refilled bounded scheduler across metadata pages, without draining between 24-file turns. Application and Windows-settings documents stay incremental and use expiring atomic claims; two consumers cannot embed the same current document at once. Unchanged text and icon-only refreshes preserve vectors and live claims. Removed or changed documents invalidate stale work.
 
 Every prepared vector must contain 768 finite values and satisfy the existing normalization tolerance. Host validation, tokenization, I/O, and similarity scoring remain on the host. Neural arithmetic, pooling, and normalization stay on the selected accelerator.
 

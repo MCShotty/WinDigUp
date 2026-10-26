@@ -14,9 +14,9 @@ Retain the project's neutral surfaces and moss-green accent. Green marks selecti
 
 Results stay compact, with native icons and useful descriptions. Smart placement puts files, applications, and Windows settings into one Best matches section according to explicit match classes. Remaining file results keep their relevance order. Files first and Apps view only remain explicit alternatives.
 
-Activity occupies the existing side pane in the larger window and expands across the available width in a narrow window. A drive is one readable row: identity, phase, observed counts, and an optional explanation. Stage measurements stay collapsed until requested.
+Activity occupies the existing side pane in the larger window and expands across the available width in a narrow window. A drive is one readable row: identity, independent Files and Applications choices, saved state, phase, observed counts, and a direct Activity action. Stage measurements stay collapsed until requested.
 
-Settings gives drive choices a visible Drives tab, with direct links from Apps and Activity. Windows settings search and online descriptions stay grouped by source in Apps. Each source owns its pending state and feedback. Drive choices have Save and Revert. Progress updates do not rebuild a focused row or discard drafts.
+Settings gives drive choices a visible Drives tab, with direct links from Apps and Activity. Windows settings search has its own Settings destination; online descriptions remain an opt-in Apps source. Executable review has a focused destination reached from Drives. Each source owns its pending state and feedback. Drive choices have Save and Revert. Progress updates do not rebuild a focused row or discard drafts.
 
 Whitespace separates source decisions and drive rows. Dividers distinguish adjacent drives. There are no decorative charts or percentages for unknown work.
 
