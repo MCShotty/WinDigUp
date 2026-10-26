@@ -42,6 +42,7 @@ struct SearchAvailabilityTests {
         let hits = try #require(reply["hits"] as? [[String: Any]])
         #expect(elapsed < 150)
         #expect(hits.count == 2)
+        #expect(reply["exact_filename"] as? Bool == true)
         #expect(hits.allSatisfy { $0["availability"] as? String == "unknown" })
         Thread.sleep(forTimeInterval: 0.5)
         let checked = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
@@ -108,6 +109,7 @@ struct SearchAvailabilityTests {
         #expect((reply["hits"] as? [[String: Any]])?.count == 1)
         Thread.sleep(forTimeInterval: 0.3)
         #expect(probes.calls == 1)
+        #expect(reply["exact_filename"] as? Bool == true)
     }
 
     @Test func clearingWhileAProbeRunsCannotRepublishAnOlderObservation() throws {
