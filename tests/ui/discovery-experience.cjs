@@ -104,6 +104,8 @@ let browser;
     for(const tab of ["drives","windows-settings","executable-review"]){
       await page.evaluate(tab=>showTab(tab),tab);
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),tab+" overflow at "+width);
+      if(process.env.DIGUP_EXPERIENCE_SCREENSHOT_LOG&&theme==="light"&&width===660)
+        console.log("EXPERIENCE_SCREENSHOT_"+tab+"="+(await page.screenshot({type:"jpeg",quality:65})).toString("base64"));
       if(process.env.DIGUP_ACTIVITY_SCREENSHOTS){
         fs.mkdirSync(process.env.DIGUP_ACTIVITY_SCREENSHOTS,{recursive:true});
         await page.screenshot({path:process.env.DIGUP_ACTIVITY_SCREENSHOTS+"/experience-"+tab+"-"+theme+"-"+width+".png",fullPage:true});

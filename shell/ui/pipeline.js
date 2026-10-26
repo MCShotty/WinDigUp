@@ -158,7 +158,7 @@ window.PipelineUI = (() => {
         : "Device measurements have not been reported.");
       text(this.telemetryValues,utilization+" · "+memory);
       text(this.telemetrySource,supported ? [measured.source?"Source: "+measured.source:"",
-        measured.deviceId?"Device: "+measured.deviceId:"",Number.isFinite(measured.intervalMs)?"Sample interval "+measured.intervalMs+" ms":"",
+        measured.deviceId?"Device: "+measured.deviceId:"",Number.isFinite(measured.ageMs)?"Sample age "+Math.round(measured.ageMs/1000)+" s":"",Number.isFinite(measured.intervalMs)?"Sample interval "+measured.intervalMs+" ms":"",
         "Device-wide counters include other applications."].filter(Boolean).join(" · ") :
         "Worker request counts do not measure GPU utilization.");
       this.capacity.hidden = !inference.capacity?.reason;
