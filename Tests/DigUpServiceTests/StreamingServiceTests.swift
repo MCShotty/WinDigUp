@@ -5,6 +5,11 @@ import DigUpKit
 
 @Suite(.serialized)
 struct StreamingServiceTests {
+    func temporary() throws -> URL {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        return URL(fileURLWithPath:FolderSelection.realPath(root.path),isDirectory:true)
+    }
     final class Gate:@unchecked Sendable {
         let condition=NSCondition()
         var indexed=false
@@ -48,7 +53,7 @@ struct StreamingServiceTests {
     }
 
     @Test func firstFileIndexesWhileTheNextFolderIsStillBeingDiscovered() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files")
         let child=files.appendingPathComponent("later")
@@ -72,7 +77,7 @@ struct StreamingServiceTests {
         #expect(try store.counts().vectors==65)
     }
     @Test func slowCodeDiscoveryCannotBlockReadyFileInference() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
         try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
@@ -99,7 +104,7 @@ struct StreamingServiceTests {
     }
 
     @Test func ordinaryChangesReconcileTheirSubtreeWithoutRecrawlingASibling() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files")
         let left=files.appendingPathComponent("left"),right=files.appendingPathComponent("right")
@@ -134,7 +139,7 @@ struct StreamingServiceTests {
     }
 
     @Test func alreadyReadyFileAndCodeQueuesAlternate() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
         try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
@@ -155,7 +160,7 @@ struct StreamingServiceTests {
     }
 
     @Test func metadataDiscoveryContinuesWhileInferenceIsBlocked() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),later=files.appendingPathComponent("later")
         try FileManager.default.createDirectory(at:later,withIntermediateDirectories:true)
@@ -183,7 +188,7 @@ struct StreamingServiceTests {
     }
 
     @Test func folderPriorityUsesNativePathSpellingAndSortsDiscoveryRoots() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
         try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true)
@@ -211,7 +216,7 @@ struct StreamingServiceTests {
     }
 
     @Test func prioritizedSourceYieldsToOtherReadySourcesAfterEightBatches() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
         try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
@@ -244,7 +249,7 @@ struct StreamingServiceTests {
 
     #if !os(Windows)
     @Test func partialScanHoldsOldPendingRowsAndARecoveredChangeResumesThem() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         let files=root.appendingPathComponent("files"),blocked=files.appendingPathComponent("blocked")
         defer {
             try? FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:blocked.path)
@@ -307,7 +312,7 @@ struct StreamingServiceTests {
     }
 
     @Test func disconnectedWholeRootKeepsCachedCountsAfterHelperRestart() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),away=root.appendingPathComponent("away")
         let index=root.appendingPathComponent("index")
@@ -331,7 +336,7 @@ struct StreamingServiceTests {
 
     #if !os(Windows)
     @Test func rootAliasCacheIsIsolatedVersionedAndRecoversFromCorruption() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),alias=root.appendingPathComponent("alias")
         try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
@@ -367,7 +372,7 @@ struct StreamingServiceTests {
     }
 
     @Test func changedSymlinkTargetIsHeldInsteadOfFollowingANewFolder() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
         let alias=root.appendingPathComponent("chosen"),index=root.appendingPathComponent("index")
@@ -393,7 +398,7 @@ struct StreamingServiceTests {
     }
 
     @Test func damagedAliasCacheAndMissingRootKeepVectorsWithoutGuessingCoverage() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let target=root.appendingPathComponent("target"),alias=root.appendingPathComponent("chosen")
         let index=root.appendingPathComponent("index")
@@ -419,7 +424,7 @@ struct StreamingServiceTests {
     }
 
     @Test func aliasMetadataRejectsStaleWritersAndMergesIndependentOwners() throws {
-        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),other=root.appendingPathComponent("other")
         let directory=root.appendingPathComponent("index")

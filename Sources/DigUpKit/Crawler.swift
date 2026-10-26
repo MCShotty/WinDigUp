@@ -232,11 +232,13 @@ struct GitRepos {
 
     /// A chosen folder: a repo itself, or inside one (a repo's subfolder chosen on its own).
     mutating func enterRoot(_ path: String) {
-        var folder = path
+        let canonical=FolderSelection.realPath(path)
+        var folder = canonical
         while true {
             if FileManager.default.fileExists(atPath: folder + "/.git") {
                 files[folder] = GitFiles.list(folder)
                 repoOf[path] = folder
+                repoOf[canonical] = folder
                 return
             }
             let parent = (folder as NSString).deletingLastPathComponent
@@ -244,6 +246,7 @@ struct GitRepos {
             folder = parent
         }
         repoOf[path] = .some(nil)
+        repoOf[canonical] = .some(nil)
     }
 
     /// A folder the walk goes into: a repo of its own when it has a .git folder (a submodule's or a worktree's .git
