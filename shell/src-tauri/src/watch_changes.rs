@@ -8,6 +8,14 @@ pub struct ChangeBatch {
     pub dirty_roots: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ChangeKind { Ordinary, PairedRename, UnpairedRename, Unknown }
+
+pub fn requires_reconciliation(kind: ChangeKind, paths: usize) -> bool {
+    paths==0 || matches!(kind,ChangeKind::UnpairedRename | ChangeKind::Unknown)
+        || matches!(kind,ChangeKind::PairedRename) && paths!=2
+}
+
 pub fn contains_path(path: &Path, root: &Path) -> bool {
     if path.starts_with(root) { return true; }
     #[cfg(windows)] {
@@ -114,6 +122,17 @@ mod tests {
         let batch=changes.take();
         assert_eq!(batch.dirty_roots,vec![root]);
         assert!(batch.paths.is_empty());
+    }
+
+    #[test]
+    fn only_complete_rename_pairs_can_use_targeted_reconciliation() {
+        assert!(!requires_reconciliation(ChangeKind::PairedRename,2));
+        assert!(requires_reconciliation(ChangeKind::PairedRename,1));
+        assert!(requires_reconciliation(ChangeKind::PairedRename,3));
+        assert!(requires_reconciliation(ChangeKind::UnpairedRename,1));
+        assert!(requires_reconciliation(ChangeKind::Unknown,1));
+        assert!(requires_reconciliation(ChangeKind::Ordinary,0));
+        assert!(!requires_reconciliation(ChangeKind::Ordinary,1));
     }
 
 }

@@ -8,7 +8,7 @@
 use notify::{RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
-use crate::watch_changes::{ChangeAccumulator, ChangeBatch, rules_changed, contains_path};
+use crate::watch_changes::{ChangeAccumulator, ChangeBatch, rules_changed, contains_path, ChangeKind, requires_reconciliation};
 use std::time::Duration;
 
 /// Folders the crawl never walks into, by name: the engine's `Rules.skippedFolderNames`.
@@ -34,7 +34,13 @@ impl FolderWatcher {
                 Err(_) => changes.dirty_all(),
                 Ok(event) => {
                     if event.kind.is_access() && !event.need_rescan() { return; }
-                    if event.paths.is_empty() || event.need_rescan() {
+                    let kind=match event.kind {
+                        notify::EventKind::Any | notify::EventKind::Other => ChangeKind::Unknown,
+                        notify::EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::Both)) => ChangeKind::PairedRename,
+                        notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => ChangeKind::UnpairedRename,
+                        _ => ChangeKind::Ordinary,
+                    };
+                    if requires_reconciliation(kind,event.paths.len()) || event.need_rescan() {
                         changes.dirty_all();
                     } else {
                         for path in event.paths {
