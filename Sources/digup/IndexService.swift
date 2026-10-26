@@ -481,6 +481,7 @@ final class IndexService: @unchecked Sendable {
                 emit(["event":"scanning","code":part.code,"discoveryActive":true])
             }
             var lastCounts=0.0
+            var dirtyCounts=Set<Bool>()
             func drain() throws {
                 for _ in 0..<8 {
                 for item in work where !item.finished {
@@ -492,12 +493,7 @@ final class IndexService: @unchecked Sendable {
                               "discoveryActive":true])
                     case .batch(let candidates):
                         _ = try item.session.admit(candidates)
-                        let now=ProcessInfo.processInfo.systemUptime
-                        if now-lastCounts>=0.5 {
-                            emitCounts("scan_batch",["code":item.part.code,"discoveryActive":true,
-                                "candidates":item.session.eligibleCount])
-                            lastCounts=now
-                        }
+                        dirtyCounts.insert(item.part.code)
                     case .finished(let report):
                         item.summary=try item.session.finish(report)
                         let completed=item.session.rootPrefixes
@@ -506,6 +502,7 @@ final class IndexService: @unchecked Sendable {
                         }
                         item.part.store.pendingExcludedPaths=Array(Set(previous+item.session.incompletePrefixes)).sorted()
                         item.finished=true
+                        dirtyCounts.remove(item.part.code)
                         if let summary=item.summary {
                             emitCounts("sync",[
                                 "code":item.part.code,"new":item.session.queuedCount<=newFilesLimit ? item.session.queuedCount : 0,
@@ -519,10 +516,20 @@ final class IndexService: @unchecked Sendable {
                     case .failed(let message):
                         item.part.store.pendingExcludedPaths=Array(Set(item.part.store.pendingExcludedPaths+item.session.rootPrefixes)).sorted()
                         item.finished=true
+                        dirtyCounts.remove(item.part.code)
                         emit(["event":"error","message":"sync failed: \(message)","code":item.part.code,
                             "discoveryActive":false])
                     }
                 }
+                }
+                let now=ProcessInfo.processInfo.systemUptime
+                if !dirtyCounts.isEmpty && now-lastCounts>=0.5 {
+                    for item in work where !item.finished && dirtyCounts.contains(item.part.code) {
+                        emitCounts("scan_batch",["code":item.part.code,"discoveryActive":true,
+                            "candidates":item.session.eligibleCount])
+                    }
+                    dirtyCounts.removeAll()
+                    lastCounts=now
                 }
             }
             let mayEmbed=modelReady() && lock.withLock { backfillAllowed }

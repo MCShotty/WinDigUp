@@ -2207,6 +2207,7 @@ fn index_event(app: &AppHandle, event: Value) {
     }
     app.state::<Arc<Shell>>().status.lock().unwrap().apply(&event);
     match event["event"].as_str().unwrap_or_default() {
+        "scan_batch" | "sync" | "scan_cancelled" | "error" => refresh_search_names(app),
         "file" | "rest" => reload(app, false),
         "idle" => {
             reload(app, true);
@@ -2354,6 +2355,12 @@ fn measure_then_index(app: &AppHandle) {
         changed(&app);
         run_index(&app);
     });
+}
+
+/// Discovery coalesces metadata updates every half second, independently of vectors and the encoder.
+fn refresh_search_names(app: &AppHandle) {
+    let shell = app.state::<Arc<Shell>>();
+    if !shell.quitting.load(Ordering::SeqCst) { shell.search.refresh_names(); }
 }
 
 /// Has the search service read the index again: at once when indexing settles, else at most every three seconds.
