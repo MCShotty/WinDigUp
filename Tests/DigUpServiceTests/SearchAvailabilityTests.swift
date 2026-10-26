@@ -47,8 +47,9 @@ struct SearchAvailabilityTests {
         Thread.sleep(forTimeInterval: 0.5)
         let checked = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
         let known = try #require(checked["hits"] as? [[String: Any]])
-        #expect(known.count == 1)
-        #expect(known.first?["availability"] as? String == "available")
+        #expect(known.count == 2)
+        #expect(known.filter { $0["availability"] as? String == "available" }.count == 1)
+        #expect(known.filter { $0["availability"] as? String == "unknown" }.count == 1)
         print("AVAILABILITY_EVIDENCE: synchronous=false elapsedMs=\(elapsed) probes=\(probes.calls) injectedProbeMs=200")
     }
 
@@ -121,5 +122,20 @@ struct SearchAvailabilityTests {
         try waitFor { cache.snapshot["completed"] as? Int == 1 }
         #expect(cache.snapshot["cached"] as? Int == 0)
         cache.stop()
+    }
+
+    @Test func unavailableOrInaccessibleFilesRemainUnknownAndKeepExactCollisions() throws {
+        let (root, store, searcher) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = try SearchService(index: store.directory, baseIndex: store.directory,
+            roots: [], skipped: [], types: [], codeRoots: [], codeSkipped: [], idleSeconds: 300,
+            fileExists: { _ in false })
+        _ = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
+        Thread.sleep(forTimeInterval: 0.05)
+        let checked = try service.fileSearch(["q": "report", "meaning": false], in: searcher, vector: nil, source: nil)
+        let hits = try #require(checked["hits"] as? [[String: Any]])
+        #expect(hits.count == 2)
+        #expect(hits.allSatisfy { $0["availability"] as? String == "unknown" })
+        #expect(checked["exact_filename"] as? Bool == true)
     }
 }

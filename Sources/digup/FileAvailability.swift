@@ -6,7 +6,6 @@ final class FileAvailability: @unchecked Sendable {
         let state: String
         let stale: Bool
         let ageMilliseconds: Double?
-        var unavailable: Bool { state == "unavailable" && !stale }
         var fields: [String: Any] {
             var value: [String: Any] = ["availability": state, "availability_stale": stale]
             if let ageMilliseconds { value["availability_checked_ms_ago"] = ageMilliseconds }
@@ -23,7 +22,7 @@ final class FileAvailability: @unchecked Sendable {
     private let probe: @Sendable (String) -> Bool
     private let clock: @Sendable () -> Double
     private let concurrency: Int, capacity: Int, cacheLimit: Int
-    private let availableTTL: Double, unavailableTTL: Double
+    private let availableTTL: Double, negativeTTL: Double
     private var entries: [String: Entry] = [:]
     private var pending: [String] = []
     private var queued: Set<String> = []
@@ -34,14 +33,14 @@ final class FileAvailability: @unchecked Sendable {
     private var durations: [Double] = []
 
     init(concurrency: Int = 2, capacity: Int = 256, cacheLimit: Int = 4096,
-         availableTTL: Double = 5, unavailableTTL: Double = 2,
+         availableTTL: Double = 5, negativeTTL: Double = 2,
          clock: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
          probe: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) {
         self.concurrency = min(max(concurrency, 1), 2)
         self.capacity = min(max(capacity, 1), 256)
         self.cacheLimit = min(max(cacheLimit, 1), 4096)
         self.availableTTL = max(0, availableTTL)
-        self.unavailableTTL = max(0, unavailableTTL)
+        self.negativeTTL = max(0, negativeTTL)
         self.clock = clock
         self.probe = probe
     }
@@ -56,9 +55,9 @@ final class FileAvailability: @unchecked Sendable {
             entry.touched = now
             entries[path] = entry
             age = max(0, now - entry.checked)
-            stale = age! >= (entry.available ? availableTTL : unavailableTTL)
+            stale = age! >= (entry.available ? availableTTL : negativeTTL)
             if !stale {
-                return Observation(state: entry.available ? "available" : "unavailable",
+                return Observation(state: entry.available ? "available" : "unknown",
                                    stale: false, ageMilliseconds: age! * 1000)
             }
         }

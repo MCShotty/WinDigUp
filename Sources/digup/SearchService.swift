@@ -481,7 +481,6 @@ final class SearchService: @unchecked Sendable {
             exactNames?.contains { path in
                 (options.0.isEmpty || FolderSelection.isSearched(path, folders: options.0, skipped: options.1))
                     && !options.2.contains((path as NSString).pathExtension.lowercased())
-                    && !observation(path).unavailable
             } ?? false
         if code && options.0.isEmpty { return ["hits": [], "strong": 0, "meaning": false] }
         let hits = try index.search(
@@ -491,8 +490,8 @@ final class SearchService: @unchecked Sendable {
         ).filter {
             (options.0.isEmpty || FolderSelection.isSearched($0.path, folders: options.0, skipped: options.1))
                 && (code || !options.2.contains(($0.path as NSString).pathExtension.lowercased()))
-                && !observation($0.path).unavailable
         }
+        for hit in hits { _ = observation(hit.path) }
         var timing = index.timings
         timing["availability"] = availabilityMs
         timing["search"] = (Self.now - started) * 1000
