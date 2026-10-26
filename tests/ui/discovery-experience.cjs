@@ -11,6 +11,7 @@ let browser;
     const old=window.__TAURI__.core.invoke,time=Date.now()/1000;
     window.personalization={version:1,enabled:true,entries:3};
     window.activityMode="indexing";window.activityPaused=false;
+    window.holdSettings=false;window.settingsWaiters=[];
     window.sourceDrive={version:2,supported:true,catalogEnabled:true,options:{enabled:true,paused:false,revision:1,volumes:["volume-a"],included:[],hidden:[]},
       volumes:[{id:"volume-a",name:"Local SSD",paths:["C:\\"],filesystem:"NTFS",available:true},
         {id:"volume-b",name:"Offline backup",paths:["E:\\"],filesystem:"NTFS",available:false}],
@@ -19,9 +20,12 @@ let browser;
     window.windowsCatalog={supported:true,enabled:true,semanticEnabled:true,ordinarySearches:true,count:38};
     window.telemetry={schemaVersion:1,state:"unavailable",utilizationPercent:null,memoryUsedBytes:null,memoryTotalBytes:null,message:"Provider not available"};
     window.__TAURI__.core.invoke=async(command,args={})=>{
-      if(command==="settings_info")return {...await old(command,args),personalization:window.personalization,discovery:sourceDrive,
+      if(command==="settings_info"){const snapshot={...await old(command,args),personalization:window.personalization,discovery:sourceDrive,
         windowsSettings:windowsCatalog,windowsSettingsSemantic:{state:"ready",embedded:38,total:38},
         acceleration:{backend:"amd-vulkan",jobs:2,resourceProfile:"balanced",gpu:"fixture-device"},folders:["C:\\"]};
+        if(window.holdSettings){const held=structuredClone(snapshot);return new Promise(resolve=>settingsWaiters.push(()=>resolve(held)));}
+        return snapshot;
+      }
       if(command==="activity_snapshot"){
         const reply=await old(command,args);
         reply.files={...reply.files,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,total:100,done:17,
@@ -98,9 +102,12 @@ let browser;
   await page.waitForFunction(()=>document.querySelector("#drive-list-state").textContent.includes("No executables"));
   await page.locator("#review-drive-settings").click();assert.equal(await page.locator("#drives").isVisible(),true);
   await page.getByRole("tab",{name:"General",exact:true}).click();
+  await page.evaluate(()=>{holdSettings=true;window.dispatchEvent(new Event("focus"));});
+  await page.waitForFunction(()=>settingsWaiters.length>0);
   await page.locator("#personalization-enabled").uncheck();
   await page.waitForFunction(()=>calls.some(call=>call.command==="set_personalization"));
-  assert.equal(await page.locator("#personalization-enabled").isChecked(),false);
+  await page.evaluate(()=>{holdSettings=false;settingsWaiters.splice(0).forEach(resolve=>resolve());});await page.waitForTimeout(100);
+  assert.equal(await page.locator("#personalization-enabled").isChecked(),false,"An older focus refresh reverted the preference");
   await page.locator("#clear-personalization").click();
   await page.waitForFunction(()=>document.querySelector("#personalization-status").textContent.includes("cleared"));
   assert.equal(await page.locator("#clear-personalization").isDisabled(),true);

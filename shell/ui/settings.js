@@ -22,6 +22,7 @@ const notes = {
 let info = {};
 let accelerationDirty = false;
 let personalizationPending = false;
+let personalizationRevision = 0;
 let displayedBackend = null;
 let deviceProbe = null;
 let deviceProbeStarted = false;
@@ -189,14 +190,14 @@ function renderPersonalization() {
 }
 async function changePersonalization(command, args) {
   if (personalizationPending) return;
-  personalizationPending = true; $("personalization-status").textContent = "Updating local relevance history…";
+  personalizationRevision++; personalizationPending = true; $("personalization-status").textContent = "Updating local relevance history…";
   renderPersonalization();
   try {
     info.personalization = await invoke(command, args);
     $("personalization-status").textContent = command === "clear_personalization" ? "Local relevance history cleared." : "Result-order preference saved.";
   } catch (error) { $("personalization-status").textContent = error?.message || String(error); }
   finally {
-    personalizationPending = false;
+    personalizationPending = false; personalizationRevision++;
     const message = $("personalization-status").textContent;
     renderPersonalization(); $("personalization-status").textContent = message;
   }
@@ -663,7 +664,9 @@ function fail(error) {
 // MARK: Start
 
 async function refresh() {
+  const personalRevision = personalizationRevision;
   const fresh = await invoke("settings_info"), previousDiscovery = info.discovery;
+  if (personalizationPending || personalRevision !== personalizationRevision) fresh.personalization = info.personalization;
   info = fresh;
   if (previousDiscovery && fresh.discovery) {
     info.discovery = previousDiscovery; DiscoverySettings.accept("discovery", fresh.discovery);
