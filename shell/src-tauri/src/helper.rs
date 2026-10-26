@@ -391,6 +391,7 @@ impl SearchService {
 /// launch), starts it over with them. When it ends by itself, `on_event` gets {"event": "ended", "status": its exit
 /// code, "owed": whether a sync asked of it never started}; one stopped here doesn't report.
 pub struct IndexService {
+    preferred: Mutex<HashMap<bool,String>>,
     running: Arc<Mutex<Option<Indexing>>>,
     generation: Arc<AtomicU64>,
     on_event: EventSink,
@@ -424,7 +425,7 @@ impl IndexService {
         }
     }
     pub fn new(on_event: impl Fn(Value) + Send + Sync + 'static) -> IndexService {
-        IndexService { running: Arc::default(), generation: Arc::new(AtomicU64::new(0)), on_event: Arc::new(on_event) }
+        IndexService { preferred: Mutex::default(), running: Arc::default(), generation: Arc::new(AtomicU64::new(0)), on_event: Arc::new(on_event) }
     }
 
     pub fn run(&self, launch: &Launch) -> Result<(), String> {
@@ -471,7 +472,12 @@ impl IndexService {
                 }
             }
         });
-        *running = Some(Indexing { child, stdin, args: launch.args.clone(), number, owed: false });
+        let mut indexing=Indexing { child, stdin, args: launch.args.clone(), number, owed: false };
+        for (code,path) in self.preferred.lock().unwrap().iter() {
+            let request=json!({"command":"prioritize","code":code,"path":path});
+            writeln!(indexing.stdin,"{request}").and_then(|_|indexing.stdin.flush()).map_err(|error|error.to_string())?;
+        }
+        *running=Some(indexing);
         Ok(())
     }
 
@@ -483,6 +489,30 @@ impl IndexService {
             if let Some(indexing) = running.as_mut() {
                 if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
                     return writeln!(indexing.stdin, "sync code").and_then(|_| indexing.stdin.flush()).map_err(|e| e.to_string());
+                }
+            }
+        }
+        self.run(launch)
+    }
+
+    pub fn prioritize(&self, path: String, code: bool) -> Result<(),String> {
+        self.preferred.lock().unwrap().insert(code,path.clone());
+        let mut running=self.running.lock().unwrap();
+        if let Some(indexing)=running.as_mut() {
+            let request=json!({"command":"prioritize","path":path,"code":code});
+            writeln!(indexing.stdin,"{request}").and_then(|_|indexing.stdin.flush()).map_err(|error|error.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn changes(&self, launch: &Launch, batch: crate::watch_changes::ChangeBatch, code: bool) -> Result<(), String> {
+        {
+            let mut running = self.running.lock().unwrap();
+            if let Some(indexing) = running.as_mut() {
+                if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
+                    indexing.owed = true;
+                    let request = json!({"command":"changes","code":code,"paths":batch.paths,"dirtyRoots":batch.dirty_roots});
+                    return writeln!(indexing.stdin,"{request}").and_then(|_| indexing.stdin.flush()).map_err(|error|error.to_string());
                 }
             }
         }

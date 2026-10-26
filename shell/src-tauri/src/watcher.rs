@@ -7,7 +7,8 @@
 
 use notify::{RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
+use crate::watch_changes::{ChangeAccumulator, ChangeBatch, rules_changed, contains_path};
 use std::time::Duration;
 
 /// Folders the crawl never walks into, by name: the engine's `Rules.skippedFolderNames`.
@@ -22,37 +23,53 @@ impl FolderWatcher {
     /// Watches `folders` (less `skipped` inside them); `changed` runs on the watcher's own thread after each burst of
     /// changes: once nothing has changed for `quiet`, or `longest` after the burst began. Dropping it stops.
     pub fn start(folders: &[PathBuf], skipped: Vec<PathBuf>, ignore: Option<PathBuf>, quiet: Duration, longest: Duration,
-                 changed: impl Fn() + Send + 'static) -> FolderWatcher {
-        let (sender, receiver) = mpsc::channel::<()>();
+                 changed: impl Fn(ChangeBatch) + Send + 'static) -> FolderWatcher {
+        let (sender, receiver) = mpsc::sync_channel::<()>(1);
         let roots = folders.to_vec();
+        let pending = Arc::new(Mutex::new(ChangeAccumulator::new(&roots)));
+        let incoming = pending.clone();
         let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-            let Ok(event) = result else { return };
-            if event.kind.is_access() {
-                return;
+            let mut changes = incoming.lock().unwrap();
+            match result {
+                Err(_) => changes.dirty_all(),
+                Ok(event) => {
+                    if event.kind.is_access() && !event.need_rescan() { return; }
+                    if event.paths.is_empty() || event.need_rescan() {
+                        changes.dirty_all();
+                    } else {
+                        for path in event.paths {
+                            let ours = ignore.as_ref().is_some_and(|folder| contains_path(&path,folder));
+                            if !ours && !roots.iter().any(|root| path.starts_with(root)) {
+                                changes.dirty_all();
+                            } else if !ours && (rules_changed(&path) || walked(&path, &roots, &skipped)) {
+                                changes.add(path);
+                            }
+                        }
+                    }
+                }
             }
-            let ours = |path: &PathBuf| ignore.as_ref().is_some_and(|folder| path.starts_with(folder));
-            // No paths: the system dropped events (an overflow), so anything may have changed.
-            if event.paths.is_empty() || event.paths.iter().any(|path| !ours(path) && walked(path, &roots, &skipped)) {
-                let _ = sender.send(());
-            }
+            if !changes.is_empty() {let _ = sender.try_send(());}
         });
         let mut watcher = match watcher {
             Ok(watcher) => watcher,
             Err(error) => {
                 eprintln!("digup-shell: can't watch folders: {error}");
+                changed(ChangeBatch { paths: Vec::new(), dirty_roots: folders.to_vec() });
                 return FolderWatcher { _watcher: None };
             }
         };
         for folder in folders {
             if let Err(error) = watcher.watch(folder, RecursiveMode::Recursive) {
                 eprintln!("digup-shell: can't watch {}: {error}", folder.display());
+                pending.lock().unwrap().dirty_all();
             }
         }
         std::thread::spawn(move || {
             while receiver.recv().is_ok() {
                 let began = std::time::Instant::now();
                 while began.elapsed() < longest && receiver.recv_timeout(quiet).is_ok() {}
-                changed();
+                let batch = pending.lock().unwrap().take();
+                changed(batch);
             }
         });
         FolderWatcher { _watcher: Some(watcher) }

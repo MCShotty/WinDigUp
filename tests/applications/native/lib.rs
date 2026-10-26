@@ -1,3 +1,5 @@
+#[path = "../../../shell/src-tauri/src/watch_changes.rs"]
+pub mod watch_changes;
 #[cfg(not(windows))]
 #[path = "../../../shell/src-tauri/src/discovery_manager.rs"]
 pub mod discovery_manager;

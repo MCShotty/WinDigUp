@@ -19,6 +19,8 @@ public enum Rules {
         ".git", "package.json", "Package.swift", "pyproject.toml", "setup.py", "requirements.txt", "Cargo.toml",
         "go.mod", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile", "composer.json", "CMakeLists.txt",
     ]
+    public static func projectMarkerChanged(_ name: String) -> Bool { projectMarkers.contains(name) || name == ".git" }
+
     static let projectBundleExtensions: Set<String> = ["xcodeproj", "xcworkspace"]
 
     static let docExtensions: Set<String> = ["txt", "text", "md", "markdown", "rtf", "docx", "doc", "odt", "html", "htm"]

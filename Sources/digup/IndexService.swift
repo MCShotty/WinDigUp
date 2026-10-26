@@ -45,11 +45,16 @@ final class IndexService: @unchecked Sendable {
     private let newFilesLimit: Int
     private let linger: Double
     private let output: (([String: Any]) -> Void)?
+    private let beforeScanFolder: (@Sendable (URL) -> Void)?
 
     private let lock = NSLock()
     private var syncRequested = true       // the first thing it does
     private var codeSyncRequested = true
+    private var changedPaths: [Bool:Set<String>] = [:]
+    private var preferredFolders: [Bool:String] = [:]
+    private var priorityRevision=0
     private var stopRequested = false
+    private var inferenceFailure = false
     private var backfillAllowed: Bool
     /// A sync asked for while files are being indexed waits until then. A crawl of a big folder can take minutes, and
     /// a folder that keeps changing asks for the next one meanwhile: yielding at once, every pass went back to crawling
@@ -59,7 +64,8 @@ final class IndexService: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
 
     init(main: Part, code: Part?, folder: URL, model: SharedEmbedder, modelReady: @escaping () -> Bool,
-         backfill: Bool, newFilesLimit: Int, linger: Double, output: (([String: Any]) -> Void)? = nil) {
+         backfill: Bool, newFilesLimit: Int, linger: Double, output: (([String: Any]) -> Void)? = nil,
+         beforeScanFolder: (@Sendable (URL) -> Void)? = nil) {
         self.main = main
         self.code = code
         self.folder = folder
@@ -69,6 +75,7 @@ final class IndexService: @unchecked Sendable {
         self.newFilesLimit = newFilesLimit
         self.linger = linger
         self.output = output
+        self.beforeScanFolder = beforeScanFolder
         self.model.beforeInference = { [weak self] in self?.yieldToSearch() }
     }
 
@@ -117,12 +124,19 @@ final class IndexService: @unchecked Sendable {
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var exitStatus: Int32 = 0
         while true {
-            if lock.withLock({ () -> Bool in defer { syncRequested = false }; return syncRequested }) {
-                sync(main, into: &newFiles)
+            let requests = lock.withLock { () -> (Bool,Bool,[Bool:Set<String>]) in
+                defer { syncRequested=false;codeSyncRequested=false;changedPaths.removeAll() }
+                return (syncRequested,codeSyncRequested,changedPaths)
             }
-            if let code, lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
-                sync(code, into: &newCode)
+            var scans: [Part] = []
+            if requests.0 { scans.append(main) }
+            if requests.1, let code { scans.append(code) }
+            if !scans.isEmpty {
+                let queued = scan(scans,changed:requests.2)
+                newFiles.formUnion(queued[false] ?? [])
+                newCode.formUnion(queued[true] ?? [])
             }
+            if inferenceFailure { exitStatus=1 }
             if lock.withLock({ stopRequested }) { break }
             guard modelReady() else {
                 emitCounts("waiting", ["for": "model"])
@@ -199,33 +213,175 @@ final class IndexService: @unchecked Sendable {
         return available
     }
 
-    private func sync(_ part: Part, into newFiles: inout Set<Int64>) {
-        let started = Date()
+    private func priorityProvider(_ active: [Part]) -> () -> (Int,String)? {
+        var revision = -1
+        var pending: [(Int,String)] = []
+        return { [self] in
+            lock.withLock {
+                if revision != priorityRevision {
+                    revision=priorityRevision
+                    pending=active.indices.compactMap {source in
+                        preferredFolders[active[source].code].map {(source,$0)}
+                    }
+                }
+                return pending.isEmpty ? nil : pending.removeFirst()
+            }
+        }
+    }
+
+    private final class ScanWork {
+        let part: Part
+        let session: IndexScanSession
+        let stream: CrawlStream
+        var summary: Indexer.SyncSummary?
+        var finished = false
+        init(part: Part, session: IndexScanSession, stream: CrawlStream) {
+            self.part=part;self.session=session;self.stream=stream
+        }
+    }
+
+    private func rootsForChanges(_ paths: Set<String>, part: Part, available: [URL]) -> [URL] {
+        var selected=Set<String>()
+        for path in paths {
+            let url=URL(fileURLWithPath:path).standardizedFileURL
+            guard let root=available.filter({url.path==$0.path || FolderSelection.isInside(url.path,$0.path)})
+                .max(by:{$0.path.count<$1.path.count}) else {continue}
+            if url.lastPathComponent==".gitignore" || url.path.contains("/.git/") ||
+                Rules.projectMarkerChanged(url.lastPathComponent) {
+                selected.insert(root.path);continue
+            }
+            var parent=url.deletingLastPathComponent()
+            if url.path==root.path {parent=root}
+            while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
+            if parent.path.count<root.path.count {parent=root}
+            if !Crawler.canScanSubtree(parent,selectedRoots:part.roots,options:part.indexer.scanOptions) {parent=root}
+            let canonical=parent.resolvingSymlinksInPath().standardizedFileURL.path
+            if !canonical.utf8.elementsEqual(parent.path.utf8) {selected.insert(root.path)}
+            else {selected.insert(parent.path)}
+        }
+        return selected.filter {path in !selected.contains {other in path != other && FolderSelection.isInside(path,other)}}
+            .sorted().map {URL(fileURLWithPath:$0,isDirectory:true)}
+    }
+
+    private func scan(_ requested: [Part], changed: [Bool:Set<String>] = [:]) -> [Bool:Set<Int64>] {
+        let started=Date()
+        var work: [ScanWork] = []
         defer {
-            let took = Date().timeIntervalSince(started)
-            lock.withLock { yieldAt = Date() + max(took, 2) }
+            for item in work { item.stream.cancel() }
+            for item in work { item.stream.close();item.session.close() }
+            lock.withLock { yieldAt=Date()+max(Date().timeIntervalSince(started),2) }
         }
+        var result: [Bool:Set<Int64>] = [:]
         do {
-            emit(["event": "scanning", "code": part.code])
-            let summary = try part.indexer.sync(availableRoots(part), onProgress: { progress in
-                emit(["event": "scan_progress", "stage": progress.stage, "root": progress.root, "path": progress.path,
-                      "visited": progress.visited, "candidates": progress.candidates, "code": part.code])
-            })
-            if summary.queued.count <= newFilesLimit { newFiles.formUnion(summary.queued) }
-            emitCounts("sync", [
-                "code": part.code,
-                "new": newFiles.count,   // about to be indexed, whatever the power source
-                "added": summary.added, "changed": summary.changed, "moved": summary.moved,
-                "removed": summary.removed, "unchanged": summary.unchanged,
-                "ms": Int(Date().timeIntervalSince(started) * 1000),
-                "started": started.timeIntervalSince1970,   // the app checks its sync request came before this
-                "visited": summary.crawl.visited, "candidates": summary.crawl.candidates.count,
-                "skipped": summary.crawl.skipped, "skippedFolders": summary.crawl.skippedFolders,
-                "unreadable": summary.crawl.unreadable.sorted(),
-            ])
+            let gate=NSLock()
+            for part in requested {
+                let available=availableRoots(part)
+                let roots=changed[part.code].map {rootsForChanges($0,part:part,available:available)} ?? available
+                let session=try part.indexer.beginScan(roots)
+                let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,selectedRoots:part.roots,
+                    beforeFolder:beforeScanFolder,scanGate:gate)
+                work.append(ScanWork(part:part,session:session,stream:stream))
+                emit(["event":"scanning","code":part.code,"discoveryActive":true])
+            }
+            var lastCounts=0.0
+            func drain() throws {
+                for _ in 0..<8 {
+                for item in work where !item.finished {
+                    guard let event=item.stream.take() else { continue }
+                    switch event {
+                    case .progress(let progress):
+                        emit(["event":"scan_progress","stage":progress.stage,"root":progress.root,"path":progress.path,
+                              "visited":progress.visited,"candidates":progress.candidates,"code":item.part.code,
+                              "discoveryActive":true])
+                    case .batch(let candidates):
+                        _ = try item.session.admit(candidates)
+                        let now=ProcessInfo.processInfo.systemUptime
+                        if now-lastCounts>=0.5 {
+                            emitCounts("scan_batch",["code":item.part.code,"discoveryActive":true,
+                                "candidates":item.session.eligibleCount])
+                            lastCounts=now
+                        }
+                    case .finished(let report):
+                        item.summary=try item.session.finish(report)
+                        item.finished=true
+                        if let summary=item.summary {
+                            emitCounts("sync",[
+                                "code":item.part.code,"new":item.session.queuedCount<=newFilesLimit ? item.session.queuedCount : 0,
+                                "added":summary.added,"changed":summary.changed,"moved":summary.moved,
+                                "removed":summary.removed,"unchanged":summary.unchanged,
+                                "ms":Int(Date().timeIntervalSince(started)*1000),"started":started.timeIntervalSince1970,
+                                "visited":report.visited,"candidates":report.candidateCount,"skipped":report.skipped,
+                                "skippedFolders":report.skippedFolders,"unreadable":report.unreadable.sorted(),
+                                "discoveryActive":false])
+                        }
+                    case .failed(let message):
+                        item.finished=true
+                        emit(["event":"error","message":"sync failed: \(message)","code":item.part.code,
+                            "discoveryActive":false])
+                    }
+                }
+                }
+            }
+            let mayEmbed=modelReady() && lock.withLock { backfillAllowed }
+            if mayEmbed {
+                while !work.contains(where:{$0.session.eligibleCount>0}) && !work.allSatisfy(\.finished)
+                    && !lock.withLock({stopRequested}) {
+                    try drain()
+                    Thread.sleep(forTimeInterval:0.005)
+                }
+                emit(["event":"phase","stage":"discovering_and_indexing",
+                    "message":"Discovering files and indexing ready content…","discoveryActive":true,
+                    "code":requested.allSatisfy(\.code)])
+                do {
+                    _ = try Indexer.runScheduled(work.map { .init(indexer:$0.part.indexer,includePending:false) },
+                        shouldStop:{ [self] in lock.withLock { stopRequested || !backfillAllowed } },
+                        onEvent:{ [self] source,_,event in
+                            let item=work[source]
+                            if event.note=="source_changed" {
+                                lock.withLock {
+                                    if item.part.code {codeSyncRequested=true}else{syncRequested=true}
+                                }
+                            }
+                            emit(["event":"file","new":false,"path":event.path,"kind":event.kind.rawValue,
+                                "state":event.state,"seconds":event.seconds,"note":event.note ?? "",
+                                "code":item.part.code,"discoveryActive":!item.finished])
+                        },onSnapshot:{ [self] snapshot in
+                            for source in work.indices {
+                                var own=snapshot;own.source=String(source)
+                                if let fields=try? JSONSerialization.jsonObject(with:JSONEncoder().encode(own)) {
+                                    emit(["event":"index_pipeline","code":work[source].part.code,"pipeline":fields])
+                                }
+                            }
+                        },onVerified:{ [self] info in
+                            var fields=info.fields
+                            fields["event"]="inference_verified";fields["inference_verified"]=true
+                            emit(fields)
+                        },admit:{
+                            try drain()
+                            return try work.map { try $0.session.takeEligibleIDs() }
+                        },inputComplete:{work.allSatisfy(\.finished)},priority:priorityProvider(work.map(\.part)),maintenance:drain)
+                } catch {
+                    inferenceFailure=true
+                    lock.withLock {stopRequested=true}
+                    for item in work {item.stream.cancel()}
+                    emit(["event":"error","message":"Indexing failed: \(error)","fatal":true])
+                }
+            }
+            while !work.allSatisfy(\.finished) && !lock.withLock({stopRequested}) {
+                try drain()
+                Thread.sleep(forTimeInterval:0.005)
+            }
+            for item in work {
+                if let summary=item.summary,item.session.queuedCount<=newFilesLimit {
+                    result[item.part.code]=Set(summary.queued)
+                }
+                if !item.finished { emit(["event":"scan_cancelled","code":item.part.code,"discoveryActive":false]) }
+            }
+            if inferenceFailure { lock.withLock {stopRequested=true} }
         } catch {
-            emit(["event": "error", "message": "sync failed: \(error)", "code": part.code])
+            emit(["event":"error","message":"sync failed: \(error)","discoveryActive":false])
         }
+        return result
     }
 
     private func runSources(newFiles: inout Set<Int64>, newCode: inout Set<Int64>, backfill: Bool) -> Bool {
@@ -270,7 +426,7 @@ final class IndexService: @unchecked Sendable {
                 fields["event"] = "inference_verified"
                 fields["inference_verified"] = true
                 emit(fields)
-            })
+            },priority:priorityProvider(active))
             for source in active.indices where !states[source].isEmpty {
                 emit(["event": "summary", "states": states[source], "code": active[source].code,
                       "ms": Int((ProcessInfo.processInfo.systemUptime - started) * 1000)])
@@ -334,10 +490,45 @@ final class IndexService: @unchecked Sendable {
     }
 
     func accept(_ line: String) {
+        if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
+           let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+           request["command"] as? String=="prioritize",
+           let path=request["path"] as? String {
+            let isCode=request["code"] as? Bool ?? false
+            if let part=parts.first(where:{$0.code==isCode}),
+               part.roots.contains(where:{$0.path==path || FolderSelection.isInside(path,$0.path)}) {
+                lock.withLock {preferredFolders[isCode]=path;priorityRevision+=1}
+                wake.signal()
+            }
+            return
+        }
+        if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
+           let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+           request["command"] as? String=="changes" {
+            let isCode=request["code"] as? Bool ?? false
+            guard let part=parts.first(where:{$0.code==isCode}) else {return}
+            let paths=(request["paths"] as? [String] ?? []).map {URL(fileURLWithPath:$0).standardizedFileURL.path}
+            let dirty=request["dirtyRoots"] as? [String] ?? []
+            let valid=Set(paths.filter {path in
+                part.roots.contains {root in path==root.path || FolderSelection.isInside(path,root.path)}
+            })
+            lock.withLock {
+                let alreadyRequested=isCode ? codeSyncRequested : syncRequested
+                if !dirty.isEmpty || paths.count>1024 || valid.count != Set(paths).count {
+                    changedPaths[isCode]=nil
+                } else if !alreadyRequested || changedPaths[isCode] != nil {
+                    changedPaths[isCode,default:[]].formUnion(valid)
+                    if (changedPaths[isCode]?.count ?? 0)>1024 {changedPaths[isCode]=nil}
+                }
+                if isCode {codeSyncRequested=true}else{syncRequested=true}
+            }
+            wake.signal()
+            return
+        }
         lock.withLock {
             switch line.trimmingCharacters(in: .whitespaces) {
-            case "sync": syncRequested = true
-            case "sync code": codeSyncRequested = true
+            case "sync": syncRequested = true; changedPaths[false]=nil
+            case "sync code": codeSyncRequested = true; changedPaths[true]=nil
             case "stop": stopRequested = true
             case "backfill on": backfillAllowed = true
             case "backfill off": backfillAllowed = false

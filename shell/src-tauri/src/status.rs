@@ -20,6 +20,7 @@ pub enum Activity {
 #[derive(Clone, Debug, Default)]
 pub struct Status {
     pub activity: Activity,
+    pub discovery_active: bool,
     /// Files in the index, in any state.
     pub files: u64,
     /// Done or partly read: what search finds by what's in it.
@@ -92,18 +93,21 @@ impl Status {
         self.last_event_at = Some(time);
         let count = |key: &str| event[key].as_u64().unwrap_or(0);
         // Only complete count snapshots describe the index. Rest/rescan/pruned events count a subset.
-        if event["files"].is_u64() && matches!(event["event"].as_str(), Some("counts" | "sync" | "idle" | "waiting")) {
+        if event["files"].is_u64() && matches!(event["event"].as_str(), Some("counts" | "sync" | "scan_batch" | "idle" | "waiting")) {
             self.files = count("files");
             self.searchable = count("searchable");
             self.pending = count("pending");
             self.unfinished = count("unfinished");
         }
+        if let active = event["discoveryActive"].as_bool() { self.discovery_active=active; }
         match event["event"].as_str().unwrap_or_default() {
-            "started" => { self.scan = Value::Null; self.activity = Activity::Starting; }
+            "started" => { self.discovery_active=false; self.scan = Value::Null; self.activity = Activity::Starting; }
             "phase" | "scanning" | "scan_progress" => {
                 self.activity = Activity::Scanning;
                 self.scan = event.clone();
             }
+            "scan_batch" => { self.activity=Activity::Scanning; }
+            "scan_cancelled" => { self.discovery_active=false; self.activity=Activity::Idle; }
             "sync" => {
                 self.scan_unreadable = event["unreadable"].as_array().into_iter().flatten()
                     .filter_map(Value::as_str).map(String::from).collect();
@@ -136,6 +140,7 @@ impl Status {
             }
             // The helper is gone: whatever it was doing is over.
             "exit" | "ended" => {
+                self.discovery_active=false;
                 if event["event"] == "ended" && event["status"].as_i64() != Some(0) {
                     let message = self.last_error.clone().unwrap_or_else(|| format!("Indexing helper exited (status {}). Open indexing diagnostics for details.", event["status"]));
                     self.last_error = Some(message.clone());
@@ -175,6 +180,12 @@ impl Status {
         if self.measuring {
             return "Checking this computer's speed…".into();
         }
+        if self.discovery_active {
+            return match self.scan["visited"].as_u64() {
+                Some(visited) => format!("Discovering files · {} entries checked · {} content ready",number(visited),number(self.searchable)),
+                None => format!("Discovering files · {} content ready",number(self.searchable)),
+            };
+        }
         match self.activity {
             // Held or paused, no index helper runs to say it has started: what's indexed stands.
             Activity::Starting if !self.paused && self.held_until.is_none() => "Starting…".into(),
@@ -184,6 +195,7 @@ impl Status {
                     None => self.scan["message"].as_str().unwrap_or("Scanning folders…").to_string(),
                 }
             },
+            Activity::Indexing { total: 0, .. } => format!("Indexing files · {} content ready",number(self.searchable)),
             Activity::Indexing { done, total } => format!("Indexing {}% · {} of {}", percent(done, total), number(done), number(total)),
             Activity::Finishing { done, total, files } => {
                 let which = if files > 0 { format!("{} long {}", number(files), plural(files, "file", "files")) } else { "long files".into() };
@@ -238,6 +250,7 @@ impl Status {
         if model["state"] == "downloading" {
             return Some(fraction(model));
         }
+        if self.discovery_active { return None; }
         match self.activity {
             Activity::Indexing { done, total } | Activity::Finishing { done, total, .. } if total > 0 => {
                 Some(done as f64 / total as f64)
@@ -270,7 +283,7 @@ impl Status {
     pub fn snapshot(&self, has_folders: bool, model: &Value) -> Value {
         let unreadable: std::collections::BTreeSet<_> = self.unreadable.iter().chain(&self.scan_unreadable).collect();
         let indexing = match self.activity {
-            Activity::Indexing { done, total } => json!({"done": done, "total": total}),
+            Activity::Indexing { done, total } => json!({"done": done, "total": if total>0 {Some(total)} else {None}}),
             _ => Value::Null,
         };
         json!({
@@ -279,6 +292,7 @@ impl Status {
             "caveat": self.caveat(model),
             "indexing": indexing,
             "files": self.files,
+            "discoveryActive": self.discovery_active,
             "searchable": self.searchable,
             "pending": self.pending,
             "unfinished": self.unfinished,
@@ -387,6 +401,21 @@ mod tests {
         held.held_until = None;
         held.paused = true;
         assert_eq!(held.line(true, &ready), "Paused · 4 files waiting");
+    }
+
+    #[test]
+    fn streaming_discovery_has_no_fake_completion_percentage() {
+        let ready=json!({"state":"ready"});
+        let mut status=Status::default();
+        status.apply(&json!({"event":"scan_progress","discoveryActive":true,"visited":500,"candidates":80}));
+        status.apply(&json!({"event":"scan_batch","discoveryActive":true,"files":80,"searchable":5,"pending":75}));
+        assert_eq!(status.snapshot(true,&ready)["discoveryActive"],true);
+        assert_eq!(status.files,80);
+        assert!(status.progress(&ready).is_none());
+        assert!(status.line(true,&ready).contains("5 content ready"));
+        status.apply(&json!({"event":"scan_cancelled","discoveryActive":false}));
+        assert!(!status.discovery_active);
+        assert_eq!(status.files,80);
     }
 
     #[test]

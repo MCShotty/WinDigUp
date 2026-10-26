@@ -5,6 +5,7 @@ final class PendingFileQueue {
     struct Entry {
         let file: FileRecord
         let priority: Int
+        let ordinal: Int64
     }
     private(set) var total = 0
     private let store: IndexStore
@@ -15,10 +16,12 @@ final class PendingFileQueue {
     private let scopeSQL: String
     private let scopeValues: [SQLValue]
     private var after: Int64 = 0
+    private var lastOrdinal: Int64 = 0
     private var buffer: [Entry] = []
     private var offset = 0
     private var exhausted = false
     private var closed = false
+    private var preferredPath: String?
     private(set) var buildMs = 0.0
     private(set) var fetchMs = 0.0
     private(set) var pages = 0
@@ -54,6 +57,7 @@ final class PendingFileQueue {
             var count = 0
             try store.db.query("SELECT COUNT(*) FROM \(table)") { count = Int($0.int(0)) }
             total = count
+            lastOrdinal=Int64(count)
             buildMs = (ProcessInfo.processInfo.systemUptime - start) * 1000
         } catch {
             try? store.db.execute("DROP TABLE IF EXISTS \(table); DROP TABLE IF EXISTS \(members);")
@@ -70,16 +74,61 @@ final class PendingFileQueue {
             """
     }
 
+    func append(_ ids: [Int64]) throws {
+        guard !closed, !ids.isEmpty else { return }
+        try store.db.transaction {
+            for id in ids {
+                try store.db.run("""
+                    INSERT OR IGNORE INTO \(table)(ord,file,priority)
+                    SELECT ?,id,1 FROM files WHERE id=? AND state=?\(scopeSQL)
+                    """,[.int(lastOrdinal+1),.int(id),.text(state)] + scopeValues)
+                try store.db.query("SELECT changes()") { if $0.int(0)>0 {total += 1;lastOrdinal += 1} }
+            }
+        }
+        exhausted=false
+    }
+
+    private func flushConsumed() throws {
+        let ordinals=buffer.prefix(offset).map {SQLValue.int($0.ordinal)}
+        guard !ordinals.isEmpty else {return}
+        try store.db.run("DELETE FROM \(table) WHERE ord IN (\(ordinals.map {_ in "?"}.joined(separator:",")))",ordinals)
+        buffer.removeFirst(offset)
+        offset=0
+    }
+
+    func prioritize(_ path: String) throws {
+        try flushConsumed()
+        preferredPath=path
+        buffer.removeAll(keepingCapacity:true)
+        offset=0;after=0;exhausted=false
+    }
+
     func peek() throws -> Entry? {
         guard !closed else { return nil }
         if offset == buffer.count {
+            try flushConsumed()
             guard !exhausted else { return nil }
             buffer.removeAll(keepingCapacity: true)
             offset = 0
             let start = ProcessInfo.processInfo.systemUptime
-            try store.db.query(pageSQL, [.int(after), .text(state), .int(Int64(pageSize))]) {
-                buffer.append(Entry(file: IndexStore.record($0), priority: Int($0.int(8))))
-                after = $0.int(9)
+            if let path=preferredPath {
+                let ranges=IndexStore.pathRanges(under:path)
+                let conditions=ranges.map {_ in "(f.path>=? AND f.path<?)"}.joined(separator:" OR ")
+                let columns=IndexStore.fileColumns.split(separator:",").map {"f." + $0.trimmingCharacters(in:.whitespaces)}.joined(separator:",")
+                let values=ranges.flatMap {[SQLValue.text($0.from),.text($0.to)]}
+                try store.db.query("""
+                    SELECT \(columns),-1,q.ord FROM \(table) q CROSS JOIN files f ON f.id=q.file
+                    WHERE f.state=? AND (\(conditions)) ORDER BY q.ord LIMIT ?
+                    """,[.text(state)] + values + [.int(Int64(pageSize))]) {
+                    buffer.append(Entry(file:IndexStore.record($0),priority:-1,ordinal:$0.int(9)))
+                }
+                if buffer.isEmpty {preferredPath=nil;after=0}
+            }
+            if buffer.isEmpty {
+                try store.db.query(pageSQL, [.int(after), .text(state), .int(Int64(pageSize))]) {
+                    buffer.append(Entry(file: IndexStore.record($0), priority: Int($0.int(8)),ordinal:$0.int(9)))
+                    after = $0.int(9)
+                }
             }
             pages += 1
             rows += buffer.count
@@ -102,8 +151,8 @@ final class PendingFileQueue {
         if first.file.kind == .image || first.file.kind == .screenshot {
             while files.count < 8, let next = try peek(),
                   next.priority == first.priority, next.file.kind == first.file.kind {
+                _ = try take()
                 files.append(next.file)
-                offset += 1
             }
         }
         return (files, first.priority)
