@@ -89,19 +89,25 @@ final class FileAvailability: @unchecked Sendable {
     }
 
     var snapshot: [String: Any] {
-        lock.withLock {
-            let sorted = durations.sorted()
-            var result: [String: Any] = [
-                "schema_version": 1, "active": running.count, "queued": pending.count,
-                "cached": entries.count, "completed": completed, "limit": concurrency,
-                "queue_limit": capacity, "cache_limit": cacheLimit,
-            ]
-            if !sorted.isEmpty {
-                result["probe_p95_ms"] = sorted[min(sorted.count - 1, (sorted.count * 95 + 99) / 100 - 1)]
-                result["probe_max_ms"] = sorted.last!
-            }
-            return result
+        lock.lock()
+        defer { lock.unlock() }
+        let sorted = durations.sorted()
+        var result: [String: Any] = [:]
+        result["schema_version"] = 1
+        result["active"] = running.count
+        result["queued"] = pending.count
+        result["cached"] = entries.count
+        result["completed"] = completed
+        result["limit"] = concurrency
+        result["queue_limit"] = capacity
+        result["cache_limit"] = cacheLimit
+        if !sorted.isEmpty {
+            let rank = (sorted.count * 95 + 99) / 100 - 1
+            let position = min(sorted.count - 1, rank)
+            result["probe_p95_ms"] = sorted[position]
+            result["probe_max_ms"] = sorted[sorted.count - 1]
         }
+        return result
     }
 
     private func startLocked() {
