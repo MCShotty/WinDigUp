@@ -37,3 +37,15 @@ Folder changes notify both search views. They invalidate and clear file rows imm
 An omitted file_scope keeps the developer helper/CLI convention of searching the loaded index when no roots were supplied. A malformed or unknown explicit scope fails closed. This distinction prevents an installed app with zero selected folders from exposing retained rows without changing developer CLI behavior.
 
 Scoped helper replies acknowledge file_scope_version=1. Native search rejects a successful reply from a helper without that acknowledgement; superseded/status-only replies and readable errors remain available. Empty native selection short-circuits before the helper. An older helper therefore cannot silently ignore the selection contract.
+
+## Names during streamed discovery
+
+The native backend sends refresh_names after committed scan batches. This operation schedules a background name/kind snapshot without requesting the encoder or vector loading. Active search generations are unchanged. Multiple pending refreshes coalesce; an already loaded vector snapshot is retained, and a trailing names refresh does not implicitly request a full vector rebuild. Explicit vector reload requests still retain their independent pending flag.
+
+A service regression holds an actual scanner at its next folder while a pre-existing SearchService reads committed name rows. It exercises file-kind filters, exact filename collisions, request generation echoing and a stopped encoder. A separate warm-vector regression floods metadata refresh requests and checks that the retained vector revision is not replaced. These deterministic checks establish protocol and ownership behavior; installed Windows time-to-first-result remains a physical validation gate.
+
+## Refresh queue profiling
+
+[Two repeated scale rounds](https://github.com/MCShotty/WinDigUp/actions/runs/40421535567/artifacts/12699080515) reproduced the initial refresh outlier. The 100k-vector keyword maxima were 439.73 ms and 218.99 ms; helper queue time accounted for 438.62 ms and 217.79 ms, while search itself took 0.62 ms and 0.77 ms. Larger scales had 55.98–66.90 ms maxima, again mostly queue time. These are hosted Linux synthetic measurements with an AMD EPYC 9V45 CPU, about 16 GB host memory and Swift 6.4, not installed Windows or neural throughput.
+
+The original retirement closure and its lexical caller both retained the old name snapshot. Whichever released last could destroy its large dictionary; simply dispatching a copied strong value did not guarantee background destruction. Publication now transfers the old references into a container, replaces the owner's properties, then explicitly clears the container on the retirement task. A deterministic tagged-queue destructor regression keeps the lexical job/container alive until the worker has disposed its contents. Name loading and pointer-publication timings are recorded separately. Subsequent scale runs must retain all outliers; this change does not justify approximate retrieval or a vector-index rewrite.

@@ -28,7 +28,7 @@ Index this first queues one preference per file/code source. It is applied betwe
 
 ## Status and verification
 
-Discovery-active snapshots have no completion percentage or known total. Names committed, content-ready files and pending work remain separate. The installed app can continue name search and launching while neural inference is unavailable.
+Discovery-active snapshots have no completion percentage or known total. Names committed, content-ready files and pending work remain separate. A trailing half-second publication keeps newly committed names visible even when discovery stalls after a burst. Native discovery events request coalesced metadata-only refreshes from an already-running search helper; they never start a stopped helper, wake the encoder, or rebuild compatible vector snapshots. Updates arriving during a blocked write share one background writer and retain a trailing revision. The installed app can continue name search and launching while neural inference is unavailable.
 
 The Swift suites cover filtering equivalence, early batches, partial roots, rename ambiguity, live input, queue cursors, source independence and bounded cancellation. Native tests cover coalescing, overflow, rule changes and status contracts. Exact workflow results are recorded in PR 19.
 

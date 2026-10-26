@@ -9,7 +9,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -121,6 +121,8 @@ pub struct SearchService {
     on_event: EventSink,
     failure: Arc<Mutex<Option<String>>>,
     sessions: Arc<Mutex<HashMap<String, (u64, std::time::Instant)>>>,
+    names_refresh_pending: Arc<AtomicBool>,
+    names_refresh_revision: Arc<AtomicU64>,
 }
 
 struct Searching {
@@ -192,6 +194,8 @@ impl SearchService {
             on_event: Arc::new(on_event),
             failure: Arc::default(),
             sessions: Arc::default(),
+            names_refresh_pending: Arc::default(),
+            names_refresh_revision: Arc::default(),
         }
     }
 
@@ -216,6 +220,35 @@ impl SearchService {
             let _ = searching.child.kill();
             let _ = searching.child.wait();
         }
+    }
+
+    /// Name commits update only a live helper; indexing must not reopen a stopped search service.
+    pub fn refresh_names(&self) {
+        self.names_refresh_revision.fetch_add(1, Ordering::SeqCst);
+        if self.names_refresh_pending.swap(true, Ordering::SeqCst) { return; }
+        let service = self.clone();
+        tauri::async_runtime::spawn_blocking(move || loop {
+            let revision = service.names_refresh_revision.load(Ordering::SeqCst);
+            service.refresh_current_names();
+            if service.names_refresh_revision.load(Ordering::SeqCst) != revision { continue; }
+            service.names_refresh_pending.store(false, Ordering::SeqCst);
+            if service.names_refresh_revision.load(Ordering::SeqCst) == revision
+                || service.names_refresh_pending.swap(true, Ordering::SeqCst) { break; }
+        });
+    }
+
+    fn refresh_current_names(&self) {
+        let stdin = {
+            let Ok(mut running) = self.running.lock() else { return; };
+            let Some(searching) = running.as_mut() else { return; };
+            if !matches!(searching.child.try_wait(), Ok(None)) { return; }
+            searching.stdin.clone()
+        };
+        let request = json!({"id":self.next_id.fetch_add(1, Ordering::Relaxed),"op":"refresh_names"});
+        // Stop/reconfiguration closes this generation's pipe; a failed write must never start another.
+        if let Ok(mut stdin) = stdin.lock() {
+            let _ = writeln!(stdin, "{request}").and_then(|_| stdin.flush());
+        };
     }
 
     /// Sends a request and waits for its reply.

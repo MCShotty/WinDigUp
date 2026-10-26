@@ -187,6 +187,42 @@ struct StreamingServiceTests {
         #expect(try store.counts().vectors==320)
     }
 
+    @Test func committedNamesPublishAfterABurstWhileDiscoveryWaitsWithoutAModel() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files"),next=files.appendingPathComponent("next")
+        let blocked=next.appendingPathComponent("blocked")
+        try FileManager.default.createDirectory(at:blocked,withIntermediateDirectories:true)
+        for folder in [files,next] {
+            for ordinal in 0..<64 {
+                try "A searchable railway document.".write(to:folder.appendingPathComponent("note-\(ordinal).txt"),
+                    atomically:false,encoding:.utf8)
+            }
+        }
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory)
+        var modelStarts=0
+        let shared=SharedEmbedder{modelStarts+=1;return Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        let gate=Gate()
+        var completed=false,publishedBeforeCompletion=false
+        let service=IndexService(main:.init(store:store,indexer:indexer,roots:[files],keepOnly:nil),
+            code:nil,folder:directory,model:shared,modelReady:{false},backfill:true,newFilesLimit:50,linger:0,
+            output:{event in
+                if event["event"] as? String=="sync" {completed=true}
+                if event["event"] as? String=="scan_batch" && (event["files"] as? Int)==128 && !completed {
+                    publishedBeforeCompletion=true
+                    gate.indexedFile()
+                }
+            },beforeScanFolder:{if $0.lastPathComponent=="blocked" {gate.waitForIndex()}})
+        #expect(service.serve(commandInput:false)==0)
+        #expect(publishedBeforeCompletion)
+        #expect(gate.sawOverlap)
+        #expect(modelStarts==0)
+        #expect(try store.pendingCount()==128)
+        #expect(try store.counts().vectors==0)
+    }
+
     @Test func folderPriorityUsesNativePathSpellingAndSortsDiscoveryRoots() throws {
         let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}
