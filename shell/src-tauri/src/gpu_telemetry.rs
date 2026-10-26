@@ -148,6 +148,9 @@ fn selected_uuid(configured: &Value, verified: &Value) -> Result<String, (&'stat
     let Some(id) = verified["device_id"].as_str().filter(|id| valid_uuid(id)) else {
         return Err(("unavailable", "A verified physical NVIDIA UUID is required for device counters."));
     };
+    if configured["gpu"].as_str().is_some_and(|pin| pin.starts_with("GPU-") && !pin.eq_ignore_ascii_case(id)) {
+        return Err(("waiting", "Waiting for inference on the selected physical GPU."));
+    }
     Ok(id.into())
 }
 
@@ -271,6 +274,7 @@ mod tests {
         }
         assert!(selected_uuid(&json!({"backend":"amd-vulkan"}), &verified()).is_err());
         assert!(selected_uuid(&configured(), &json!({"backend":"nvidia-cuda","device_id":GPU})).is_err());
+        assert!(selected_uuid(&json!({"backend":"nvidia-cuda","gpu":"GPU-11112233-4455-6677-8899-aabbccddeeff"}), &verified()).is_err());
     }
 
     #[test]
