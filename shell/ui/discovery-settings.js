@@ -116,7 +116,7 @@ const DiscoverySettings = {
       const fileState=savedFiles?"Whole drive selected for files":partialFiles?"Some folders on this drive are already selected.":"File indexing not selected";
       const state=[fileState,appPhase].join(" · ");
       if(row.state.textContent!==state)row.state.textContent=state;
-      row.counts.hidden=!savedApps||d.version!==2;
+      row.counts.hidden=!savedApps||d.version!==2||(!d.options?.enabled&&!["records","candidates","accepted"].some(key=>Number.isFinite(progress[key])));
       const counts=PipelineUI.metrics(progress);if(row.counts.textContent!==counts)row.counts.textContent=counts;
       const changed=row.checks.files.checked!==savedFiles||row.checks.applications.checked!==savedApps;
       const note=changed?"Unsaved choices for this drive.":volume.available===false?"Saved choices are kept while this drive is disconnected.":"Choices saved";

@@ -104,3 +104,5 @@ select.field {
 }
 
 .folder-priority { margin-top:4px; white-space:nowrap; }
+
+.drive-source-policy { border-top:1px solid var(--line); margin-top:12px; }

@@ -234,16 +234,18 @@
     <section class="tab" id="drives" role="tabpanel" hidden>
       <h2>Drives</h2>
       <button id="drive-file-settings" class="link" type="button">File indexing status and exclusions</button>
-      <p class="note">Choose Files to index supported content across a drive using your folder exclusions. Choose Applications to discover programs. You can select either or both.</p>
-          <p class="note">Discover unregistered desktop apps on selected drives. Windows shortcuts remain the preferred launch targets. Installers, internal helpers and uncertain executables stay in review.</p>
-          <label class="option"><input id="drive-enabled" type="checkbox"><span>Discover applications on selected drives</span></label>
-          <label class="option"><input id="drive-paused" type="checkbox"><span>Pause application discovery</span></label>
+      <p class="note">Choose Files, Applications, or both. File choices retain your folder exclusions. Windows shortcuts remain the preferred application launch targets.</p>
           <button id="drive-list-refresh" type="button">Refresh drive list</button>
           <p id="drive-volumes-state" class="note" role="status"></p><p id="source-message-volumes" class="source-message" role="status"></p>
+          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p>
           <div id="drive-volumes" class="source-volumes" aria-label="Drives to scan"></div>
+          <div class="drive-source-policy" aria-label="Application discovery policy">
+          <label class="option"><input id="drive-enabled" type="checkbox"><span>Discover applications on selected drives</span></label>
+          <label class="option"><input id="drive-paused" type="checkbox"><span>Pause application discovery</span></label>
+          </div>
           <p id="drive-draft" class="note" role="status"></p>
           <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan applications</button></div>
-          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p><details id="drive-measurements"><summary>Application discovery stage measurements</summary><div id="drive-progress-list"></div></details>
+          <details id="drive-measurements"><summary>Application discovery stage measurements</summary><div id="drive-progress-list"></div></details>
           <button id="drive-install">Install or update fast NTFS discovery…</button>
           <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
           <button id="open-app-review" type="button">Review discovered applications</button>
