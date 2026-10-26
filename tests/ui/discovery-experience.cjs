@@ -125,7 +125,7 @@ let browser;
   assert.equal(sent.resourceProfile,"quiet");assert.equal(sent.jobs,2);
   const general=page.getByRole("tab",{name:"General",exact:true});await general.focus();await page.keyboard.press("ArrowRight");
   assert.equal(await page.locator("#folders").isVisible(),true);
-  assert.equal(await page.locator('[role="tab"][aria-selected="true"]').evaluate(node=>node===document.activeElement),true);
+  assert.equal(await page.locator('#tabs [role="tab"][aria-selected="true"]').evaluate(node=>node===document.activeElement),true);
   await page.locator("#folder-rows .folder-priority").first().click();
   await page.waitForFunction(()=>document.querySelector("#folder-priority-status").textContent.includes("Pause and schedule"));
   assert.deepEqual(await page.evaluate(()=>calls.find(call=>call.command==="index_folder_first").args),{path:"C:"+String.fromCharCode(92),code:false});
