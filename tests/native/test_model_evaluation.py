@@ -57,6 +57,7 @@ class ModelEvaluationTests(unittest.TestCase):
         for row in before["queries"]:
             if row["expected"] and row["id"].endswith("0"):
                 row["ranked"] = ["irrelevant"]
+                row["matches"] = []
         result = contract.compare(before, after)
         self.assertEqual(result["status"], "incomplete")
         self.assertEqual(result["recommendation"], "keep-baseline")
