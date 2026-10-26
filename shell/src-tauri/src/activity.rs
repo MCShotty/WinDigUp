@@ -99,6 +99,15 @@ mod tests {
         assert!(report["files"]["total"].is_null());
     }
     #[test]
+    fn unavailable_inference_does_not_erase_name_discovery_state() {
+        let report = fixture(json!({"activity":"scanning","model":{"state":"failed","message":"Unavailable"},
+            "discoveryActive":true,"files":83,"searchable":17,"scan":{"visited":500,"discoveryActive":true}}));
+        assert_eq!(report["files"]["phase"], "unavailable");
+        assert_eq!(report["files"]["discoveryActive"], true);
+        assert_eq!(report["files"]["knownFiles"], 83);
+        assert!(report["files"]["total"].is_null());
+    }
+    #[test]
     fn discovery_is_not_zero_percent_and_does_not_hide_available_apps() {
         let mut status = crate::status::Status::default();
         status.apply(&json!({"event":"scan_progress","visited":443831,"candidates":107857,"stage":"discovering"}));

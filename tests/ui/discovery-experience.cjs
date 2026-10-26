@@ -10,6 +10,7 @@ let browser;
   await page.addInitScript(()=>{
     const old=window.__TAURI__.core.invoke,time=Date.now()/1000;
     window.personalization={version:1,enabled:true,entries:3};
+    window.activityMode="indexing";window.activityPaused=false;
     window.sourceDrive={version:2,supported:true,catalogEnabled:true,options:{enabled:true,paused:false,revision:1,volumes:["volume-a"],included:[],hidden:[]},
       volumes:[{id:"volume-a",name:"Local SSD",paths:["C:\\"],filesystem:"NTFS",available:true},
         {id:"volume-b",name:"Offline backup",paths:["E:\\"],filesystem:"NTFS",available:false}],
@@ -23,11 +24,13 @@ let browser;
         acceleration:{backend:"amd-vulkan",jobs:2,resourceProfile:"balanced",gpu:"fixture-device"},folders:["C:\\"]};
       if(command==="activity_snapshot"){
         const reply=await old(command,args);
-        reply.files={...reply.files,schemaVersion:2,phase:"indexing",knownFiles:83,searchable:17,pending:66,total:100,done:17,
+        reply.files={...reply.files,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,total:100,done:17,
           discoveryActive:true,entriesChecked:443831,candidates:107857,candidatesFinal:false,lastProgressAt:time};
         reply.discovery=structuredClone(sourceDrive);reply.windowsSettings={catalog:windowsCatalog,purpose:{state:"ready"}};
         reply.inference.configured={backend:"amd-vulkan",jobs:2,resourceProfile:"balanced"};
-        reply.inference.telemetry=structuredClone(window.telemetry);return reply;
+        reply.inference.telemetry=structuredClone(window.telemetry);
+        if(window.activityMode==="unavailable"){reply.inference.error="Fixture accelerator unavailable";reply.inference.encoder="unavailable";}
+        return reply;
       }
       if(["refresh_discovery_volumes","discovery_candidates","set_discovery_options","set_windows_settings_options","set_personalization","clear_personalization","set_acceleration","index_folder_first"].includes(command)){
         calls.push({command,args});
@@ -67,6 +70,17 @@ let browser;
   await page.locator('[data-key="file-details"] > summary').click();
   assert.equal(await page.locator('[data-key="known-files"]').innerText(),"83");
   assert.equal(await page.locator('[data-key="searchable"]').innerText(),"17");
+  await page.evaluate(()=>{activityMode="discovering";emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering files");
+  assert.equal(await page.locator(".activity-stages .current").count(),1,"Discovery alone must not claim inference");
+  await page.evaluate(()=>{activityMode="unavailable";emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering file names");
+  assert.match(await page.locator('[data-key="explanation"]').innerText(),/waiting for the selected accelerator/);
+  await page.evaluate(()=>{activityMode="paused";activityPaused=true;emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Indexing paused");
+  assert.equal(await page.locator(".activity-stages").isVisible(),false);
+  await page.evaluate(()=>{activityMode="indexing";activityPaused=false;emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
   assert.match(await page.locator(".pipeline-device-measurements").innerText(),/Device utilization not reported/);
   assert.ok(!(await page.locator(".pipeline-device-measurements").innerText()).includes("0%"));
   await page.evaluate(()=>{telemetry={schemaVersion:1,state:"ready",source:"Synthetic UI fixture",deviceId:"fixture-device",scope:"device",

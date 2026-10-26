@@ -286,10 +286,12 @@ window.ActivityUI = (() => {
       const search=snapshot.search?.last;
       put("search-total",search?`${Math.round(search.total||0)} ms input to render · ${search.phase.replace(/_/g," ")}${search.cacheHit?" · Cached query":""}`:"No search timing reported yet.");
       put("search-breakdown",search?searchBreakdown(search):"");
-      const overlap = f.discoveryActive === true && !f.paused && ["discovering", "preparing_queue", "indexing"].includes(f.phase);
-      const scanning = overlap || ["discovering", "preparing_queue", "starting"].includes(f.phase);
+      const discovery = f.discoveryActive === true && !f.paused && !["paused", "pausing", "stopped", "failed", "scheduled"].includes(f.phase);
+      const overlap = discovery && ["indexing", "finishing"].includes(f.phase);
+      const scanning = discovery || ["discovering", "preparing_queue", "starting"].includes(f.phase);
       const title = overlap
-        ? "Discovering and indexing files" : phases[f.phase] || "File indexing";
+        ? "Discovering and indexing files" : discovery && ["preparing_model", "unavailable", "checking_accelerator"].includes(f.phase)
+          ? "Discovering file names" : phases[f.phase] || "File indexing";
       put("phase", title);
       const explanations = {
         discovering: f.searchable ? "Checking for changes. Your existing file index remains searchable." : "The first scan is running. Discovered names and completed content appear as they become available.",
@@ -308,7 +310,10 @@ window.ActivityUI = (() => {
         preparing_model: "File indexing is waiting for model files. Application names and launching remain available.",
         unavailable: "The selected accelerator cannot run inference. Application names and launching remain available.",
       };
-      put("explanation", overlap ? "Discovery is still running while prepared files become searchable. The final eligible total is not known yet." : explanations[f.phase] || "Waiting for the next file-worker update.");
+      put("explanation", overlap ? "Discovery is still running while prepared files become searchable. The final eligible total is not known yet."
+        : discovery && ["preparing_model", "unavailable", "checking_accelerator"].includes(f.phase)
+          ? "File names are being discovered. Content matching is waiting for the selected accelerator; its status is shown independently below."
+          : explanations[f.phase] || "Waiting for the next file-worker update.");
       const known = !scanning && typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
       const meter = this.get("meter"); meter.classList.toggle("indeterminate", !known);
       meter.hidden = !known && !scanning && !["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
@@ -320,7 +325,7 @@ window.ActivityUI = (() => {
       const stage = f.phase === "idle" ? 2 : ["indexing", "finishing", "waiting"].includes(f.phase) ? 1 : 0;
       this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (overlap && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
       this.host.querySelector(".activity-stages").setAttribute("aria-label", overlap ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");
-      this.host.querySelector(".activity-stages").hidden = ["not_configured", "failed", "unavailable", "preparing_model"].includes(f.phase);
+      this.host.querySelector(".activity-stages").hidden = !discovery && ["not_configured", "failed", "unavailable", "preparing_model", "paused", "pausing"].includes(f.phase);
       put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
       put("second-value", number(scanning ? f.candidates : f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
       put("candidates-note", scanning && !f.candidatesFinal ? "Candidates are checked against exclusions before indexing." : "");
