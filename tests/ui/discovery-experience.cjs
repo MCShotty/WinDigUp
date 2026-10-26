@@ -117,6 +117,7 @@ let browser;
   assert.match(await page.locator('[data-key="explanation"]').innerText(),/retry scanning/);
   assert.ok(!(await page.locator('[data-key="explanation"]').innerText()).includes("Restore access"));
   assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",pending:0,heldPending:0,heldUnfinished:3,runnablePending:0,runnableUnfinished:0})),true);
+  assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",knownCountsComplete:false,pending:0,heldPending:0,heldUnfinished:3,runnablePending:0,runnableUnfinished:0})),false,"Incomplete totals cannot establish all-held work");
   await page.evaluate(()=>{activityHeld={heldPending:null,heldUnfinished:null,runnablePending:null,runnableUnfinished:null};activityKnownComplete=false;emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="held-work"]').hidden);
   assert.equal(await page.locator('[data-key="held-pending"]').innerText(),"Not known yet");

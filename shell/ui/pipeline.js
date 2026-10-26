@@ -180,7 +180,7 @@ window.PipelineUI = (() => {
       .map(([value,label]) => count(value)+" "+label+" held until folders are checked").join(" · ");
   }
   function heldFiles(files = {}) {
-    return files.phase === "waiting" && Boolean(heldSummary(files))
+    return files.knownCountsComplete !== false && files.phase === "waiting" && Boolean(heldSummary(files))
       && files.runnablePending === 0 && files.runnableUnfinished === 0;
   }
   const stoppedPipeline = {

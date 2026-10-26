@@ -19,9 +19,9 @@ pub fn snapshot(input: Input) -> Value {
     let active = helpers["index"]["pid"].is_number() || helpers["index"]["busy"] == true;
     let measured_held = state["heldPending"].as_u64().is_some_and(|value| value > 0)
         || state["heldUnfinished"].as_u64().is_some_and(|value| value > 0);
-    let all_held = measured_held && state["runnablePending"].as_u64() == Some(0)
-        && state["runnableUnfinished"].as_u64() == Some(0);
     let known_counts_complete = state["knownCountsComplete"].as_bool().unwrap_or(true);
+    let all_held = known_counts_complete && measured_held && state["runnablePending"].as_u64() == Some(0)
+        && state["runnableUnfinished"].as_u64() == Some(0);
     let inventory_count = |key: &str| if !known_counts_complete && state[key].as_u64() == Some(0) {
         Value::Null
     } else { state[key].clone() };
@@ -160,6 +160,10 @@ mod tests {
         let legacy = fixture(json!({"activity":"idle","model":{"state":"ready"},"files":0,"searchable":0}));
         assert_eq!(legacy["files"]["knownFiles"], 0);
         assert_eq!(legacy["files"]["knownCountsComplete"], true);
+        let incomplete = fixture(json!({"activity":"idle","model":{"state":"ready"},"knownCountsComplete":false,
+            "pending":0,"unfinished":3,"heldPending":0,"heldUnfinished":3,"runnablePending":0,"runnableUnfinished":0}));
+        assert_eq!(incomplete["files"]["phase"], "idle");
+        assert_eq!(incomplete["files"]["heldUnfinished"], 3);
     }
     #[test]
     fn discovery_is_not_zero_percent_and_does_not_hide_available_apps() {
