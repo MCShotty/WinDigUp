@@ -242,10 +242,10 @@ const DiscoverySettings = {
     const d=info.discovery||{};
     if(d.catalogEnabled===false)return "Application search is off. Open Apps and enable Include installed applications to resume application discovery.";
     if(q.trim())return "No executables match this name. Try another name or clear the search.";
-    if(!d.options?.enabled)return "Application discovery is off. Enable Discover applications on selected drives and save.";
-    if(!d.options?.volumes?.length)return "No drives are selected for application discovery. Select Applications beside a drive and save.";
+    if(!d.options?.enabled)return "Application discovery is off. Open Drives, enable Discover applications on selected drives, and save.";
+    if(!d.options?.volumes?.length)return "No drives are selected for application discovery. Open Drives, select Applications beside a drive, and save.";
     if(d.running)return "Discovery is running. Candidates will appear as executable details are prepared.";
-    if(d.progress?.phase==="failed")return "Discovery needs attention. Review the drive status above, then rescan.";
+    if(d.progress?.phase==="failed")return "Discovery needs attention. Open Drives to review its status, then rescan.";
     if(this.catalogTotal===0)return "No executable candidates were found on the selected drives.";
     if(classification==="review")return "No executables need review. Choose All to see included and excluded entries.";
     return "No executables match this filter. Choose All to browse the cached catalog.";
