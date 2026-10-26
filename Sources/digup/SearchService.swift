@@ -16,6 +16,7 @@ final class SearchService: @unchecked Sendable {
     private let idleSeconds: Double
     private let availability: FileAvailability
     private let log: URL
+    private let replySink: @Sendable ([String: Any]) -> Void
     private var encoder: (any Embedder)?
     private var encoderState = "stopped"
     private var encoderPerformedInference = false
@@ -53,7 +54,8 @@ final class SearchService: @unchecked Sendable {
     init(
         index: URL, baseIndex: URL, roots: [String], skipped: [String], types: Set<String>, codeRoots: [String],
         codeSkipped: [String], idleSeconds: Double,
-        fileExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        fileExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        onReply: @escaping @Sendable ([String: Any]) -> Void = { emit($0) }
     ) throws {
         directory = index
         baseDirectory = baseIndex
@@ -67,6 +69,7 @@ final class SearchService: @unchecked Sendable {
         self.codeSkipped = codeSkipped
         self.idleSeconds = idleSeconds
         self.availability = FileAvailability(probe: fileExists)
+        replySink = onReply
         log = index.appendingPathComponent("worker-query.log")
         previews = index.appendingPathComponent("previews")
         try? FileManager.default.removeItem(at: previews)
@@ -92,6 +95,10 @@ final class SearchService: @unchecked Sendable {
             }
             admit(SearchMessage(fields))
         }
+        stop()
+        return 0
+    }
+    func stop() {
         stateLock.withLock {
             stopping = true
             activeWorker?.interrupt()
@@ -99,7 +106,6 @@ final class SearchService: @unchecked Sendable {
         }
         availability.stop()
         for queue in [lexical, inference, retrieval, maintenance, loader, previewsQueue] { queue.stop() }
-        return 0
     }
     private func current(_ request: SearchMessage) -> Bool {
         guard let session = request.fields["session"] as? String,
@@ -128,7 +134,7 @@ final class SearchService: @unchecked Sendable {
         reply["phase"] = reply["phase"] ?? phase
         write(reply)
     }
-    private func admit(_ request: SearchMessage) {
+    func admit(_ request: SearchMessage) {
         let r = request.fields
         let admitted = Self.now
         let op = r["op"] as? String ?? ""
@@ -189,6 +195,10 @@ final class SearchService: @unchecked Sendable {
         }
         if op == "prewarm" {
             if stateLock.withLock({ snapshotBytes == 0 }) { requestRefresh(vectors: true) }
+        } else if op == "refresh_names" {
+            requestRefresh(vectors: false)
+            finish(request, ["ok": true, "scheduled": true], admitted: admitted)
+            return
         } else if op == "reload" {
             requestRefresh(vectors: stateLock.withLock { snapshotBytes > 0 })
             finish(request, ["ok": true, "scheduled": true], admitted: admitted)
@@ -529,7 +539,7 @@ final class SearchService: @unchecked Sendable {
         if let warning { reply["warning"] = warning }
         return reply
     }
-    private func requestRefresh(vectors: Bool) {
+    func requestRefresh(vectors: Bool) {
         let begin = stateLock.withLock { () -> Bool in
             refreshVectors = refreshVectors || vectors
             if refreshing {
@@ -633,7 +643,9 @@ final class SearchService: @unchecked Sendable {
                 refreshAgain = false
                 return a
             }
-            if again { requestRefresh(vectors: stateLock.withLock { refreshVectors || snapshotBytes > 0 }) }
+            // Only an explicit pending vector request may rebuild vectors. A coalesced name refresh must
+            // not infer vector work merely because a compatible snapshot is already loaded.
+            if again { requestRefresh(vectors: false) }
         }
     }
     private struct RetiredWords: @unchecked Sendable {
@@ -642,7 +654,7 @@ final class SearchService: @unchecked Sendable {
     }
     private func write(_ fields: [String: Any]) {
         if fields["event"] as? String == "encoder" { stateLock.withLock { encoderReceipt = fields } }
-        output.withLock { emit(fields) }
+        output.withLock { replySink(fields) }
     }
     private func summary(of root: String, in store: IndexStore?) -> [String: Any] {
         let folder = URL(fileURLWithPath: root)

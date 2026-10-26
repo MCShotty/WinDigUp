@@ -37,3 +37,9 @@ Folder changes notify both search views. They invalidate and clear file rows imm
 An omitted file_scope keeps the developer helper/CLI convention of searching the loaded index when no roots were supplied. A malformed or unknown explicit scope fails closed. This distinction prevents an installed app with zero selected folders from exposing retained rows without changing developer CLI behavior.
 
 Scoped helper replies acknowledge file_scope_version=1. Native search rejects a successful reply from a helper without that acknowledgement; superseded/status-only replies and readable errors remain available. Empty native selection short-circuits before the helper. An older helper therefore cannot silently ignore the selection contract.
+
+## Names during streamed discovery
+
+The native backend sends refresh_names after committed scan batches. This operation schedules a background name/kind snapshot without requesting the encoder or vector loading. Active search generations are unchanged. Multiple pending refreshes coalesce; an already loaded vector snapshot is retained, and a trailing names refresh does not implicitly request a full vector rebuild. Explicit vector reload requests still retain their independent pending flag.
+
+A service regression holds an actual scanner at its next folder while a pre-existing SearchService reads committed name rows. It exercises file-kind filters, exact filename collisions, request generation echoing and a stopped encoder. A separate warm-vector regression floods metadata refresh requests and checks that the retained vector revision is not replaced. These deterministic checks establish protocol and ownership behavior; installed Windows time-to-first-result remains a physical validation gate.
