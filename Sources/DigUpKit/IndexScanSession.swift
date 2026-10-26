@@ -43,6 +43,7 @@ public final class IndexScanSession {
             CREATE TEMP TABLE \(ready)(ord INTEGER PRIMARY KEY,file INTEGER UNIQUE);
             CREATE TEMP TABLE \(deferred)(id INTEGER PRIMARY KEY,path TEXT UNIQUE,kind TEXT,size INTEGER,
                 mtime REAL,inode INTEGER,device INTEGER);
+            CREATE INDEX \(deferred)_identity ON \(deferred)(device,inode);
             """)
         do {
             try store.db.transaction {
@@ -109,8 +110,8 @@ public final class IndexScanSession {
                     }
                 }
             }
+            for id in eligible { try enqueue(id) }
         }
-        for id in eligible { try enqueue(id) }
         added += add; changed += change; unchanged += same
         for id in fresh { queued(id) }
         return IndexScanProgress(eligibleIDs:eligible,queuedIDs:fresh)

@@ -33,7 +33,7 @@ impl FolderWatcher {
             match result {
                 Err(_) => changes.dirty_all(),
                 Ok(event) => {
-                    if event.kind.is_access() { return; }
+                    if event.kind.is_access() && !event.need_rescan() { return; }
                     if event.paths.is_empty() || event.need_rescan() {
                         changes.dirty_all();
                     } else {
@@ -48,7 +48,7 @@ impl FolderWatcher {
                     }
                 }
             }
-            let _ = sender.try_send(());
+            if !changes.is_empty() {let _ = sender.try_send(());}
         });
         let mut watcher = match watcher {
             Ok(watcher) => watcher,

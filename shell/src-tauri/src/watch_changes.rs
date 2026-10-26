@@ -28,6 +28,7 @@ impl ChangeAccumulator {
     pub fn new(roots: &[PathBuf]) -> Self {
         Self { roots: roots.to_vec(), paths: BTreeSet::new(), dirty: BTreeSet::new(), bytes: 0 }
     }
+    pub fn is_empty(&self) -> bool {self.paths.is_empty() && self.dirty.is_empty()}
     pub fn dirty_all(&mut self) {
         self.dirty.extend(self.roots.iter().cloned());
         self.paths.clear();
