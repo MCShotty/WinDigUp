@@ -465,7 +465,20 @@ final class SearchService: @unchecked Sendable {
             vector = nil
             warning = "Meaning search is unavailable for incompatible index vectors"
         }
-        let options = configLock.withLock { (code ? codeRoots : roots, code ? codeSkipped : skipped, types) }
+        var options = configLock.withLock { (code ? codeRoots : roots, code ? codeSkipped : skipped, types) }
+        if let value = request["file_scope"] {
+            guard let scope = value as? [String: Any], scope["version"] as? Int == 1,
+                let selected = scope["roots"] as? [String], let exclusions = scope["skipped"] as? [String],
+                let extensions = scope["types"] as? [String]
+            else { throw CLIError("Invalid explicit search scope") }
+            options = (selected.map { Arguments.folderURL($0).path },
+                       exclusions.map { Arguments.folderURL($0).path }, IndexOptions.extensions(extensions.joined(separator: ",")))
+            if options.0.isEmpty {
+                return ["hits": [], "strong": 0, "meaning": false, "facets": [:],
+                        "scope_empty": true, "exact_filename_known": true, "exact_filename": false,
+                        "count_scope": "ranked_candidates", "ms": ["search": (Self.now - started) * 1000]]
+            }
+        }
         var availabilityMs = 0.0
         var observations: [String: FileAvailability.Observation] = [:]
         func observation(_ path: String) -> FileAvailability.Observation {

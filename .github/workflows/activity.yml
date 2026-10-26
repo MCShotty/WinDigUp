@@ -52,6 +52,7 @@ jobs:
           node tests/ui/bug-regressions.cjs
           export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
           node tests/ui/search-responsiveness.cjs
+          node tests/ui/search-scope.cjs
           node --check shell/ui/windows-settings.js
           node tests/ui/windows-settings.cjs
           node --check shell/ui/mixed-results.js

@@ -28,7 +28,7 @@ Queued previews carry the current generation, so old thumbnails complete as supe
 request never reuses an obsolete pending preview; completed images remain cached. Folder summaries use maintenance-owned
 readers and cached counts between SQLite data revisions, while folder availability is checked again on each request.
 Ordinary result metadata is hydrated in two bounded SQL reads for the selected candidate set. Code definition lookup
-retains its existing bounded behavior. File availability and exclusion checks remain enforced before publication.
+retains its existing bounded behavior. Folder and file-type exclusions remain immediate. File availability is an advisory background check with explicit unknown/stale state; a negative existence probe never hides an indexed result, and native open actions recheck the actual file. See [search storage and availability](search-storage.md).
 
 The native encoder runs in its own persistent worker, preserving accelerator-only execution. Startup has a 180-second
 deadline and each 512-token query/app-document request a 60-second deadline. A timeout or worker failure is persistent

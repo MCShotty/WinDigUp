@@ -126,9 +126,11 @@ function isCode() {
 function isAppsMode() { return Apps.parse(state.query, state.filter).mode === "apps"; }
 function hasQuery() { return Boolean(state.query.trim()) || isAppsMode() || isSettingsMode(); }
 
-function run() {
+function run(filesOnly = false) {
+  filesOnly = filesOnly === true;
+  const retained = filesOnly ? {selection:state.selection,chosen:state.chosen,navigated:state.navigated,handoff:state.handoff} : null;
   const generation = ++state.generation;
-  state.handoff = state.nextSelection ? {key: state.nextSelection, generation} : null;
+  state.handoff = retained?.handoff ? {key:retained.handoff.key,generation} : state.nextSelection ? {key: state.nextSelection, generation} : null;
   state.nextSelection = null;
   SearchTiming.begin(generation);
   state.exactFilenameKnown=false;state.exactFilename=false;
@@ -136,11 +138,12 @@ function run() {
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
-  state.navigated = Boolean(state.handoff);
-  state.chosen = null;
+  state.navigated = retained ? retained.navigated : Boolean(state.handoff);
+  state.chosen = retained?.chosen || null;
   state.error = null;
   state.fileError = null;
-  state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = null;
+  state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = retained?.selection || null;
+  if(filesOnly)state.counts={apps:applicationSearch.total,settings:settingsSearch.total};
   const typed = state.query.trim();
   const mode = Apps.parse(typed, state.filter);
   const code = mode.code;
@@ -149,8 +152,10 @@ function run() {
     state.filesStarted=false;ask({op:"cancel",generation}).catch(()=>{});
   }
   applicationSearch.limit = mode.mode === "apps" ? 100 : 3;
-  applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"),mode.mode);
-  settingsSearch.begin(text,mode.settings&&(Boolean(typed)||mode.mode==="settings"),mode.mode);
+  if(!filesOnly){
+    applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"),mode.mode);
+    settingsSearch.begin(text,mode.settings&&(Boolean(typed)||mode.mode==="settings"),mode.mode);
+  }
   state.codePhase = null;
   if (mode.mode === "settings") {
     Object.assign(state,{ranked:[],weaker:[],counts:{},text,hasResults:true,filesPending:false,selection:null});
@@ -1361,6 +1366,14 @@ document.addEventListener("keydown", (event) => {
       && document.activeElement !== $query && !window.getSelection()?.toString()) {
     $query.focus();
   }
+});
+
+
+tauri.event.listen("search-scope", ({payload}) => {
+  if(Array.isArray(payload.folders))state.info.folders=payload.folders;
+  if(typeof payload.hasCode==="boolean")state.info.hasCode=payload.hasCode;
+  if(isAppsMode()||isSettingsMode()){render();return;}
+  run(true);
 });
 
 tauri.event.listen("state", ({ payload }) => {

@@ -57,7 +57,9 @@ const applicationSearch = new ApplicationSearch((statusOnly=false) => {
 
 // MARK: Searching
 
-function queryChanged() {
+function queryChanged(filesOnly = false) {
+  filesOnly = filesOnly === true;
+  const retained = filesOnly ? {selection:state.selection,chosen:state.chosen,navigated:state.navigated} : null;
   if(state.composing)return;
   closeBig();
   clearTimeout(statusTimer); state.waitingVisible = false;
@@ -69,8 +71,9 @@ function queryChanged() {
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
-  state.navigated = false;
-  state.chosen = null;
+  state.navigated = retained?.navigated || false;
+  state.chosen = retained?.chosen || null;
+  if(retained)state.selection=retained.selection;
   state.error = null;
   const typed = $query.value.trim();
   const mode = Apps.parse(typed);
@@ -81,8 +84,10 @@ function queryChanged() {
   state.isApps = mode.mode === "apps";
   state.isSettings=mode.mode==="settings";
   applicationSearch.limit=state.isApps?6:3;
-  applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps),mode.mode);
-  settingsSearch.begin(text,mode.settings&&(Boolean(typed)||state.isSettings),mode.mode);
+  if(!filesOnly){
+    applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps),mode.mode);
+    settingsSearch.begin(text,mode.settings&&(Boolean(typed)||state.isSettings),mode.mode);
+  }
   if(state.isSettings){show({hits:[],strong:0},text,"settings");return;}
   if (state.isApps) {
     show({ hits: [], strong: 0 }, text, "applications");
@@ -741,6 +746,13 @@ $("expand-search").onclick = () => openInWindow();
 $primary.onclick = openSelected;
 $details.onclick = toggleBig;
 $activity.onclick = () => invoke("open_settings", {tab:"activity"}).catch(failed);
+
+
+tauri.event.listen("search-scope", ({payload}) => {
+  if(typeof payload.hasCode==="boolean")state.hasCode=payload.hasCode;
+  if(state.isApps||state.isSettings){render();return;}
+  queryChanged(true);
+});
 
 tauri.event.listen("state", ({ payload }) => showState(payload));
 invoke("app_state").then(showState).catch(() => {});
