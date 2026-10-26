@@ -52,8 +52,12 @@ pub async fn search_windows_settings(window:tauri::WebviewWindow,shell:State<'_,
             Err(error)=>semantic=json!({"state":"unavailable","message":error}),
         }
     }
+    shell.personalization.rank(&session, generation, &q, &mut hits,
+        |hit| hit.id.clone(), |hit| crate::personalization::tier(&hit.reason));
     let total=hits.len();let offset=offset.unwrap_or(0).min(total);let limit=limit.unwrap_or(50).clamp(1,100);
-    let hits:Vec<_>=hits.into_iter().skip(offset).take(limit).collect();
+    let mut hits:Vec<Value>=hits.into_iter().skip(offset).take(limit).map(|hit|serde_json::to_value(hit).unwrap()).collect();
+    crate::personalization::match_sources(&mut hits, &q);
+    shell.personalization.decorate(&session, generation, &mut hits);
     Ok(json!({"hits":hits,"total":total,"offset":offset,"generation":generation,"requestId":generation,
         "catalog":shell.windows_settings.info(),"semantic":semantic,"ms":started.elapsed().as_secs_f64()*1000.0}))
 }
@@ -64,7 +68,9 @@ pub fn cancel_windows_settings_search(window:tauri::WebviewWindow,shell:State<'_
 #[tauri::command]
 pub async fn open_windows_setting(app:AppHandle,shell:State<'_,Arc<Shell>>,setting_id:String)->Result<(),String> {
     let shell=shell.inner().clone();
+    let history=shell.personalization.clone();let key=setting_id.clone();
     tauri::async_runtime::spawn_blocking(move||shell.windows_settings.launch(&setting_id)).await.map_err(|e|e.to_string())??;
+    history.accepted(&key);
     crate::hide_panel(app);
     Ok(())
 }

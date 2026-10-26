@@ -443,7 +443,8 @@ function cell(hit, compact = false) {
   }
   const place = placeOf(hit);
   if (place) picture.append(element("span", "place on-image", place));
-  item.append(picture, element("div", "name", "‎" + nameOf(hit.path)), folderLine(folderOf(hit)));
+  item.append(picture, element("div", "name", "‎" + nameOf(hit.path)), folderLine(folderOf(hit)),
+    element("div","result-match-reason",[matchLabel(hit),availabilityLabel(hit)].filter(Boolean).join(" · ")));
   wire(item, hit);
   styleFileCell(item, compact, key === state.selection);
   fileCells.set(key,{signature,node:item});
@@ -1130,6 +1131,7 @@ function actions(hit) {
   const revealButton = element("button", "", `Show in ${FILE_MANAGER}`);
   revealButton.onclick = () => reveal(hit);
   box.append(openButton, revealButton);
+  appendUsefulResult(box, hit, failed);
   return box;
 }
 

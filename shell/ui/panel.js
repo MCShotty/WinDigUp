@@ -380,6 +380,10 @@ function row(hit) {
   // The words found, where keyword search found them; else where the file is.
   if (hit.excerpt && hit.excerpt.includes("«")) sub.innerHTML = marked(hit.excerpt);
   else sub.textContent = folderOf(hit);
+  const match = element("span", "result-match-reason", matchLabel(hit) + " · ");
+  sub.prepend(match);
+  const availability = availabilityLabel(hit);
+  if (availability) { sub.append(element("span", "result-availability", " · " + availability)); sub.title = availability; }
   text.append(title, sub);
   item.append(text);
   item.onmousedown = event => { if (event.button === 0) event.preventDefault(); };
@@ -628,7 +632,9 @@ function renderBig() {
   box.append(view);
   const location = element("div", "preview-location");
   if (!isLauncher(hit)) { location.textContent = folderOf(hit) + " · " + details(hit); location.title = hit.path; }
-  $big.replaceChildren(head, ...(!isLauncher(hit) ? [location] : []), box);
+  const feedback = element("div","feedback-actions");
+  if (!isLauncher(hit)) appendUsefulResult(feedback,hit,failed);
+  $big.replaceChildren(head, ...(!isLauncher(hit) ? [location] : []), box, ...(!feedback.childElementCount ? [] : [feedback]));
 }
 
 function message(title, text) {
