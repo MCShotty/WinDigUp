@@ -162,6 +162,13 @@ extension Crawler {
                 size INTEGER NOT NULL,mtime REAL NOT NULL,inode INTEGER NOT NULL,device INTEGER NOT NULL);
             """)
         let selections=selectedRoots ?? roots
+        let exclusions=options.excludedFolders.flatMap {path -> [String] in
+            var variants=[path,FolderSelection.realPath(path)]
+            for root in selections where path==root.path || FolderSelection.isInside(path,root.path) {
+                variants.append(FolderSelection.realPath(root.path)+String(path.dropFirst(root.path.count)))
+            }
+            return variants
+        }
         let rootPaths = Set(selections.flatMap { [$0.standardizedFileURL.path,FolderSelection.realPath($0.path)] })
         let home = fm.homeDirectoryForCurrentUser.path
         var report = CrawlReport()
@@ -179,7 +186,7 @@ extension Crawler {
             progress("root", root: root.path, path: root.path, force: true)
             if selectedRoots != nil && !Crawler.canScanSubtree(root,selectedRoots:selections,options:options) {continue}
             let real = FolderSelection.realPath(root.path)
-            let skips = options.excludedFolders.filter {
+            let skips = exclusions.filter {
                 FolderSelection.isInside($0, root.path) || FolderSelection.isInside($0, real)
             }.flatMap { [$0, FolderSelection.realPath($0)] }
             if options.code { repos.enterRoot(root.path) }
