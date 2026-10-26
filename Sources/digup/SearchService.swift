@@ -495,7 +495,6 @@ final class SearchService: @unchecked Sendable {
         }
         var timing = index.timings
         timing["availability"] = availabilityMs
-        timing["availability_checks"] = Double(observations.count)
         timing["search"] = (Self.now - started) * 1000
         var reply: [String: Any] = [
             "hits": hits.map { hit in
@@ -506,6 +505,7 @@ final class SearchService: @unchecked Sendable {
             "ms": timing, "facets": index.facetCounts, "count_scope": "ranked_candidates",
             "category_query": Searcher.terms(text).isEmpty && !Searcher.kindHints(text).isEmpty,
             "exact_filename_known": exactNames != nil, "exact_filename": exactCollision,
+            "availability_checks": observations.count,
         ]
         if let warning { reply["warning"] = warning }
         return reply

@@ -16,7 +16,7 @@ Available observations expire after five seconds; unavailable observations after
 
 Each hit carries availability, availability_stale and, when known, availability_checked_ms_ago. Unknown is advisory and never grants access. Native open actions must recheck the actual file before dispatch and report a readable unavailable error. A cached result is not proof that a path still exists or can be opened.
 
-The search ms object reports availability lookup time and lookup count. Status reports bounded queue/cache counts and measured background probe durations without paths or query text. These counters are not disk utilization or an inference measurement.
+The search ms object reports availability lookup time; the separate availability_checks field reports lookup count. Status reports bounded queue/cache counts and measured background probe durations without paths or query text. These counters are not disk utilization or an inference measurement.
 
 ## Scale protocol
 
