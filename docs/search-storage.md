@@ -27,3 +27,11 @@ The existing benchmark-search-scale.py supports explicit --vectors values and re
 The workflow builds the actual release helper on Linux and measures 100,000 metadata rows, 200 existing tiny files and constant 768-dimensional synthetic vectors. It records refresh time, keyword latency during refresh, retrieval roundtrips, helper RSS, phase timings, binary/source identities and host details. It loads no neural model. This tests scoring and refresh work, not model quality, GPU/NPU speed, UI latency or a representative million-file corpus.
 
 Physical Windows SSD/HDD/network/disconnected-drive measurements remain required. No ANN index, incremental vector publication or production model change follows from synthetic scale results alone. Those require separate evidence and relevance acceptance.
+
+## Explicit shell selection
+
+The native shell attaches a versioned file_scope to each search from the current selected roots, exclusions and file types. The helper uses that scope immediately, even when a queued folders-control message has not arrived yet. Empty shell selection returns no file results without requesting inference. A scope edit during a pending search discards its older reply; code requests use their separate code-root selection.
+
+Folder changes notify both search views. They invalidate and clear file rows immediately while retaining the independent app/settings providers and any selected launcher result. Explicit Apps and Windows settings browsing and empty unfiltered home routing retain their existing behavior.
+
+An omitted file_scope keeps the developer helper/CLI convention of searching the loaded index when no roots were supplied. A malformed or unknown explicit scope fails closed. This distinction prevents an installed app with zero selected folders from exposing retained rows without changing developer CLI behavior.

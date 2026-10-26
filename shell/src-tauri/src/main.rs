@@ -27,6 +27,7 @@ mod hours;
 mod moments;
 mod options;
 mod settings;
+mod search_scope;
 mod panel_geometry;
 mod panel_native;
 mod status;
@@ -147,6 +148,19 @@ impl Shell {
             return self.options.code_roots.iter().map(|root| root.display().to_string()).collect();
         }
         self.settings.lock().unwrap().code_folders.clone()
+    }
+
+    fn selected_search_scope(&self, code: bool) -> search_scope::Scope {
+        let settings = self.settings.lock().unwrap();
+        let overrides = if code { &self.options.code_roots } else { &self.options.roots };
+        let roots = if overrides.is_empty() {
+            if code { settings.code_folders.clone() } else { settings.folders.clone() }
+        } else { overrides.iter().map(|root| root.display().to_string()).collect() };
+        search_scope::Scope {
+            roots,
+            skipped: if code { settings.code_skipped.clone() } else { settings.skipped.clone() },
+            types: if code { vec![] } else { settings.skip_types.clone() },
+        }
     }
 
     fn is_set_up(&self) -> bool {
@@ -287,7 +301,9 @@ async fn ask(window: tauri::WebviewWindow, shell: State<'_, Arc<Shell>>, mut req
         if op == "prewarm" || op == "embed_ahead" { return Ok(json!({"ok":true,"encoder":"stopped"})); }
         if op == "search" { request["meaning"] = json!(false); }
     }
-    shell.search.ask(request).await
+    let code = request["code"] == true;
+    let scope = shell.selected_search_scope(code);
+    search_scope::ask(request, scope, || shell.selected_search_scope(code), |request| shell.search.ask(request)).await
 }
 
 /// What indexing these folders would take, one answer per folder (`digup estimate --json`): files by kind, the first
@@ -994,6 +1010,7 @@ fn apply_folders(app: &AppHandle) {
     args.extend(folder_arguments(&settings, &shell.code_folders()));
     args.extend(folders);
     shell.search.set_arguments(args);
+    let _ = app.emit("search-scope", json!({"folders": shell.folders(), "hasCode": !shell.code_folders().is_empty()}));
     let search = shell.clone();
     tauri::async_runtime::spawn(async move {
         let _ = search.search.ask(request).await;

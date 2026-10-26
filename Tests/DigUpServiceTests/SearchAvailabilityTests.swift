@@ -138,4 +138,36 @@ struct SearchAvailabilityTests {
         #expect(hits.allSatisfy { $0["availability"] as? String == "unknown" })
         #expect(checked["exact_filename"] as? Bool == true)
     }
+
+    @Test func explicitEmptyShellScopeCannotSearchRetainedRowsButCliStillCan() throws {
+        let (root, store, searcher) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = try SearchService(index: store.directory, baseIndex: store.directory,
+            roots: [], skipped: [], types: [], codeRoots: [], codeSkipped: [], idleSeconds: 300,
+            fileExists: { _ in true })
+        let scoped = try service.fileSearch(["q":"report", "file_scope":["version":1,"roots":[],"skipped":[],"types":[]]],
+                                           in: searcher, vector: nil, source: nil)
+        #expect((scoped["hits"] as? [[String: Any]])?.isEmpty == true)
+        #expect(scoped["scope_empty"] as? Bool == true)
+        let cli = try service.fileSearch(["q":"report"], in: searcher, vector: nil, source: nil)
+        #expect((cli["hits"] as? [[String: Any]])?.count == 2)
+    }
+
+    @Test func explicitRequestScopeWinsBeforeTheFoldersControlMessageArrives() throws {
+        let (root, store, searcher) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = try SearchService(index: store.directory, baseIndex: store.directory,
+            roots: [root.path], skipped: [], types: [], codeRoots: [], codeSkipped: [], idleSeconds: 300,
+            fileExists: { _ in true })
+        let scoped = try service.fileSearch(["q":"report", "file_scope":["version":1,
+            "roots":[root.appendingPathComponent("private").path],"skipped":[],"types":[]]],
+            in: searcher, vector: nil, source: nil)
+        let hits = try #require(scoped["hits"] as? [[String: Any]])
+        #expect(hits.count == 1)
+        #expect((hits.first?["path"] as? String)?.contains("/private/") == true)
+        #expect(throws: (any Error).self) {
+            _ = try service.fileSearch(["q":"report","file_scope":["version":2,"roots":[]]],
+                                       in: searcher, vector: nil, source: nil)
+        }
+    }
 }

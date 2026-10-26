@@ -1,3 +1,5 @@
+#[path = "../../../shell/src-tauri/src/search_scope.rs"]
+pub mod search_scope;
 #[cfg(not(windows))]
 #[path = "../../../shell/src-tauri/src/discovery_manager.rs"]
 pub mod discovery_manager;
