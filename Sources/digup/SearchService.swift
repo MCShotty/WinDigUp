@@ -455,29 +455,36 @@ final class SearchService: @unchecked Sendable {
     {
         let text = request["q"] as? String ?? ""
         guard text.count <= 4096 else { throw CLIError("Query is too long") }
-        guard let index else { return ["hits": [], "strong": 0, "meaning": false] }
         let started = Self.now
         let code = request["code"] as? Bool ?? false
+        var options = configLock.withLock { (code ? codeRoots : roots, code ? codeSkipped : skipped, types) }
+        var explicitScope = false
+        if let value = request["file_scope"] {
+            guard let scope = value as? [String: Any], scope["version"] as? Int == 1,
+                let selected = scope["roots"] as? [String], let exclusions = scope["skipped"] as? [String],
+                let extensions = scope["types"] as? [String]
+            else { throw CLIError("Invalid explicit search scope") }
+            explicitScope = true
+            options = (selected.map { Arguments.folderURL($0).path },
+                       exclusions.map { Arguments.folderURL($0).path }, IndexOptions.extensions(extensions.joined(separator: ",")))
+        }
+        if (explicitScope && options.0.isEmpty) || (code && options.0.isEmpty) || index == nil {
+            var empty: [String: Any] = [
+                "hits": [[String: Any]](), "strong": 0, "meaning": false, "facets": [String: Int](),
+                "scope_empty": options.0.isEmpty, "exact_filename_known": options.0.isEmpty,
+                "exact_filename": false, "count_scope": "ranked_candidates",
+                "ms": ["search": (Self.now - started) * 1000],
+            ]
+            if explicitScope { empty["file_scope_version"] = 1 }
+            return empty
+        }
+        guard let index else { throw CLIError("Search index is unavailable") }
         let kinds = (request["kinds"] as? [String]).map { Set($0.compactMap(FileKind.init(rawValue:))) }
         var vector = vector
         var warning: String?
         if vector != nil, index.vectorSource != source {
             vector = nil
             warning = "Meaning search is unavailable for incompatible index vectors"
-        }
-        var options = configLock.withLock { (code ? codeRoots : roots, code ? codeSkipped : skipped, types) }
-        if let value = request["file_scope"] {
-            guard let scope = value as? [String: Any], scope["version"] as? Int == 1,
-                let selected = scope["roots"] as? [String], let exclusions = scope["skipped"] as? [String],
-                let extensions = scope["types"] as? [String]
-            else { throw CLIError("Invalid explicit search scope") }
-            options = (selected.map { Arguments.folderURL($0).path },
-                       exclusions.map { Arguments.folderURL($0).path }, IndexOptions.extensions(extensions.joined(separator: ",")))
-            if options.0.isEmpty {
-                return ["hits": [], "strong": 0, "meaning": false, "facets": [:],
-                        "scope_empty": true, "exact_filename_known": true, "exact_filename": false,
-                        "count_scope": "ranked_candidates", "ms": ["search": (Self.now - started) * 1000]]
-            }
         }
         var availabilityMs = 0.0
         var observations: [String: FileAvailability.Observation] = [:]
@@ -495,7 +502,6 @@ final class SearchService: @unchecked Sendable {
                 (options.0.isEmpty || FolderSelection.isSearched(path, folders: options.0, skipped: options.1))
                     && !options.2.contains((path as NSString).pathExtension.lowercased())
             } ?? false
-        if code && options.0.isEmpty { return ["hits": [], "strong": 0, "meaning": false] }
         let hits = try index.search(
             text, queryVector: vector, kinds: kinds, limit: min(max(request["limit"] as? Int ?? 40, 1), 200),
             prefixLast: request["prefix_last"] as? Bool ?? false,
@@ -519,6 +525,7 @@ final class SearchService: @unchecked Sendable {
             "exact_filename_known": exactNames != nil, "exact_filename": exactCollision,
             "availability_checks": observations.count,
         ]
+        if explicitScope { reply["file_scope_version"] = 1 }
         if let warning { reply["warning"] = warning }
         return reply
     }

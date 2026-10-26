@@ -12,7 +12,7 @@ fn empty_reply(request: &Value, changed: bool) -> Value {
     let mut reply = json!({
         "protocol_version": 2, "ok": true, "hits": [], "strong": 0, "meaning": false,
         "facets": {}, "count_scope": "ranked_candidates", "exact_filename_known": true,
-        "exact_filename": false, "scope_empty": true, "ms": {},
+        "exact_filename": false, "scope_empty": true, "file_scope_version": 1, "ms": {},
     });
     for key in ["session", "session_id", "generation", "phase", "id"] {
         if let Some(value) = request.get(key) { reply[key] = value.clone(); }
@@ -36,7 +36,18 @@ where
     let latest = current();
     if latest.roots.is_empty() { return Ok(empty_reply(&descriptor, false)); }
     if latest != initial { return Ok(empty_reply(&descriptor, true)); }
-    reply
+    match reply {
+        Ok(value) => {
+            let no_hits = value["hits"].as_array().map_or(true, |hits| hits.is_empty());
+            let status_only = matches!(value["status"].as_str(), Some("superseded" | "unavailable" | "preparing"));
+            if value["file_scope_version"] == 1 || (no_hits && (status_only || value.get("error").is_some())) {
+                Ok(value)
+            } else {
+                Err("Search helper does not support selected-folder scopes. Restart DigUp or reinstall the current build.".into())
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -100,8 +111,31 @@ mod tests {
         let reply = ask(json!({"op":"search","code":true}), scope(&["code-root"]), || scope(&["code-root"]),
             |request| async move {
                 assert_eq!(request["file_scope"]["roots"], json!(["code-root"]));
-                Ok(json!({"hits":[{"path":"code-root/main.swift"}]}))
+                Ok(json!({"hits":[{"path":"code-root/main.swift"}],"file_scope_version":1}))
             }).await.unwrap();
         assert_eq!(reply["hits"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_helper_cannot_publish_success_without_scope_acknowledgement() {
+        for hits in [json!([]), json!([{"path":"old/report.txt"}])] {
+            let result = ask(json!({"op":"search","q":"report"}), scope(&["selected"]), || scope(&["selected"]),
+                |_| async move { Ok(json!({"hits":hits,"meaning":true})) }).await;
+            assert!(result.unwrap_err().contains("selected-folder scopes"));
+        }
+    }
+
+    #[tokio::test]
+    async fn status_errors_and_nonsearch_operations_keep_their_original_messages() {
+        for value in [json!({"status":"superseded","hits":[]}), json!({"status":"unavailable"}),
+                      json!({"ok":false,"error":"Selected accelerator is unavailable"})] {
+            let expected = value.clone();
+            let result = ask(json!({"op":"search"}), scope(&["selected"]), || scope(&["selected"]),
+                |_| async move { Ok(value) }).await.unwrap();
+            assert_eq!(result, expected);
+        }
+        let error = ask(json!({"op":"search"}), scope(&["selected"]), || scope(&["selected"]),
+            |_| async { Err("helper stopped".into()) }).await.unwrap_err();
+        assert_eq!(error, "helper stopped");
     }
 }

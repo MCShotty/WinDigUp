@@ -35,3 +35,5 @@ The native shell attaches a versioned file_scope to each search from the current
 Folder changes notify both search views. They invalidate and clear file rows immediately while retaining the independent app/settings providers and any selected launcher result. Explicit Apps and Windows settings browsing and empty unfiltered home routing retain their existing behavior.
 
 An omitted file_scope keeps the developer helper/CLI convention of searching the loaded index when no roots were supplied. A malformed or unknown explicit scope fails closed. This distinction prevents an installed app with zero selected folders from exposing retained rows without changing developer CLI behavior.
+
+Scoped helper replies acknowledge file_scope_version=1. Native search rejects a successful reply from a helper without that acknowledgement; superseded/status-only replies and readable errors remain available. Empty native selection short-circuits before the helper. An older helper therefore cannot silently ignore the selection contract.
