@@ -532,9 +532,11 @@ final class IndexService: @unchecked Sendable {
                     try drain()
                     Thread.sleep(forTimeInterval:0.005)
                 }
-                emit(["event":"phase","stage":"discovering_and_indexing",
-                    "message":"Discovering files and indexing ready content…","discoveryActive":true,
-                    "code":requested.allSatisfy(\.code)])
+                if work.contains(where:{!$0.finished}) {
+                    emit(["event":"phase","stage":"discovering_and_indexing",
+                        "message":"Discovering files and indexing ready content…","discoveryActive":true,
+                        "code":requested.allSatisfy(\.code)])
+                }
                 do {
                     _ = try Indexer.runScheduled(work.map { .init(indexer:$0.part.indexer,includePending:false) },
                         shouldStop:{ [self] in lock.withLock { stopRequested || !backfillAllowed } },
