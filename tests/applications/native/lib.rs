@@ -24,6 +24,8 @@ pub mod diagnostics;
 pub mod helper;
 #[path = "../../../shell/src-tauri/src/status.rs"]
 pub mod status;
+#[path = "../../../shell/src-tauri/src/gpu_telemetry.rs"]
+pub mod gpu_telemetry;
 #[path = "../../../shell/src-tauri/src/acceleration.rs"]
 pub mod acceleration;
 #[path = "../../../shell/src-tauri/src/accelerator_probe.rs"]

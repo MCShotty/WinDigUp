@@ -55,6 +55,7 @@ let usage = """
     The model: EmbeddingGemma 2 on llama.cpp, from $DIGUP_MODELS (only there, when set), else
     ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_ACCELERATOR chooses vulkan,
     amd-vulkan, nvidia-cuda or openvino-npu. DIGUP_GPU_JOBS is 0 (automatic), 1, 2, or 3.
+    DIGUP_RESOURCE_PROFILE is quiet, balanced (default), or faster; it never raises a saved GPU job limit.
     CPU inference and unverified worker overrides are disabled.
     """
 
@@ -242,7 +243,7 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
     let command=CommandLine.arguments.dropFirst().first ?? ""
     if !textOnly && command != "worker" {
         let selected=try LlamaEmbedder.verifyDevice()
-        let maximum=selected.stableID.isEmpty ? 1 : GPUAdmission.configuredMaximum
+        let maximum=selected.stableID.isEmpty ? 1 : GPUAdmission.backgroundMaximum
         let executable=Bundle.main.executableURL ?? URL(fileURLWithPath:CommandLine.arguments[0])
         let raw=CommandLine.arguments
         let custom=raw.indices.first(where:{raw[$0]=="--index" && $0+1<raw.count}).map{raw[$0+1]}
