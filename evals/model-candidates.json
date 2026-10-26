@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "productionSelectionChanged": false,
+  "decision": "retain-embeddinggemma-2-until-physical-gates-pass",
+  "models": [
+    {
+      "id": "google/embeddinggemma-2",
+      "role": "production-baseline",
+      "revision": "bfcd298762cc34d0357ece5ebdd31791a3a374d8",
+      "license": "Apache-2.0",
+      "licenseSource": "https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2",
+      "modalities": [
+        "text",
+        "code",
+        "image",
+        "document",
+        "audio",
+        "video"
+      ],
+      "dimension": 768,
+      "alternatives": [
+        512,
+        256,
+        128
+      ],
+      "parameters": 740000000,
+      "runtimeStatus": "Current pinned runtime; physical acceptance remains device-specific",
+      "adoptionStatus": "existing-baseline"
+    },
+    {
+      "id": "Qwen/Qwen3-VL-Embedding-2B",
+      "role": "research-candidate",
+      "revision": null,
+      "license": "Apache-2.0",
+      "licenseSource": "https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B",
+      "modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "dimension": 2048,
+      "parameters": 2000000000,
+      "runtimeStatus": "Pinned llama.cpp CUDA/Vulkan and OpenVINO NPU export not validated",
+      "adoptionStatus": "blocked-missing-audio-and-device-evidence"
+    },
+    {
+      "id": "nvidia/omni-embed-nemotron-3b",
+      "role": "excluded-pending-license-review",
+      "revision": null,
+      "license": "See model license; not approved for distribution",
+      "licenseSource": "https://huggingface.co/nvidia/omni-embed-nemotron-3b",
+      "modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "runtimeStatus": "Not evaluated",
+      "adoptionStatus": "blocked-license-and-device-evidence"
+    },
+    {
+      "id": "Haon-Chen/e5-omni-3B",
+      "role": "excluded-pending-license-review",
+      "revision": null,
+      "license": "Model metadata and listed Qwen research-licensed base require resolution",
+      "licenseSource": "https://huggingface.co/Haon-Chen/e5-omni-3B",
+      "baseLicenseSource": "https://huggingface.co/Qwen/Qwen2.5-Omni-3B",
+      "modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "runtimeStatus": "Not evaluated",
+      "adoptionStatus": "blocked-license-and-device-evidence"
+    }
+  ]
+}
