@@ -123,6 +123,50 @@ struct SearchNameRefreshTests {
         print("STREAMED_NAMES_EVIDENCE: blockedDiscovery=true exactFilename=true kindFilter=true encoderStarts=0")
     }
 
+
+    final class QueueMarker: @unchecked Sendable {
+        let key = DispatchSpecificKey<String>()
+    }
+    final class Probe: @unchecked Sendable {
+        let onDeinit: @Sendable () -> Void
+        init(_ onDeinit: @escaping @Sendable () -> Void) { self.onDeinit = onDeinit }
+        deinit { onDeinit() }
+    }
+    final class Owner: @unchecked Sendable {
+        var value: Probe
+        init(_ value: Probe) { self.value = value }
+    }
+    final class Disposal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var queue: String?
+        func record(_ value: String?) { lock.lock(); queue = value; lock.unlock() }
+        var recorded: String? { lock.lock(); defer { lock.unlock() }; return queue }
+    }
+
+    @Test func snapshotContentsAreDestroyedByRetirementWhileLexicalJobKeepsTheContainer() throws {
+        let marker = QueueMarker(), disposal = Disposal()
+        let lexical = DispatchQueue(label: "digup.test.lexical")
+        let retirement = DispatchQueue(label: "digup.test.retirement")
+        lexical.setSpecific(key: marker.key, value: "lexical")
+        retirement.setSpecific(key: marker.key, value: "retirement")
+        let disposed = DispatchSemaphore(value: 0), finished = DispatchSemaphore(value: 0)
+        let owner = Owner(Probe {
+            disposal.record(DispatchQueue.getSpecific(key: marker.key))
+            disposed.signal()
+        })
+        lexical.async {
+            let retired = SearchRetirement(owner.value)
+            owner.value = Probe {} // No lexical owner reference remains to the transferred resource.
+            retirement.async { retired.release() }
+            _ = disposed.wait(timeout: .now() + 3)
+            // Deliberately keep the container alive on the lexical queue after the disposal task runs.
+            withExtendedLifetime(retired) {}
+            finished.signal()
+        }
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(disposal.recorded == "retirement")
+    }
+
     @Test func coalescedMetadataRefreshDoesNotReplaceLoadedVectorsOrWakeAnEncoder() throws {
         let root = try temporary()
         defer { try? FileManager.default.removeItem(at: root) }

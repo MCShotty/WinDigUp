@@ -564,17 +564,22 @@ final class SearchService: @unchecked Sendable {
                 let code =
                     try hasCode ? IndexStore(directory: directory, file: IndexStore.codeFile, readOnly: true) : nil
                 let codeWords = try code.map { try Searcher(store: $0, loadVectors: false) }
+                let namesBuilt = Self.now
                 let wordsPublished = DispatchSemaphore(value: 0)
                 lexical.submit(key: "publish-words", foreground: false, cancel: { wordsPublished.signal() }) { [self] in
-                    let retired = RetiredWords(main: searcher, code: codeSearcher)
+                    let publishing = Self.now
+                    let retired = SearchRetirement((main: searcher, code: codeSearcher))
                     store = main
                     searcher = words
                     codeStore = code
                     codeSearcher = codeWords
-                    // Releasing a large name dictionary can take longer than the pointer swap. Retire it away
-                    // from the keyword owner; the old readers have no remaining users after this serial handoff.
-                    DispatchQueue.global(qos: .utility).async { withExtendedLifetime(retired) {} }
-                    write(["event": "search_index", "state": "words_ready"])
+                    // The owner properties no longer refer to the old readers. The container is harmless if
+                    // this job retains it: its contents are explicitly released only by the retirement task.
+                    DispatchQueue.global(qos: .utility).async { retired.release() }
+                    write(["event": "search_index", "state": "words_ready", "ms": [
+                        "name_load": (namesBuilt - started) * 1000,
+                        "words_publish": (Self.now - publishing) * 1000,
+                    ]])
                     wordsPublished.signal()
                 }
                 wordsPublished.wait()
@@ -647,10 +652,6 @@ final class SearchService: @unchecked Sendable {
             // not infer vector work merely because a compatible snapshot is already loaded.
             if again { requestRefresh(vectors: false) }
         }
-    }
-    private struct RetiredWords: @unchecked Sendable {
-        let main: Searcher
-        let code: Searcher?
     }
     private func write(_ fields: [String: Any]) {
         if fields["event"] as? String == "encoder" { stateLock.withLock { encoderReceipt = fields } }
