@@ -1,10 +1,14 @@
-// Vector math without Accelerate (Linux, Windows): plain loops over SIMD8 lanes. 70,000 vectors score in a few
-// milliseconds either way; `Float16` is a hardware type on x86-64 and arm64 here (it's only missing on Intel Macs).
+// Host similarity scoring without Accelerate (Linux, Windows). This never performs model inference.
+// Generic x64 builds cannot assume F16C: scalar Float16 conversion otherwise makes a library call per element.
 #if !canImport(Accelerate)
+import CSearchMath
+
 extension Vectors {
     /// Converts `count` float16s into float32s.
     static func floats(fromHalf source: UnsafePointer<Float16>, count: Int, to destination: UnsafeMutablePointer<Float>) {
-        for index in 0..<count { destination[index] = Float(source[index]) }
+        source.withMemoryRebound(to: UInt16.self, capacity: count) { halves in
+            digup_search_half_to_float(halves, destination, count)
+        }
     }
 
     /// `scores[i]` = the dot product of row `i` of `rows` (`count` rows of `dimension` floats) with `query`.

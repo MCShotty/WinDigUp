@@ -1,14 +1,14 @@
 # Builds DigUp for Windows and Linux on x64: the shell's Windows installer, and its .deb and AppImage, kept as the run's
 # artifacts (nothing is published). By hand: `gh workflow run packages.yml`, or `-f ref=<branch or tag>`. The Mac app is
 # built and released on a Mac (scripts/release.sh). llama.cpp gets its Vulkan backend beside the CPU ones (the Vulkan
-# SDK's shader compiler is what makes scripts/build-llama.sh build it): a computer whose GPU runs the model faster than
-# its processor uses it (`digup speed --model` decides), any other the processor. Each package is then installed and
+# SDK's shader compiler is what makes scripts/build-llama.sh build it). All inference is accelerator-only. Packages are installed and
 # launched once, hidden (scripts/check-*-package.sh): the .deb and the AppImage on Ubuntu 22.04 and 24.04 and Debian 12,
 # the installer on Windows. With the update signing key in the repository's secrets, the installer and the AppImage
 # come with the .sig files the update feed needs (scripts/update-feed.py).
 name: Packages
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       ref:
@@ -18,8 +18,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: packages-${{ github.event.pull_request.number || github.ref }}
+  # Build the latest installer; native dependencies are cached independently.
+  cancel-in-progress: true
+
 jobs:
   linux:
+    if: github.event_name == 'workflow_dispatch'
     # Built in an Ubuntu 22.04 container: the binaries then ask for glibc 2.35 at most and start on Ubuntu 22.04, Debian 12,
     # Mint 21 and anything newer (built on 24.04 they'd need its 2.39). GitHub is retiring its ubuntu-22.04 runners.
     runs-on: ubuntu-24.04
@@ -152,13 +158,13 @@ jobs:
           minisign -V -p "$RUNNER_TEMP/update.pub" -m "${signature%.sig}" -x "$RUNNER_TEMP/update.minisig"
 
   windows:
-    runs-on: windows-2025
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
       # The small ffmpeg is built once per version of its build script (build-ffmpeg.sh does nothing when it's there).
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: ffmpeg
         with:
           path: Vendor/ffmpeg
@@ -178,11 +184,27 @@ jobs:
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: scripts/build-ffmpeg.sh
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        with:
+          path: Vendor/ffmpeg
+          key: ffmpeg-windows-${{ hashFiles('scripts/build-ffmpeg.sh') }}
       - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057 # v0.5.0
         with:
           swift-version: swift-6.4.0-release
           swift-build: 6.4.0-RELEASE
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          vsversion: '2022'
+          toolset: '14.44'
+      - name: Pinned CUDA Toolkit and CMake
+        shell: bash
+        run: |
+          python -m pip install cmake==4.4.4 ninja==1.13.2
+          python scripts/fetch-cuda.py --platform windows-x86_64
+          echo "CUDA_PATH=$(cygpath -w "$PWD/Vendor/cuda")" >> "$GITHUB_ENV"
+          echo "CUDAToolkit_ROOT=$(cygpath -w "$PWD/Vendor/cuda")" >> "$GITHUB_ENV"
+          echo "$(cygpath -w "$PWD/Vendor/cuda/bin")" >> "$GITHUB_PATH"
       - name: Vulkan SDK
         shell: bash
         run: |
@@ -194,27 +216,135 @@ jobs:
           "$temp/vulkansdk.exe" --root "C:\\VulkanSDK\\$version" --accept-licenses --default-answer --confirm-command install
           echo "VULKAN_SDK=C:\\VulkanSDK\\$version" >> "$GITHUB_ENV"
           echo "C:\\VulkanSDK\\$version\\Bin" >> "$GITHUB_PATH"
-      - name: Build
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llama
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp/LICENSE
+            Vendor/llama.cpp/licenses
+          key: llama-windows-vulkan-cuda12.9.1-msvc14.44-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Fetch native dependencies
         shell: bash
         run: |
-          # MSVC's tools before Git's: Git's /usr/bin/link (coreutils) would stand in for link.exe.
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/fetch-vendor.sh
-          scripts/build-llama.sh
+      - name: Native libraries
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          DIGUP_BUILD_JOBS=2 scripts/build-llama.sh
+      - name: Native build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DigUp-native-build-diagnostics
+          path: |
+            Vendor/llama-build/**/digup-*.log
+            Vendor/llama-build/**/CMakeCache.txt
+            Vendor/llama-build/**/CMakeFiles/CMakeConfigureLog.yaml
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.llama.outputs.cache-hit != 'true'
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp/LICENSE
+            Vendor/llama.cpp/licenses
+          key: llama-windows-vulkan-cuda12.9.1-msvc14.44-1.4.363.0-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Build
+        id: package_build
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/package-windows.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Native CPU rejection
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /I Vendor/llama/include tests/native/accelerator-only.cpp /Fe:Vendor/llama/lib/accelerator-guard.exe /link /LIBPATH:Vendor/llama/lib ggml.lib ggml-base.lib
+          Vendor/llama/lib/accelerator-guard.exe "$(cygpath -m "$PWD/Vendor/llama/lib")"
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /I Vendor/llama/include tests/native/cuda-policy.cpp "/Fe:$RUNNER_TEMP/cuda-policy-check.exe" /link /LIBPATH:Vendor/llama/lib ggml.lib ggml-base.lib
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: DigUp-windows-x64
           path: |
             shell/src-tauri/target/release/bundle/nsis/*.exe
             shell/src-tauri/target/release/bundle/nsis/*.exe.sig
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: models
-          key: embeddinggemma-2-q8_0-bfcd298-windows
       - name: The installer
+        id: installer
         shell: bash
-        run: MODELS="$PWD/models" scripts/check-windows-package.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+        run: scripts/check-windows-accelerators.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+      - name: Application launch fixture
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          MSYS_NO_PATHCONV=1 rc.exe /nologo "/fo$RUNNER_TEMP/app-launch-fixture.res" tests/windows/app-launch-fixture.rc
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "$RUNNER_TEMP/app-launch-fixture.res" "/Fe:$RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
+      - name: Installed application discovery and launch
+        shell: pwsh
+        run: scripts/check-windows-applications.ps1
+      - name: Installed compact search panel
+        env:
+          DIGUP_PANEL_SCREENSHOT_LOG: "1"
+        shell: pwsh
+        run: scripts/check-windows-panel.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: installed-panel-evidence
+          path: ${{ runner.temp }}/native-panel-evidence
+          if-no-files-found: ignore
+      - name: Installed Windows settings activation
+        shell: pwsh
+        run: scripts/check-windows-settings.ps1
+      - name: Installed NTFS discovery and portable application launch
+        shell: pwsh
+        run: scripts/check-windows-discovery.ps1
+      - name: Collect physical CUDA acceptance tools (not hardware results)
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'cuda-validation'
+          New-Item -ItemType Directory -Force $destination | Out-Null
+          Copy-Item scripts/check-cuda-hardware.ps1,scripts/check-cuda-reference.py,scripts/benchmark-gpu-concurrency.py,scripts/check-windows-applications.ps1,docs/cuda-validation.md,docs/discovery-concurrency.md $destination
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'cuda-policy-check.exe'),(Join-Path $env:RUNNER_TEMP 'DigUp App Launch Fixture.exe') $destination
+          Copy-Item -Recurse Tests/LlamaRuntimeTests/Reference (Join-Path $destination 'Reference')
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DigUp-cuda-validation-tools
+          path: ${{ runner.temp }}/cuda-validation
+      - name: Application service protocol (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: python scripts/check-app-protocol.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe"
+      - name: Installed folder indexing (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: python scripts/check-windows-indexing.py --app "$env:LOCALAPPDATA\DigUp\DigUp.exe"
+      - name: Installed search concurrency and encoder failure recovery (synthetic unit vectors)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python scripts/check-search-responsiveness.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe" --output "$env:RUNNER_TEMP\search-scheduling.json"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          swiftc Sources/digup/SearchWorkQueue.swift tests/native/search-queue.swift -o "$env:RUNNER_TEMP\search-queue.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\search-queue.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Swift and Rust policy checks
+        if: ${{ !cancelled() && steps.package_build.outcome == 'success' }}
+        shell: bash
+        run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
+          # SwiftPM's test executables are outside the packaged helper folder, so expose the native DLLs explicitly.
+          export PATH="$PWD/shell/src-tauri/helper:$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PATH"
+          swift test --filter 'AccelerationTests|ApplicationStoreTests|WindowsSettingsStoreTests|CrawlerTests|IndexStoreTests|PortableInputTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|WorkerDeadlineTests|IndexConcurrencyTests|IndexPipelineTests|ReadyDispatchTests|PendingQueueTests|ServiceSchedulingTests|LongFilesTests'
+          for attempt in 1 2 3; do
+            swift test --skip-build --filter IndexConcurrencyTests
+          done
+          cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
+          cd shell/src-tauri
+          cargo test --release acceleration::tests --locked
+          cargo test --release applications:: --locked

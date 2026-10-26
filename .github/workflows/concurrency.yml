@@ -1,0 +1,169 @@
+name: Discovery and inference concurrency
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: concurrency-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Exercise native Windows admission and crash cleanup
+        shell: pwsh
+        run: |
+          cl.exe /nologo /W4 /std:c17 /I Sources/CGPUAdmission/include tests/native/admission-windows.c Sources/CGPUAdmission/lease.c "/Fe:$env:RUNNER_TEMP/admission-windows.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/admission-windows.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Record reference machine and storage fixture
+        shell: pwsh
+        run: |
+          $machine = [ordered]@{
+            os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber
+            cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors)
+            disks = @(Get-Disk | Select-Object Number, FriendlyName, BusType, Size)
+            commit = $env:GITHUB_SHA
+          }
+          $machine | ConvertTo-Json -Depth 5 | Tee-Object -FilePath reference-machine.json
+          cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml --lib discovery::benchmark::baseline -- --ignored --nocapture 2>&1 | Tee-Object -FilePath discovery-baseline.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: discovery-concurrency-measurements
+          path: |
+            reference-machine.json
+            discovery-baseline.txt
+
+  inference-contracts:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check physical-validation harness protocol without model inference
+        run: |
+          python3 -m py_compile scripts/benchmark-gpu-concurrency.py scripts/check-cuda-reference.py scripts/benchmark-index-service.py scripts/compare-index-service.py
+          python3 -m unittest discover -s tests/native -p 'test_worker_protocol.py'
+          python3 -m unittest discover -s tests/native -p 'test_index_service_benchmark.py'
+          python3 -m unittest discover -s tests/native -p 'test_index_service_comparison.py'
+      - name: Build and run real admission and pool contracts without model weights
+        run: |
+          clang -std=c17 -I Sources/CGPUAdmission/include -c Sources/CGPUAdmission/lease.c -o /tmp/digup-lease.o
+          swiftc -swift-version 6 -I Sources/CGPUAdmission/include Sources/DigUpKit/GPUAdmission.swift Sources/DigUpKit/EmbeddingPool.swift Sources/DigUpKit/EmbeddingPlan.swift tests/native/inference-contracts.swift /tmp/digup-lease.o -o /tmp/digup-inference-contracts
+          /tmp/digup-inference-contracts
+
+  shared-engine:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Select an installed Swift 6.2 or newer toolchain
+        run: |
+          selected=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -print | sort | tail -1)
+          test -n "$selected"
+          echo "DEVELOPER_DIR=$selected/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$selected/Contents/Developer" xcrun swift --version
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: native-cache
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Build the pinned native runtime
+        id: native-build
+        run: bash scripts/build-llama.sh
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.native-build.outcome == 'success'
+        with:
+          path: |
+            Vendor/llama
+            Vendor/llama.cpp
+            Vendor/llama-build
+          key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
+      - name: Continuous service scheduling and ready dispatch regressions
+        run: swift test --filter 'ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests'
+      - name: Optimized scheduling and storage regressions
+        run: swift test -c release --filter 'ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests|IndexConcurrencyTests|LongFilesTests'
+      - name: Bounded worker startup and response deadlines
+        run: swift test --filter 'WorkerDeadlineTests'
+      - name: Storage, prepared inference and long-file contracts with synthetic embedders
+        run: swift test --filter 'IndexPipelineTests|IndexConcurrencyTests|ApplicationStoreTests|WindowsSettingsStoreTests|AccelerationTests|SearchReadersTests|SearchTextTests|MixedSearchRankingTests|LongFilesTests'
+      - name: Compare the actual service with image, document and mixed workloads
+        env:
+          DIGUP_SERVICE_BENCHMARK: '1'
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/digup-service-base"
+          git fetch --no-tags origin 28c3f4b7c3f5f7c6da8c622bce0d35032b585c5b
+          git worktree add --detach "$base" 28c3f4b7c3f5f7c6da8c622bce0d35032b585c5b
+          cp Tests/DigUpServiceTests/ServiceIndexingBenchmark.swift "$base/Tests/DigUpServiceTests/"
+          mkdir -p "$base/Vendor"
+          for name in llama llama.cpp llama-build; do
+            ln -s "$GITHUB_WORKSPACE/Vendor/$name" "$base/Vendor/$name"
+          done
+          swift build --package-path "$base" --build-tests
+          swift build --build-tests
+          : > service-before.txt
+          : > service-after.txt
+          measure() {
+            local variant=$1 package=$2
+            /usr/bin/time -l swift test --skip-build --package-path "$package" --filter ServiceIndexingBenchmark 2>&1 | tee -a "service-$variant.txt"
+          }
+          for workload in images documents mixed; do
+            export DIGUP_SERVICE_WORKLOAD="$workload" DIGUP_SERVICE_TRIALS=1
+            for trial in 0 1 2 3 4; do
+              export DIGUP_SERVICE_TRIAL_NUMBER="$trial"
+              if (( trial % 2 == 0 )); then
+                measure before "$base"
+                measure after "$GITHUB_WORKSPACE"
+              else
+                measure after "$GITHUB_WORKSPACE"
+                measure before "$base"
+              fi
+            done
+          done
+          python3 scripts/compare-index-service.py service-before.txt service-after.txt > service-comparison.json
+          cat service-comparison.json
+      - name: Queue scale at 100,000 and one million metadata records
+        env:
+          DIGUP_QUEUE_BENCHMARK: '1'
+        run: |
+          set -euo pipefail
+          /usr/bin/time -l swift test --skip-build --filter largeMetadataQueuePagesWithoutMaterializingTheCorpus 2>&1 | tee queue-scale.txt
+      - name: Compare actual indexer before and after on this runner
+        env:
+          DIGUP_PIPELINE_BENCHMARK: '1'
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/digup-indexing-base"
+          git fetch --no-tags origin ecaf1a6f4d5ec5bc5a4683d266c17f4067976a61
+          git worktree add --detach "$base" ecaf1a6f4d5ec5bc5a4683d266c17f4067976a61
+          cp Tests/DigUpKitTests/IndexPipelineBenchmarkTests.swift "$base/Tests/DigUpKitTests/"
+          mkdir -p "$base/Vendor"
+          for name in llama llama.cpp llama-build; do
+            ln -s "$GITHUB_WORKSPACE/Vendor/$name" "$base/Vendor/$name"
+          done
+          swift test --package-path "$base" --filter IndexPipelineBenchmarkTests 2>&1 | tee indexing-before.txt
+          swift test --filter IndexPipelineBenchmarkTests 2>&1 | tee indexing-after.txt
+          python3 scripts/compare-index-pipeline.py indexing-before.txt indexing-after.txt > indexing-comparison.json
+          cat indexing-comparison.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: asynchronous-indexing-measurements
+          path: |
+            indexing-before.txt
+            indexing-after.txt
+            indexing-comparison.json
+            service-before.txt
+            service-after.txt
+            service-comparison.json
+            queue-scale.txt

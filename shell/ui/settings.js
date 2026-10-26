@@ -20,27 +20,57 @@ const notes = {
 };
 
 let info = {};
+let accelerationDirty = false;
+let displayedBackend = null;
+let deviceProbe = null;
+let deviceProbeStarted = false;
+let deviceProbeBusy = false;
+const gpuDrafts = new Map();
 let summaries = null;        // what's indexed under each folder (search-service's summaries)
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
 let removingCode = null;     // the code folder whose removal is being confirmed
+const activityView = new ActivityUI.View($("settings-activity"), { onSettings: tab => showTab(tab) });
 
 // MARK: Tabs
 
 function showTab(name) {
+  if (!["activity", "general", "folders", "code", "apps", "drives", "storage"].includes(name)) name = "general";
+  if (name === "drives" && !info.discovery?.supported) name = "general";
+  if (name === "activity") activityView.show(); else activityView.hide();
   for (const button of document.querySelectorAll("#tabs button")) {
     button.setAttribute("aria-selected", String(button.dataset.tab === name));
   }
   for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== name;
   if (name === "folders") loadSummaries();
   if (name === "code") loadCodeSummaries();
+  if (name === "apps") { loadApplicationSettings(); DiscoverySettings.render(); }
+  if (name === "drives") { DiscoverySettings.render(); DiscoverySettings.refreshVolumes(); DiscoverySettings.candidates(); }
 }
 
 for (const button of document.querySelectorAll("#tabs button")) button.onclick = () => showTab(button.dataset.tab);
+$("open-drives").onclick = $("folders-drives").onclick = () => showTab("drives");
+$("drive-file-settings").onclick = () => showTab("folders");
 
 // MARK: General
 
 function renderGeneral() {
+  const acceleration = info.acceleration || { backend: "vulkan" };
+  if (!accelerationDirty) {
+    $("accelerator").value = acceleration.backend;
+    $("gpu-device").value = acceleration.selectionRequired ? "" : acceleration.gpu || "";
+    displayedBackend = acceleration.backend;
+    gpuDrafts.set(displayedBackend, $("gpu-device").value);
+    $("npu-python").value = acceleration.python || "";
+    $("npu-models").value = acceleration.models || "";
+    $("gpu-jobs").value=String(acceleration.jobs||0);
+  }
+  $("accelerator").querySelector('option[value="metal"]').hidden = !/Mac/.test(navigator.platform);
+  showAcceleratorOptions();
+  const notice = acceleration.discoveryError || acceleration.migrationNotice || (acceleration.discoveryPending ? "Discovering hardware. App name search and launching are ready." : "");
+  $("accelerator-migration").textContent = notice;
+  $("accelerator-migration").hidden = !notice;
+  if (!deviceProbeStarted) { deviceProbeStarted = true; refreshGPUDevices(); }
   $("login-option").hidden = !info.canOpenAtLogin;
   $("login").checked = info.openAtLogin;
   $("tray-click-option").hidden = !info.canChooseTrayClick;
@@ -57,6 +87,69 @@ function renderGeneral() {
   $("recording").hidden = !recording;
   renderUpdates();
 }
+
+function showAcceleratorOptions() {
+  const npu = $("accelerator").value === "openvino-npu";
+  $("npu-options").hidden = !npu;
+  $("gpu-options").hidden = npu;
+  $("gpu-jobs-control").hidden=npu||$("accelerator").value==="metal";
+  $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
+  renderGPUDevices();
+}
+$("accelerator").onchange = () => {
+  if (displayedBackend) gpuDrafts.set(displayedBackend, $("gpu-device").value);
+  displayedBackend = $("accelerator").value;
+  $("gpu-device").value = gpuDrafts.get(displayedBackend) || "";
+  accelerationDirty = true; showAcceleratorOptions();
+};
+
+function renderGPUDevices() {
+  const backend = $("accelerator").value === "nvidia-cuda" ? "cuda" : $("accelerator").value === "metal" ? "metal" : "vulkan";
+  const devices = (deviceProbe?.devices || []).filter(d => d.backend === backend && d.available && (backend !== "vulkan" || d.vendorID !== 0x10de)
+    && ($("accelerator").value !== "amd-vulkan" || d.vendorID === 0x1002));
+  $("gpu-devices").replaceChildren(...devices.map(d => {
+    const option = document.createElement("option"); option.value = d.stableID || d.id; option.label = `${d.name} · ${d.id}`; return option;
+  }));
+  if (deviceProbeBusy) { $("gpu-discovery").textContent = "Checking device availability…"; return; }
+  if (!deviceProbe) return;
+  const problem = deviceProbe.backends?.find(b => b.backend === backend && b.state !== "available");
+  const detected = (deviceProbe.windowsAdapters || []).filter(d => !d.software && (backend !== "cuda" || d.vendorID === 0x10de));
+  $("gpu-discovery").textContent = devices.length
+    ? `${devices.map(d => d.name).join(", ")}. Device available; model execution is verified separately.`
+    : `${detected.length ? `Windows detects ${detected.map(d => d.name).join(", ")}. ` : ""}${problem?.message || "No eligible device was found for this backend."}`;
+}
+
+async function refreshGPUDevices() {
+  if (deviceProbeBusy) return;
+  deviceProbeBusy = true; $("refresh-gpus").disabled = true; renderGPUDevices();
+  try {
+    const result = await invoke("accelerator_devices");
+    if (result?.schemaVersion !== 1) throw new Error("Device discovery is unavailable for this build.");
+    deviceProbe = result;
+  } catch (error) { $("gpu-discovery").textContent = error?.message || String(error); }
+  finally {
+    deviceProbeBusy = false; $("refresh-gpus").disabled = false;
+    if (deviceProbe) renderGPUDevices();
+  }
+}
+$("refresh-gpus").onclick = refreshGPUDevices;
+window.__TAURI__.event.listen("acceleration", ({ payload }) => {
+  if (!accelerationDirty && info.shortcut) { info.acceleration = payload; renderGeneral(); }
+});
+for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs"]) $(id).oninput = () => { accelerationDirty = true; };
+$("apply-accelerator").onclick = async () => {
+  $("problem").hidden = true;
+  $("apply-accelerator").disabled = true;
+  try {
+    await invoke("set_acceleration", { acceleration: {
+      backend: $("accelerator").value, gpu: $("gpu-device").value.trim(), jobs:Number($("gpu-jobs").value),
+      python: $("npu-python").value.trim(), models: $("npu-models").value.trim(),
+    } });
+  } catch (error) {
+    fail(error);
+    $("apply-accelerator").disabled = false;
+  }
+};
 
 /// Updates: the daily check, and this version or the one waiting (updates.rs).
 function renderUpdates() {
@@ -135,15 +228,42 @@ function renderStatus() {
   $("status-line").textContent = state.line || "";
   $("status-bar").hidden = state.progress == null;
   $("status-fill").style.width = `${Math.round(100 * (state.progress || 0))}%`;
-  const parts = [`${(state.searchable || 0).toLocaleString()} of ${(state.files || 0).toLocaleString()} files searchable`];
+  const scanning = state.activity === "scanning" || state.scan?.event === "scan_progress" && state.activity !== "idle";
+  const preparing = scanning || !state.files && !state.searchable && (state.activity === "starting" || state.measuring || state.model?.state !== "ready");
+  const parts = preparing ? [state.searchable ? `${state.searchable.toLocaleString()} files remain searchable` : "Preparing the first file index"]
+    : [state.files ? `${(state.searchable || 0).toLocaleString()} of ${state.files.toLocaleString()} files searchable` : "No searchable local files"];
+  $("status-bar").hidden = !scanning && state.progress == null;
+  $("status-bar").classList.toggle("busy", scanning);
   if (state.pending) parts.push(`${state.pending.toLocaleString()} waiting`);
   if (state.unfinished) parts.push(`${state.unfinished.toLocaleString()} long ${state.unfinished === 1 ? "file" : "files"} to finish`);
+  const scan = state.scan || {};
+  if (scanning) {
+    if (scan.visited != null) parts.push(`${scan.visited.toLocaleString()} entries checked`);
+    if (scan.candidates != null) parts.push(`${scan.candidates.toLocaleString()} candidates so far`);
+    parts.push("Eligible totals are known after discovery");
+  }
+  if (scan.path) parts.push(shown(scan.path));
+  if (scan.event === "sync") {
+    if (scan.visited != null) parts.push(`${scan.visited.toLocaleString()} entries checked`);
+    const skipped = Object.entries(scan.skipped || {}).map(([reason, count]) => `${count.toLocaleString()} ${reason}`);
+    const folders = Object.entries(scan.skippedFolders || {}).map(([reason, count]) => `${count.toLocaleString()} folders: ${reason}`);
+    parts.push(...skipped, ...folders);
+  }
   $("status-detail").textContent = parts.join(" · ");
+  $("index-now").disabled = Boolean(state.busy);
   $("pause").hidden = !info.folders?.length;
   $("pause").textContent = state.paused ? "Resume" : "Pause";
 }
 
 $("pause").onclick = () => invoke("pause_indexing", { paused: !(info.state || {}).paused }).catch(fail);
+$("index-now").onclick = async () => {
+  $("index-now").disabled = true;
+  try { await invoke("index_now"); } catch (error) { fail(error); }
+  finally { renderStatus(); }
+};
+
+function showIndexingDiagnostics() { showTab("activity"); activityView.setTab("diagnostics"); }
+$("index-diagnostics").onclick = $("apps-diagnostics").onclick = showIndexingDiagnostics;
 
 async function loadSummaries() {
   try {
@@ -387,13 +507,16 @@ $("code-off-go").onclick = async () => {
 
 function renderStorage() {
   const storage = info.storage || {}, model = (info.state || {}).model || {};
-  const states = { ready: "Downloaded", checking: "Checking…", waiting: "Waiting for the network", failed: "The download stopped" };
+  const npu = info.acceleration?.backend === "openvino-npu";
+  const states = { ready: npu ? "Verified on Intel NPU" : "Downloaded", checking: npu ? "Verifying NPU execution…" : "Checking…",
+    waiting: "Waiting for the network", failed: "Model unavailable" };
   $("model-status").textContent = model.state === "downloading"
     ? `Downloading · ${model.total ? Math.floor((100 * model.bytes) / model.total) : 0}%` : states[model.state] || "";
   pathButton($("model-path"), storage.models);
   $("index-size").textContent = bytes(storage.indexBytes || 0) + (storage.codeBytes ? ` (code ${bytes(storage.codeBytes)})` : "");
   pathButton($("index-path"), storage.index);
-  $("version").textContent = `DigUp ${info.version || ""} · EmbeddingGemma 2 by Google (Apache 2.0), run by llama.cpp (MIT).`;
+  $("version").textContent = `DigUp ${info.version || ""} · EmbeddingGemma 2 by Google (Apache 2.0), `
+    + (npu ? "run by OpenVINO on NPU (Apache 2.0)." : "run by llama.cpp on GPU (MIT).");
   $("licenses").hidden = !info.licenses;
 }
 
@@ -468,19 +591,25 @@ function fail(error) {
 // MARK: Start
 
 async function refresh() {
-  info = await invoke("settings_info");
+  const fresh = await invoke("settings_info"), previousDiscovery = info.discovery;
+  info = fresh;
+  if (previousDiscovery && fresh.discovery) {
+    info.discovery = previousDiscovery; DiscoverySettings.accept("discovery", fresh.discovery);
+  }
   renderGeneral();
   renderStatus();
   renderFolders();
   renderFields();
   renderStorage();
   renderCode();
+  renderApplications();
   if (!$("folders").hidden) loadSummaries();
   if (!$("code").hidden) loadCodeSummaries();
 }
 
 // Back from the code folders window (or anything else that changed the settings): shown as they are now.
 window.addEventListener("focus", () => { refresh().catch(() => {}); });
+tauri.event.listen("settings-tab", ({ payload }) => showTab(payload));
 
 // Indexing as it goes, and what's indexed under each folder at most every two seconds.
 let summariesTimer = null;
@@ -488,6 +617,7 @@ tauri.event.listen("state", ({ payload }) => {
   const before = info.state || {};
   info.state = payload;
   renderStatus();
+  renderApplications(true);
   renderStorage();
   renderUpdates();
   // The code index's progress isn't in the state: its folders are asked again while the tab is up.
@@ -502,8 +632,16 @@ async function start() {
   await refresh();
   // Debug runs (--debug-settings): the page is up.
   if (info.debug) {
+    const report = await invoke("indexing_diagnostics");
+    const diagnostics = JSON.parse(report.split("\n\n--- ")[0]);
+    const activity = await invoke("activity_snapshot");
+    activityView.update(activity, "");
     invoke("debug_report", { report: { settings: true, hotkey: info.hotkey, openAtLogin: info.openAtLogin,
-                                       canOpenAtLogin: info.canOpenAtLogin, folders: info.folders } }).catch(() => {});
+                                       canOpenAtLogin: info.canOpenAtLogin, folders: info.folders,
+                                       diagnosticBuild: diagnostics.build, diagnosticBlocker: diagnostics.blockedBy,
+                                       activitySchema: activity.schemaVersion, activityPhase: activity.files.phase,
+                                       activityRendered: Boolean(activityView.get("phase").textContent),
+                                       accelerator: $("accelerator").value, cpuOption: Boolean($("accelerator").querySelector('option[value="cpu"]')) } }).catch(() => {});
   }
   const asked = new URLSearchParams(location.search).get("tab");   // dev snapshots: ?tab=folders
   showTab(asked || "general");

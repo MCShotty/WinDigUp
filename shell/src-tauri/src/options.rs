@@ -43,6 +43,8 @@ pub struct Options {
     pub debug_settings: bool,
     /// Debug runs with `debug_window`: after its report the window copies its selected result, as Ctrl+C does.
     pub debug_copy: bool,
+    /// Installed-app check: launch the selected catalog application, then report the accepted request.
+    pub debug_launch: bool,
     /// A desktop shortcut's command (hotkey.rs): show or hide the panel of the DigUp already running, or start DigUp
     /// with the panel up.
     pub toggle: bool,
@@ -73,6 +75,7 @@ impl Options {
             debug_window: None,
             debug_settings: false,
             debug_copy: false,
+            debug_launch: false,
             toggle: false,
             at_login: false,
             debug_update_check: false,
@@ -99,12 +102,17 @@ impl Options {
                 "--debug-window" => options.debug_window = Some(value()?),
                 "--debug-settings" => options.debug_settings = true,
                 "--debug-copy" => options.debug_copy = true,
+                "--debug-launch" => options.debug_launch = true,
                 "--toggle" => options.toggle = true,
                 "--at-login" => options.at_login = true,
                 "--debug-update-check" => options.debug_update_check = true,
                 "--debug-update-install" => options.debug_update_install = true,
                 _ => return Err(format!("unknown argument {arg}")),
             }
+        }
+        // A custom settings file is a development scope. Do not write its catalogs or vectors into an installed index.
+        if options.index.is_none(){
+            if let Some(settings)=&options.settings{options.index=Some(settings_index(settings));}
         }
         // On a Mac the shell is only tried out: the helper's default index there is the Mac app's.
         if cfg!(target_os = "macos") && options.index.is_none() {
@@ -140,4 +148,19 @@ fn default_helper() -> PathBuf {
         .into_iter()
         .find(|helper| helper.is_file())
         .unwrap_or_else(|| folder.join(name))
+}
+
+fn settings_index(settings:&std::path::Path)->PathBuf{
+    let absolute=if settings.is_absolute(){settings.to_path_buf()}else{std::env::current_dir().unwrap_or_else(|_|PathBuf::from(".")).join(settings)};
+    let absolute=absolute.canonicalize().unwrap_or(absolute);
+    let identity=crate::applications::digest(&absolute.to_string_lossy());
+    absolute.parent().unwrap_or_else(||std::path::Path::new(".")).join(format!(".digup-index-{identity}"))
+}
+#[cfg(test)]mod isolation_tests{
+    use super::*;
+    #[test]fn custom_settings_have_stable_distinct_adjacent_indexes(){
+        let root=std::env::temp_dir();let a=root.join("digup-settings-a.json");let b=root.join("digup-settings-b.json");
+        assert_ne!(settings_index(&a),settings_index(&b));assert_eq!(settings_index(&a),settings_index(&a));
+        assert_eq!(settings_index(&a).parent(),Some(root.as_path()));
+    }
 }

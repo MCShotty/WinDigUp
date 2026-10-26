@@ -1,0 +1,142 @@
+name: Activity and Apps UI
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: activity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-and-browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Native activity, catalog and transport contracts
+        run: cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked
+      - name: Official description source smoke (fixed public fixture)
+        run: cargo test --release --locked --manifest-path tests/applications/native/Cargo.toml live_community_manifest_round_trip -- --ignored --nocapture
+      - name: Actual-page browser regressions
+        env:
+          DIGUP_ACTIVITY_SCREENSHOTS: ${{ runner.temp }}/activity-screenshots
+          DIGUP_EDITOR_SCREENSHOT: ${{ runner.temp }}/activity-screenshots/apps-editor.png
+        run: |
+          npm install --prefix /tmp/digup-ui --no-audit --no-fund playwright@1.61.1
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory shell/ui > /tmp/ui-server.log 2>&1 &
+          server=$!
+          baseline_dir="$RUNNER_TEMP/floating-baseline"
+          mkdir -p "$baseline_dir"
+          git fetch --depth=1 origin 147d377b3b3b4207530bff4832ba606551207d12
+          git archive 147d377b3b3b4207530bff4832ba606551207d12 shell/ui | tar -x -C "$baseline_dir"
+          python3 -m http.server 8766 --bind 127.0.0.1 --directory "$baseline_dir/shell/ui" > /tmp/baseline-ui-server.log 2>&1 &
+          baseline_server=$!
+          trap 'kill "$server" "$baseline_server"' EXIT
+          export NODE_PATH=/tmp/digup-ui/node_modules DIGUP_CHROME=/usr/bin/google-chrome
+          node --check shell/ui/panel.js
+          export DIGUP_FLOATING_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/floating"
+          DIGUP_UI_URL=http://127.0.0.1:8766 node tests/ui/floating-panel.cjs --baseline
+          DIGUP_FLOATING_SCREENSHOT_LOG=1 node tests/ui/floating-panel.cjs
+          node --check shell/ui/activity.js
+          node --check shell/ui/applications-settings.js
+          node tests/ui/mixed-ordering-contract.cjs
+          export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
+          DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/mixed-ordering.cjs
+          DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/drive-picker.cjs
+          node tests/ui/acceleration.cjs
+          node tests/ui/applications.cjs
+          node tests/ui/activity.cjs
+          node tests/ui/indexing-pipeline.cjs
+          node tests/ui/apps-editor.cjs
+          node tests/ui/bug-regressions.cjs
+          export DIGUP_SEARCH_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/search"
+          node tests/ui/search-responsiveness.cjs
+          node --check shell/ui/windows-settings.js
+          node tests/ui/windows-settings.cjs
+          node --check shell/ui/mixed-results.js
+          node --check shell/ui/discovery-settings.js
+          node tests/ui/discovery-settings.cjs
+          node --check shell/ui/pipeline.js
+          node --check shell/ui/appearance.js
+          DIGUP_CONCURRENCY_SCREENSHOT_LOG=1 node tests/ui/concurrency.cjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: activity-browser-evidence
+          path: ${{ runner.temp }}/activity-screenshots
+          if-no-files-found: ignore
+  windows-shell:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Pinned Tauri CLI without npm PATH shims
+        shell: bash
+        run: bash scripts/tauri-cli.sh --version
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            shell/src-tauri/target
+          key: floating-shell-${{ runner.os }}-${{ hashFiles('shell/src-tauri/Cargo.lock') }}
+      - name: Type check native Tauri commands, report export and Windows integration
+        run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
+      - name: Build the real native shell without model libraries
+        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
+      - name: Build the disposable Shell shortcut fixture
+        shell: pwsh
+        run: |
+          rc.exe /nologo "/fo$env:RUNNER_TEMP/app-launch-fixture.res" tests/windows/app-launch-fixture.rc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "$env:RUNNER_TEMP/app-launch-fixture.res" "/Fe:$env:RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Real WebView2 panel with unavailable helper (no inference)
+        env:
+          DIGUP_PANEL_SCREENSHOT_LOG: "1"
+        shell: pwsh
+        run: |
+          $missing = Join-Path $env:RUNNER_TEMP ('missing-helper-' + [Guid]::NewGuid().ToString('N') + '.exe')
+          scripts/check-windows-panel.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Helper $missing
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: native-panel-evidence
+          path: ${{ runner.temp }}/native-panel-evidence
+          if-no-files-found: ignore
+      - name: Real WebView2 portable-app discovery and launch (no inference)
+        shell: pwsh
+        run: scripts/check-windows-discovery.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Component "$PWD/shell/src-tauri/target/debug/digup-discovery.exe"
+      - name: Compile portable search-vector conversion for Windows x64
+        run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"
+
+  windows-discovery:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: discovery-build-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            tests/applications/native/target
+          key: discovery-windows-2025-v1-${{ hashFiles('tests/applications/native/Cargo.lock') }}
+      - name: Build the real discovery component and portable fixture
+        id: discovery-build
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path tests/applications/native/Cargo.toml --bin digup-discovery-fixture
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rc.exe /nologo "/fo$env:RUNNER_TEMP/app-launch-fixture.res" tests/windows/app-launch-fixture.rc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl.exe /nologo /EHsc /std:c++17 /MT tests/windows/app-launch-fixture.cpp "$env:RUNNER_TEMP/app-launch-fixture.res" "/Fe:$env:RUNNER_TEMP/DigUp App Launch Fixture.exe" /link /SUBSYSTEM:WINDOWS shell32.lib user32.lib ole32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.discovery-build-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            tests/applications/native/target
+          key: discovery-windows-2025-v1-${{ hashFiles('tests/applications/native/Cargo.lock') }}
+      - name: Disposable NTFS volume and standard-user permission boundary
+        shell: pwsh
+        run: scripts/check-windows-discovery.ps1 -Component "$PWD/tests/applications/native/target/release/digup-discovery-fixture.exe" -ComponentOnly

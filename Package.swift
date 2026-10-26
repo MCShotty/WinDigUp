@@ -28,9 +28,11 @@ let runpath = ["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN",
 let llamaModule = "Sources/CLlamaShared"
 #endif
 let llamaLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/llama/lib"] + runpath)]
-let engineDependencies: [Target.Dependency] = ["CSQLite", "CStb", "CMiniz", "CPDFium"]
+let engineDependencies: [Target.Dependency] = ["CSQLite", "CStb", "CMiniz", "CPDFium", "CSearchMath"]
 let engineLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/pdfium/lib"] + runpath)]
 let portableTargets: [Target] = [
+    // Host-side similarity scoring. CPU feature checks apply only to stored vector conversion, never inference.
+    .target(name: "CSearchMath"),
     // SQLite with FTS5 (Windows has no system SQLite, Linux's may lack FTS5 or its headers).
     .target(name: "CSQLite", path: "Vendor/sqlite", cSettings: [
         .define("SQLITE_ENABLE_FTS5"), .define("SQLITE_THREADSAFE", to: "1"), .define("SQLITE_DQS", to: "0"),
@@ -82,7 +84,8 @@ let package = Package(
     targets: portableTargets + [
         // The engine: crawler, extractors, index store, the embedder interface and worker client, search. No UI.
         // Platform/ holds what differs by OS (Apple's frameworks on macOS, the C libraries above elsewhere).
-        .target(name: "DigUpKit", dependencies: engineDependencies, linkerSettings: engineLink),
+        .target(name: "CGPUAdmission"),
+        .target(name: "DigUpKit", dependencies: engineDependencies + ["CGPUAdmission"], linkerSettings: engineLink),
         // llama.cpp (scripts/build-llama.sh builds it into Vendor/llama) and EmbeddingGemma 2 on it.
         .systemLibrary(name: "CLlama", path: llamaModule),
         .target(name: "LlamaRuntime", dependencies: ["CLlama", "DigUpKit"], linkerSettings: llamaLink),
@@ -92,6 +95,7 @@ let package = Package(
         // Pictures/ holds ImageTests' pictures (scripts/testbed/make_test_pictures.swift) and Videos/ VideoTests' video,
         // read by path.
         .testTarget(name: "DigUpKitTests", dependencies: ["DigUpKit"], exclude: ["Pictures", "Videos"]),
+        .testTarget(name: "DigUpServiceTests", dependencies: ["digup", "DigUpKit"]),
         // Reference/ holds the fixed inputs and vectors of ReferenceVectorTests, read by path.
         .testTarget(name: "LlamaRuntimeTests", dependencies: ["LlamaRuntime"], exclude: ["Reference"]),
     ] + appTargets

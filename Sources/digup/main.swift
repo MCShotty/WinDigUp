@@ -1,6 +1,9 @@
 import DigUpKit
 import Foundation
 import LlamaRuntime
+#if os(Windows)
+import WinSDK
+#endif
 
 // DigUp's developer CLI. Every command works on an explicit index folder, so tests never touch the real one.
 
@@ -17,6 +20,7 @@ let usage = """
       digup search <words>... [--kind K,K] [-n 10] [--json]
                                               "code: <words>" searches the code index
       digup status                            what's in the index
+      digup accelerator                       verify the selected hardware device (all model stages for NPU)
       digup speed [--model [--if-needed] [--when-quiet S] [--tries N]] [--json]
                                               this machine's speed next to the M4 Pro behind the estimates, and
                                               what indexing has measured here (costs.json in the index folder);
@@ -49,8 +53,9 @@ let usage = """
       --code-stretch N     characters a stretch of code holds at most (default 1800; 1200 and 3600 lost on the evals)
 
     The model: EmbeddingGemma 2 on llama.cpp, from $DIGUP_MODELS (only there, when set), else
-    ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_WORKER_DIR=worker uses the
-    mlx-vlm reference worker instead (evals).
+    ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_ACCELERATOR chooses vulkan,
+    amd-vulkan, nvidia-cuda or openvino-npu. DIGUP_GPU_JOBS is 0 (automatic), 1, 2, or 3.
+    CPU inference and unverified worker overrides are disabled.
     """
 
 struct CLIError: Error, CustomStringConvertible {
@@ -65,7 +70,7 @@ struct Arguments {
     var flags: Set<String> = []
     static let valued: Set<String> = ["--index", "--limit", "--kind", "-n", "--zgate", "--word-weight", "--new-limit",
                                       "--linger", "--shot-tokens", "--code-stretch", "--encoder-idle", "--to",
-                                      "--memory-limit", "--time-limit", "--tries", "--when-quiet"]
+                                      "--memory-limit", "--time-limit", "--tries", "--when-quiet", "--worker-log"]
     static let repeated: Set<String> = ["--exclude", "--exclude-ext", "--code-root", "--code-exclude"]
 
     init(_ raw: ArraySlice<String>) throws {
@@ -90,10 +95,11 @@ struct Arguments {
         }
     }
 
-    var indexFolder: URL {
-        guard let chosen = values["--index"] else { return AppPaths.defaultIndex.standardizedFileURL }
-        return URL(fileURLWithPath: (chosen as NSString).expandingTildeInPath).standardizedFileURL
+    var baseIndexFolder: URL {
+        (values["--index"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? AppPaths.defaultIndex).standardizedFileURL
     }
+    var indexFolder: URL { ((try? Acceleration.selected()) ?? .vulkan).indexDirectory(base: baseIndexFolder) }
 
     /// `--code`: the code index, not the main one.
     var code: Bool { flags.contains("--code") }
@@ -136,7 +142,19 @@ struct Arguments {
     /// The folder can be listed. One that macOS won't let us read (Files and Folders privacy) looks empty to a crawl,
     /// which must never be mistaken for "everything in it was deleted". (The first look may bring up macOS's prompt.)
     static func isReadable(_ url: URL) -> Bool {
+        #if os(Windows)
+        // Check directory access without allocating a list of every child before the real scan even starts.
+        let native = url.path.replacingOccurrences(of: "/", with: "\\")
+        let handle = native.withCString(encodedAs: UTF16.self) {
+            CreateFileW($0, DWORD(FILE_LIST_DIRECTORY), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                        nil, DWORD(OPEN_EXISTING), DWORD(FILE_FLAG_BACKUP_SEMANTICS), nil)
+        }
+        guard let handle, handle != INVALID_HANDLE_VALUE else { return false }
+        CloseHandle(handle)
+        return true
+        #else
         (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
+        #endif
     }
 
     /// Dev knobs for A/B runs in evals/.
@@ -194,19 +212,74 @@ func skippedLine(_ skipped: [String: Int]) -> String {
 
 // MARK: Commands
 
-/// The embedding runtime: llama.cpp in this process, or the worker in $DIGUP_WORKER_DIR (the mlx-vlm reference).
+private final class WorkerLogs: @unchecked Sendable {
+    private let lock=NSLock()
+    private let base:URL
+    private var number=0
+    init(_ base:URL){self.base=base}
+    func next()->URL{
+        lock.withLock{
+            number+=1
+            return number==1 ? base : base.deletingPathExtension().appendingPathExtension("gpu-\(number).log")
+        }
+    }
+}
+
+/// Strict GPU llama.cpp, or the worker that verifies every OpenVINO graph on Intel NPU.
 func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) throws -> any Embedder {
+    try FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
     if var config = try WorkerConfig.fromEnvironment() {
         config.log = log
         config.qos = qos
-        return try EmbeddingWorker(config, textOnly: textOnly)
+        let worker = try EmbeddingWorker(config, textOnly: textOnly)
+        guard worker.info.executionPolicy == "accelerator-only", worker.info.device?.hasPrefix("NPU") == true else {
+            worker.close()
+            throw WorkerError.failed("OpenVINO worker did not verify exclusive NPU execution")
+        }
+        return worker
     }
-    return try LlamaEmbedder(models: try LlamaModels.locate(), textOnly: textOnly, log: log)
+    #if !os(macOS)
+    let command=CommandLine.arguments.dropFirst().first ?? ""
+    if !textOnly && command != "worker" {
+        let selected=try LlamaEmbedder.verifyDevice()
+        let maximum=selected.stableID.isEmpty ? 1 : GPUAdmission.configuredMaximum
+        let executable=Bundle.main.executableURL ?? URL(fileURLWithPath:CommandLine.arguments[0])
+        let raw=CommandLine.arguments
+        let custom=raw.indices.first(where:{raw[$0]=="--index" && $0+1<raw.count}).map{raw[$0+1]}
+        let base=custom.map{URL(fileURLWithPath:$0)} ?? AppPaths.defaultIndex
+        var config=WorkerConfig.helper(executable)
+        config.arguments += ["--index",base.path]
+        config.environment["DIGUP_GPU"]=selected.stableID.isEmpty ? selected.id : selected.stableID
+        config.log=log
+        config.qos=qos
+        config.startupTimeout=180
+        config.requestTimeout=180
+        if command=="index-service" {
+            config.onInferenceActivity={activity in emitInference(activity)}
+        }
+        let workerConfig=config
+        let logs=WorkerLogs(log)
+        let pool=try EmbeddingPool(maximum:maximum){
+            var next=workerConfig
+            next.log=logs.next()
+            next.arguments += ["--worker-log",next.log!.path]
+            return try EmbeddingWorker(next,textOnly:false)
+        }
+        if command=="index-service"{pool.onCapacity={emitInference($0)}}
+        return pool
+    }
+    #endif
+    let callback:(@Sendable (InferenceActivity)->Void)? = CommandLine.arguments.dropFirst().first=="worker" ? { @Sendable activity in emitInference(activity) } : nil
+    let model=try LlamaEmbedder(models:try LlamaModels.locate(),textOnly:textOnly,log:log,onActivity:callback)
+    if CommandLine.arguments.dropFirst().first=="worker" {
+        model.onInferenceActivity={activity in emitInference(activity)}
+    }
+    return model
 }
 
 /// `makeEmbedder`'s vector source when it's known without starting it: llama.cpp's always is.
 func embedderSource() -> String? {
-    ProcessInfo.processInfo.environment["DIGUP_WORKER_DIR"] == nil ? LlamaEmbedder.modelInfo.vectorSource : nil
+    (try? Acceleration.selected()) == .openvinoNPU ? nil : LlamaEmbedder.modelInfo.vectorSource
 }
 
 func estimate(_ args: Arguments) throws {
@@ -301,6 +374,7 @@ func estimate(_ args: Arguments) throws {
 }
 
 func index(_ args: Arguments) throws {
+    FileHandle.standardError.write(Data("Opening index at \(args.indexFolder.path)…\n".utf8))
     let store = try args.store()
     if args.flags.contains("--reindex") { try store.resetAll() }
     let indexer = try Indexer(store: store, options: args.options, makeEmbedder: {
@@ -311,7 +385,10 @@ func index(_ args: Arguments) throws {
     try store.readAgainOnce()   // what older indexes couldn't read: scanned pages' words, SVGs
     try indexer.checkModel()
     let folders = try args.folders()
-    let sync = try indexer.sync(folders)
+    print("Scanning \(folders.count) \(folders.count == 1 ? "folder" : "folders")…")
+    let sync = try indexer.sync(folders, onProgress: { progress in
+        FileHandle.standardError.write(Data("Scan \(progress.stage): \(progress.visited) entries, \(progress.candidates) candidates · \(progress.path)\n".utf8))
+    })
     print("index: \(tilde(store.file.path))")
     print("sync: \(sync.added) new · \(sync.changed) changed · \(sync.moved) moved · \(sync.removed) removed · \(sync.unchanged) unchanged")
     if !sync.crawl.skipped.isEmpty { print("skipped: " + skippedLine(sync.crawl.skipped)) }
@@ -416,6 +493,7 @@ func status(_ args: Arguments) throws {
 
 /// The app's indexing helper: sync + index on request, JSON events out (IndexService.swift).
 func indexService(_ args: Arguments) throws -> Int32 {
+    emit(["event": "phase", "stage": "opening_index", "path": args.indexFolder.path, "message": "Opening the file index…"])
     // One model for both indexes, started when the first file needs it (`SharedEmbedder`).
     let model = SharedEmbedder {
         try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"), qos: .utility)
@@ -476,124 +554,44 @@ func speed(_ args: Arguments) throws {
     }
 }
 
-/// The model timed on the processor alone, in a process of its own (llama.cpp loads its backends once a process), with
-/// the vectors it made, and how long it took to load.
-func processorAlone(folder: URL, tries: Int) throws -> (measured: ModelSpeed.Measurement, load: Double) {
-    guard let program = Bundle.main.executableURL else { throw CLIError("where is digup?") }
-    let process = Process()
-    process.executableURL = program
-    process.arguments = ["speed", "--model", "--measure-only", "--json", "--tries", String(tries), "--index", folder.path]
-    process.environment = ProcessInfo.processInfo.environment.merging(["DIGUP_DEVICE": "cpu"]) { $1 }
-    let output = Pipe()
-    process.standardOutput = output
-    try process.run()
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    let line = String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
-    guard process.terminationStatus == 0,
-          let reply = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-          let seconds = reply["seconds"] as? [String: Double], let load = reply["load"] as? Double,
-          let times = ModelSpeed.Times(fields: seconds)
-    else { throw CLIError("the processor's speed check failed") }
-    let vectors = (reply["vectors"] as? [String: [Double]] ?? [:]).mapValues { $0.map(Float.init) }
-    return (ModelSpeed.Measurement(times: times, vectors: vectors, tries: reply["tries"] as? [Double] ?? [],
-                                   steady: reply["steady"] as? Bool ?? true, others: reply["others"] as? Double ?? 0),
-            load)
-}
-
-/// `digup speed --model [--if-needed] [--when-quiet S] [--tries N] [--json]`: the model timed on this machine, kept in
-/// costs.json beside the index for estimates. Where there's a GPU it's timed against the processor alone, and the
-/// faster is kept (`device`) for every helper: a weak integrated GPU can be slower than its processor (an i5-8350U's
-/// UHD 620 under Vulkan: 76 s against 44 s). The GPU is kept only if its vectors are the processor's too (cosine 0.999,
-/// as ReferenceVectorTests asks): Mesa's lavapipe made pictures and sound at 0.94–0.97. The processor goes first, so a
-/// GPU that's clearly slower stops after two tries.
-///
-/// One check was timed at a bad moment (an RTX 4050 laptop taken for 30 times slower than its indexing went), so
-/// `--when-quiet` waits up to S seconds for other programs to settle, each input's time is the best of up to `--tries`
-/// (3), and a check with reason for doubt (its best try wasn't seen twice, or indexing went four times faster than it
-/// said) is timed again by the next `--if-needed`, up to three checks. A machine that never settled isn't a reason by
-/// itself: the same laptop kept 1.3 processors busy with other work through a whole minute, and its check came out
-/// right (steady tries, the GPU's times as timed by hand). `--if-needed` otherwise leaves one measured before alone, unless it predates the GPU's choice.
-/// The shell runs it once the model is in. `--measure-only`: the times, nothing kept (the processor's run).
+/// Time the selected accelerator. Never load a CPU reference model or select CPU after benchmarking.
 func modelSpeed(_ args: Arguments) throws {
+    _ = try Acceleration.selected()
     let folder = args.indexFolder
     let json = args.flags.contains("--json")
-    let tries = args.values["--tries"].flatMap(Int.init) ?? 3
-    let log = folder.appendingPathComponent("worker.log")
-    if args.flags.contains("--measure-only") {
-        let started = Date()
-        let model = try makeEmbedder(textOnly: false, log: log)
-        let load = Date().timeIntervalSince(started)
-        let measured = try ModelSpeed.measure(model, tries: tries)
-        model.close()
-        emit(["event": "speed", "seconds": measured.times.fields, "load": load, "vectors": measured.vectors,
-              "tries": measured.tries, "steady": measured.steady, "others": measured.others])
-        return
+    var key = "accelerator-only:" + Acceleration.cacheKey
+    if try Acceleration.selected() == .nvidiaCUDA {
+        let device = try LlamaEmbedder.verifyDevice()
+        key += ":" + device.cacheIdentity + ":" + LlamaEmbedder.modelInfo.vectorSource
     }
     let saved = MeasuredCosts.load(from: folder)
     var speed = saved.speed ?? MeasuredCosts.Speed(embedding: 1, ocr: 1)
-    let compares = !LlamaEmbedder.cpuOnly && LlamaEmbedder.hasGPU && embedderSource() != nil
-    let checks = speed.kinds == nil ? 0 : speed.checks ?? 1
+    let checks = speed.device == key ? speed.checks ?? 0 : 0
     let again = checks < 3 && (speed.doubtful == true || saved.pace.map { $0 < 0.25 } == true)
-    if args.flags.contains("--if-needed"), let kinds = speed.kinds, speed.device != nil || !compares, !again {
-        if json { emit(["event": "speed", "kinds": kinds, "measured": false]) }
+    if args.flags.contains("--if-needed"), speed.device == key, let kinds = speed.kinds, !again {
+        if json { emit(["event": "speed", "kinds": kinds, "measured": false, "device": key]) }
         return
     }
     let quiet = args.values["--when-quiet"].flatMap(Double.init).map { SystemLoad.waitForQuiet(limit: $0) }
         ?? (waited: 0, settled: true, calmest: nil)
     let started = Date()
-    let alone = compares ? try processorAlone(folder: folder, tries: tries) : nil
-    let loading = Date()
-    let model = try makeEmbedder(textOnly: false, log: log)
-    var load = Date().timeIntervalSince(loading)
-    let measured = try ModelSpeed.measure(model, tries: tries, rival: alone?.measured.total)
-    model.close()
-    var (kept, other) = (measured, alone?.measured)
-    var compared: [String: Any] = [:]
-    if let alone {
-        let agreement = ModelSpeed.agreement(measured.vectors, alone.measured.vectors)
-        func fields(_ run: ModelSpeed.Measurement, load: Double) -> [String: Any] {
-            ["seconds": run.times.fields, "load": load, "tries": run.tries, "steady": run.steady, "others": run.others]
-        }
-        compared = ["gpu": fields(measured, load: load), "cpu": fields(alone.measured, load: alone.load),
-                    "agreement": agreement]
-        speed.device = agreement >= 0.999 && measured.total <= alone.measured.total ? "gpu" : "cpu"
-        if speed.device == "cpu" { (kept, other, load) = (alone.measured, measured, alone.load) }
-    }
-    // Close times from a run whose best wasn't seen twice could have gone the other way. (Other programs' work while it
-    // timed isn't a reason: with every processor busy, the system's count and this process's differ by more than they
-    // do, and a busy machine shows as tries that don't match.)
-    let close = other.map { !$0.steady && $0.total < kept.total * 1.3 } ?? false
-    speed.kinds = ModelSpeed.factors(kept.times)
+    let model = try makeEmbedder(textOnly: false, log: folder.appendingPathComponent("worker.log"))
+    defer { model.close() }
+    let load = Date().timeIntervalSince(started)
+    let measured = try ModelSpeed.measure(model, tries: args.values["--tries"].flatMap(Int.init) ?? 3)
+    speed.device = key
+    speed.kinds = ModelSpeed.factors(measured.times)
     speed.checks = checks + 1
-    speed.doubtful = !kept.steady || close ? true : nil
-    // What indexing measured on the other device doesn't hold on this one.
-    MeasuredCosts.setSpeed(speed, in: folder, forgetTallies: saved.speed?.device.map { $0 != speed.device } ?? false)
-    let total = Date().timeIntervalSince(started)
-    if json {
-        var fields: [String: Any] = ["event": "speed", "kinds": speed.kinds ?? [:], "seconds": kept.times.fields,
-                                     "load": load, "total": total, "measured": true, "tries": kept.tries,
-                                     "others": kept.others, "waited": quiet.waited, "settled": quiet.settled,
-                                     "doubtful": speed.doubtful ?? false, "checks": checks + 1]
-        if let calmest = quiet.calmest { fields["calmest"] = calmest }
-        if let device = speed.device { fields["device"] = device }
-        fields.merge(compared) { $1 }
-        emit(fields)
-        return
+    speed.doubtful = !measured.steady ? true : nil
+    if !args.flags.contains("--measure-only") {
+        MeasuredCosts.setSpeed(speed, in: folder, forgetTallies: saved.speed?.device != key)
     }
-    if quiet.waited > 0 {
-        print(String(format: "waited %.0f s for other programs to settle%@", quiet.waited, quiet.settled ? "" : " (they didn't)"))
-    }
-    if let device = speed.device { print("runs on the \(device == "cpu" ? "processor (faster here than the GPU)" : "GPU")") }
-    print(String(format: "the model loaded in %.2f s; the check took %.1f s; tries %@", load, total,
-                 kept.tries.map { String(format: "%.2f s", $0) }.joined(separator: ", ")))
-    for (name, seconds) in kept.times.fields.sorted(by: { $0.key < $1.key }) {
-        let base = ModelSpeed.baseline.fields[name] ?? seconds
-        print(String(format: "  %@ %.3f s (M4 Pro %.3f s, ×%.1f)", name, seconds, base, seconds / base))
-    }
-    if speed.doubtful == true { print("in doubt (a busy moment): timed again at the next --if-needed") }
-    print("kept in \(tilde(MeasuredCosts.file(in: folder).path)): " + (speed.kinds ?? [:]).sorted { $0.key < $1.key }
-        .map { String(format: "%@ ×%.1f", $0.key, $0.value) }.joined(separator: " · "))
+    var fields: [String: Any] = ["event": "speed", "kinds": speed.kinds ?? [:], "seconds": measured.times.fields,
+        "load": load, "total": Date().timeIntervalSince(started), "measured": true, "device": model.info.device ?? key,
+        "execution_policy": "accelerator-only", "tries": measured.tries, "others": measured.others,
+        "waited": quiet.waited, "settled": quiet.settled, "doubtful": speed.doubtful ?? false, "checks": checks + 1]
+    for (name, value) in model.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"].contains(name) { fields[name] = value }
+    if json { emit(fields) } else { print("Accelerator: \(model.info.device ?? key); CPU inference disabled. \(measured.times.fields)") }
 }
 
 // MARK: Eval
@@ -701,18 +699,20 @@ do {
         || command == "estimate" && args.flags.contains("--json") {
         ParentWatch.start()   // an app's helper goes when the app does
     }
-    // Where this machine's speed check found its processor faster than its GPU, the model runs on the processor.
-    if command != "speed", MeasuredCosts.load(from: args.indexFolder).speed?.device == "cpu" {
-        LlamaEmbedder.cpuOnly = true
-    }
-    #if !os(macOS)
-    // Queries are a few words: the processor encodes one in hundredths of a second, and starts sooner than a GPU (an RTX
-    // 4050 laptop: a search from scratch 1.8 s on its i7, 3.0 s on the GPU under Vulkan). Indexing keeps the GPU.
-    if command == "search-service" {
-        LlamaEmbedder.cpuOnly = true
-    }
-    #endif
     switch command {
+    case "accelerator":
+        _ = try Acceleration.selected()
+        if args.flags.contains("--list") { emit(try LlamaEmbedder.deviceInventory()); break }
+        if try Acceleration.selected() == .openvinoNPU {
+            let model = try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"))
+            defer { model.close() }
+            emit(["device": model.info.device ?? "", "execution_policy": model.info.executionPolicy ?? ""])
+        } else {
+            let value = try LlamaEmbedder.verifyDevice()
+            var result = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]
+            result["device"] = value.name; result["execution_policy"] = "accelerator-only"; result["probe_only"] = true
+            emit(result)
+        }
     case "estimate": try estimate(args)
     case "index": try index(args)
     case "search": try search(args)
@@ -728,6 +728,9 @@ do {
         exit(2)
     }
 } catch {
+    if CommandLine.arguments.contains("--json") {
+        emit(["event": "error", "error": String("\(error)".prefix(1500)), "message": String("\(error)".prefix(1500))])
+    }
     FileHandle.standardError.write(Data("error: \(error)\n".utf8))
     exit(1)
 }

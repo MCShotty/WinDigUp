@@ -66,12 +66,20 @@ public final class IndexStore {
 
     public let file: URL
 
-    public init(directory: URL, file name: String = IndexStore.mainFile) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    public init(directory: URL, file name: String = IndexStore.mainFile, readOnly: Bool = false) throws {
+        if !readOnly { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
         self.directory = directory
         file = directory.appendingPathComponent(name)
-        db = try Database(path: file.path)
-        try migrate()
+        db = try Database(path: file.path, readOnly: readOnly)
+        if !readOnly {
+            try migrate()
+            try db.execute("PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-2048;")
+        }
+        else {
+            var version: Int64 = 0
+            try db.query("PRAGMA user_version") { version = $0.int(0) }
+            guard version == Self.schemaVersion else { throw Database.Failure(message: "The search index is being prepared by its writer") }
+        }
     }
 
     /// Bytes on disk: the database and its write-ahead log.
@@ -323,9 +331,15 @@ public final class IndexStore {
         let filter = ids.map { " AND id IN (\($0.map(String.init).joined(separator: ",")))" } ?? ""
         try db.query("""
             SELECT \(Self.fileColumns) FROM files WHERE state = 'pending'\(filter)\(scopeSQL)
-            ORDER BY \(FileKind.indexingOrderSQL), mtime DESC LIMIT ?
+            ORDER BY \(FileKind.indexingOrderSQL), mtime DESC, id ASC LIMIT ?
             """, scopeValues + [.int(Int64(limit ?? -1))]) { out.append(Self.record($0)) }
         return out
+    }
+
+    func pendingQueue(priorityIDs: Set<Int64> = [], includePending: Bool = true, limit: Int? = nil,
+                      state: String = "pending", pageSize: Int = 128) throws -> PendingFileQueue {
+        try PendingFileQueue(store: self, priorityIDs: priorityIDs, includePending: includePending, limit: limit,
+                             state: state, scopeSQL: scopeSQL, scopeValues: scopeValues, pageSize: pageSize)
     }
 
     public func pendingCount() throws -> Int {

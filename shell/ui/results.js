@@ -5,7 +5,29 @@
 
 const tauri = window.__TAURI__;
 const invoke = (command, args) => tauri.core.invoke(command, args);
-const ask = (request) => invoke("ask", { request });
+const ask = async (request) => invoke("ask", { request:{...request,session_id:await SearchTiming.session} });
+// Input-to-render duration is measured here; helper durations have their own monotonic origin.
+const SearchTiming = {
+  session:invoke("search_session").then(value=>Number.isSafeInteger(value)?value:0).catch(()=>0),
+  generation: 0, input: 0, nextId: 0,
+  begin(generation) { this.generation = generation; this.input = performance.now(); },
+  async measure(phase, action, passive=false) {
+    const generation=this.generation,input=this.input,start=performance.now(),requestId=++this.nextId;
+    const reply=await action();const received=performance.now();
+    if(!passive&&reply?.status!=="superseded")requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      if(generation!==this.generation)return;
+      const end=performance.now(),ms=(reply?.ms&&typeof reply.ms==="object"?reply.ms:
+        (phase==="app_purpose"||phase==="settings_purpose")&&reply?.semantic?.ms&&typeof reply.semantic.ms==="object"?reply.semantic.ms:{});
+      const sample={...ms,phase,generation,requestId,total:end-input,roundtrip:received-start,debounce:start-input,
+        render:end-received,native:typeof reply?.ms==="number"?reply.ms:undefined,
+        nativeRequestId:reply?.id??((phase==="app_purpose"||phase==="settings_purpose")?reply?.semantic?.id:undefined),
+        cacheHit:ms.cache_hit===true,semantic:reply?.meaning===true||reply?.semantic?.meaning===true};
+      invoke("record_search_timing",{sample}).catch(()=>{});
+      window.dispatchEvent(new CustomEvent("digup-search-timing",{detail:sample}));
+    }));
+    return reply;
+  },
+};
 const fileURL = (path) => tauri.core.convertFileSrc(path);
 
 const isMac = /Mac/.test(navigator.platform);
@@ -44,6 +66,8 @@ function placeOf(hit) {
 /// Opens a result: code in the editor at its line, a PDF at its page and a recording or video at its moment in their
 /// default apps (where those apps can be told), anything else plainly.
 function openResult(hit) {
+  if (isSetting(hit)) return WindowsSettings.open(hit);
+  if (isApp(hit)) return Apps.launch(hit);
   if (hit.kind === "code") return invoke("open_code", { path: hit.path, line: codeLine(hit) });
   return invoke("open_path", { path: hit.path, ...placeToOpen(hit) });
 }
@@ -51,6 +75,7 @@ function openResult(hit) {
 /// Ctrl+C on a result: the file, to paste elsewhere; but text selected in the page, or in the field before the arrows or
 /// a click chose a result (`navigated`), is copied as text. True when it took the keys.
 function copyResult(event, hit, navigated) {
+  if (isLauncher(hit)) return false;
   const field = document.activeElement;
   const fieldText = field?.selectionStart != null && field.selectionStart !== field.selectionEnd;
   // (WebKit may count the field's selected text in the page's.)
@@ -95,6 +120,7 @@ function matchedMeaning(hit) {
 
 /// Why it's here, in a few words: "Matches the picture", "Matches the frame at 0:06".
 function reasonOf(hit) {
+  if (isLauncher(hit)) return hit.reason === "semantic" ? "Matches what this application does" : "Matches its name or alias";
   const words = hit.keyword_rank != null;
   if (!matchedMeaning(hit)) return words ? "Has your words" : "Matches its name";
   const at = hit.loc != null ? clock(hit.loc) : "";
@@ -141,6 +167,7 @@ function extensionOf(path) {
 
 /// Where the file is: "~/Downloads/Screenshots"; code says where it is in its repo: "billing/payments".
 function folderOf(hit) {
+  if (isLauncher(hit)) return hit.publisher || "Application";
   const folder = hit.path.slice(0, Math.max(0, hit.path.search(/[\\/][^\\/]*$/)));
   const repo = hit.info?.repo;
   if (hit.kind === "code" && repo && hit.path.startsWith(repo + "/")) {
@@ -235,10 +262,18 @@ function kindIcon(kind) {
 
 /// The helper's JPEG of a page, a frame or a picture, asked for once per file and place.
 const renders = new Map();
-function rendered(path, kind, loc, pixels) {
+function rendered(path, kind, loc, pixels, foreground=false) {
   const key = `${path}|${kind}|${loc}|${pixels}`;
-  if (!renders.has(key)) renders.set(key, ask({ op: "render", path, kind, loc, pixels }).then((reply) => reply.image));
-  return renders.get(key);
+  const generation=SearchTiming.generation,previous=renders.get(key);
+  if(previous&&(previous.done||(previous.generation===generation&&(previous.foreground||!foreground))))return previous.promise;
+  const entry={generation,foreground,done:false};
+  entry.promise=ask({ op: "render", path, kind, loc, pixels, generation, foreground }).then(reply=>{
+    if(!reply.image){const error=new Error("Preview was superseded");error.superseded=reply.status==="superseded";throw error;}
+    entry.done=true;return reply.image;
+  }).catch(error=>{if(renders.get(key)===entry)renders.delete(key);throw error;});
+  renders.set(key,entry);
+  if(renders.size>256)renders.delete(renders.keys().next().value);
+  return entry.promise;
 }
 
 /// What the helper renders for a result's picture: [kind, place], or null when it has none (documents, audio, code).

@@ -4,27 +4,47 @@
   <meta charset="utf-8">
   <title>DigUp</title>
   <link rel="stylesheet" href="panel.css">
+  <link rel="stylesheet" href="applications.css">
+  <link rel="stylesheet" href="appearance.css">
+  <link rel="stylesheet" href="pipeline.css">
+  <link rel="stylesheet" href="desktop.css">
+  <script src="appearance.js"></script>
 </head>
 <body>
-  <main id="panel" class="panel">
-    <header class="field">
+  <main id="panel" class="panel" data-state="empty">
+    <header class="field" role="search" aria-label="Quick search">
       <svg class="glass" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="10" cy="10" r="6.5"/><path d="M15 15 L20.5 20.5"/>
       </svg>
-      <input id="query" type="text" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search"
-             placeholder="Describe it: “payment error screenshot”, “zebra in a video”…">
-      <span id="activity" class="activity" hidden></span>
+      <input id="query" type="text" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search files, apps and settings" role="combobox" aria-autocomplete="list" aria-controls="list" aria-expanded="false"
+             placeholder="Search files, apps and settings">
+      <button id="expand-search" class="expand-search" type="button" aria-label="Open full search" title="Open full search (Ctrl+O)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="13" height="13" rx="2"/><path d="M9 7V4h11v11h-3"/></svg>
+      </button>
     </header>
     <section id="body" class="body" hidden>
-      <div id="list" class="list" role="listbox" aria-label="Results"></div>
-      <div id="preview" class="preview" aria-live="polite"></div>
+      <div id="results" class="results">
+        <div id="list" class="list" role="listbox" aria-label="Results"></div>
+        <nav id="more-results" class="more-results" aria-label="More results" hidden></nav>
+      </div>
+      <div id="preview" class="preview"></div>
     </section>
     <footer id="footer" class="footer" hidden>
-      <span id="summary" class="summary"></span>
+      <div class="footer-line">
+        <span id="summary" class="summary"></span>
+        <button id="activity" class="activity" type="button" title="Open Activity and diagnostics" hidden>Activity</button>
+        <span class="footer-spacer"></span>
+        <button id="details-action" class="panel-action" type="button" hidden>Preview</button>
+        <button id="primary-action" class="panel-action primary-action" type="button" hidden>Open</button>
+      </div>
       <span id="keys" class="keys"></span>
     </footer>
   </main>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="results.js"></script>
+  <script src="applications.js"></script>
+  <script src="windows-settings.js"></script>
+  <script src="mixed-results.js"></script>
   <script src="panel.js"></script>
 </body>
 </html>

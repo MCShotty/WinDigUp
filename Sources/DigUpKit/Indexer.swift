@@ -14,8 +14,7 @@ public enum IndexerError: Error, CustomStringConvertible {
 
 /// Keeps the index in step with the chosen folders, then extracts and embeds whatever is pending.
 ///
-/// Model work goes to an `Embedder` (made on first use, freed by `closeWorker`). Extraction (ImageIO, Vision, PDFKit,
-/// AVFoundation) runs on a second thread one batch ahead, so reading files and embedding them overlap (see `run`).
+/// Bounded preparation and inference feed one ordered database writer.
 public final class Indexer {
     public struct SyncSummary: Sendable {
         public var added = 0, changed = 0, moved = 0, removed = 0, unchanged = 0
@@ -32,12 +31,15 @@ public final class Indexer {
         public let state: String
         public let seconds: Double
         public let note: String?
+        public let fileID: Int64
     }
 
     let store: IndexStore
     let options: IndexOptions
     private let makeEmbedder: () throws -> any Embedder
     private var worker: (any Embedder)?
+    private var replay: ComputedEmbedding?
+    public private(set) var lastPipeline: IndexPipelineSnapshot?
     private let scratch: URL
 
     /// When set, an index built with another model or other settings is emptied and embedded again (the app: a new
@@ -87,14 +89,18 @@ public final class Indexer {
 
     /// Crawls `roots` and reconciles the index: new files are queued, changed ones re-queued, moved ones re-pathed
     /// (no re-embedding), and files that are gone or newly excluded are removed.
-    public func sync(_ roots: [URL]) throws -> SyncSummary {
-        let crawl = Crawler.crawl(roots, options: options)
+    public func sync(_ roots: [URL], onProgress: (CrawlProgress) -> Void = { _ in }) throws -> SyncSummary {
+        let crawl = Crawler.crawl(roots, options: options, onProgress: onProgress)
+        onProgress(CrawlProgress(stage: "reconciling", root: "", path: store.file.path,
+                                visited: crawl.visited, candidates: crawl.candidates.count))
         let existing = try store.files(under: roots.map { $0.standardizedFileURL.path })
         var byPath: [String: FileRecord] = [:]
         var byInode: [String: FileRecord] = [:]
         for file in existing {
             byPath[file.path] = file
-            byInode["\(file.device):\(file.inode)"] = file
+            // Windows can return metadata without a file ID (a provider may reject opening its handle).
+            // Unknown identities must never turn unrelated files into renames.
+            if file.inode != 0 { byInode["\(file.device):\(file.inode)"] = file }
         }
         let seen = Set(crawl.candidates.map(\.path))
         var movedFrom = Set<String>()
@@ -110,7 +116,8 @@ public final class Indexer {
                         summary.unchanged += 1
                     }
                 } else if let row = byInode["\(file.device):\(file.inode)"], !seen.contains(row.path),
-                          !movedFrom.contains(row.path), row.size == file.size, abs(row.mtime - file.mtime) < 0.001 {
+                          !movedFrom.contains(row.path), row.kind == file.kind,
+                          row.size == file.size, abs(row.mtime - file.mtime) < 0.001 {
                     try store.move(row.id, to: file.path)
                     movedFrom.insert(row.path)
                     summary.moved += 1
@@ -119,12 +126,11 @@ public final class Indexer {
                     summary.added += 1
                 }
             }
-            // A root that went away while it was being walked (a drive ejected mid-crawl) looked emptier than it is:
-            // keep its rows rather than take that for "deleted".
-            let vanished = roots.map { $0.standardizedFileURL.path }
-                .filter { !FileManager.default.fileExists(atPath: $0) }.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+            // Failed listings and roots that disappeared mid-crawl are incomplete evidence, not deletions.
+            let unavailable = Array(crawl.unreadable) + roots.map { $0.standardizedFileURL.path }
+                .filter { !FileManager.default.fileExists(atPath: $0) }
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)
-                && !vanished.contains(where: { row.path.hasPrefix($0) }) {
+                && !unavailable.contains(where: { row.path == $0 || FolderSelection.isInside(row.path, $0) }) {
                 try store.delete(row.id)
                 summary.removed += 1
             }
@@ -139,21 +145,75 @@ public final class Indexer {
     /// Per-file problems are recorded on the file; a dead worker or a settings mismatch stops the run (pending files stay
     /// pending, so the next run resumes). `shouldStop` is asked between batches: pausing, or new files that should go
     /// first.
+    public struct ScheduleSource {
+        public let indexer: Indexer
+        public let priorityIDs: Set<Int64>
+        public let includePending: Bool
+        public let limit: Int?
+        public init(indexer: Indexer, priorityIDs: Set<Int64> = [], includePending: Bool = true, limit: Int? = nil) {
+            self.indexer = indexer
+            self.priorityIDs = priorityIDs
+            self.includePending = includePending
+            self.limit = limit
+        }
+    }
+
     @discardableResult
     public func run(limit: Int? = nil, only ids: Set<Int64>? = nil, shouldStop: () -> Bool = { false },
                     onEvent: (Event) -> Void = { _ in }) throws -> [String: Int] {
-        let queue = try store.pending(limit: limit, only: ids)
-        var states: [String: Int] = [:]
-        var done = 0
-        try process(Self.batches(queue).map { Job(files: $0) }, shouldStop: shouldStop) { _, job, results, seconds in
-            for (offset, file) in job.files.enumerated() {
-                let (state, note) = results[offset]
-                states[state, default: 0] += 1
-                onEvent(Event(done: done + offset + 1, total: queue.count, path: file.path, kind: file.kind,
-                              state: state, seconds: seconds, note: note))
-            }
-            done += job.files.count
+        try Indexer.runScheduled([ScheduleSource(indexer: self, priorityIDs: ids ?? [],
+            includePending: ids == nil, limit: limit)], shouldStop: shouldStop,
+            onEvent: { _, _, event in onEvent(event) }).first ?? [:]
+    }
+
+    /// One owner pages both indexes; switching ready sources never drains inference.
+    @discardableResult
+    public static func runScheduled(_ sources: [ScheduleSource], shouldStop: () -> Bool = { false },
+        onEvent: (Int, Bool, Event) -> Void = { _, _, _ in },
+        onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
+        onRemaining: (Int, Set<Int64>) -> Void = { _, _ in },
+        onVerified: (WorkerInfo) -> Void = { _ in }) throws -> [[String: Int]] {
+        guard !sources.isEmpty else { return [] }
+        guard Set(sources.map { $0.indexer.store.file.standardizedFileURL.path }).count == sources.count else {
+            throw Database.Failure(message: "Each scheduled index must have one database owner.")
         }
+        var queues: [PendingFileQueue] = []
+        defer { for queue in queues { queue.close() } }
+        for source in sources {
+            source.indexer.lastPipeline = nil
+            queues.append(try source.indexer.store.pendingQueue(priorityIDs: source.priorityIDs,
+                includePending: source.includePending, limit: source.limit))
+        }
+        var lastSource = sources.count - 1
+        var states = Array(repeating: [String: Int](), count: sources.count)
+        var done = Array(repeating: 0, count: sources.count)
+        func nextJob() throws -> Job? {
+            var priorities: [Int: Int] = [:]
+            for index in queues.indices {
+                if let first = try queues[index].peek() { priorities[index] = first.priority }
+            }
+            guard let best = priorities.values.min() else { return nil }
+            let order = (1...sources.count).map { (lastSource + $0) % sources.count }
+            guard let selected = order.first(where: { priorities[$0] == best }),
+                  let batch = try queues[selected].takeBatch() else { return nil }
+            lastSource = selected
+            return Job(files: batch.files, source: selected, priority: batch.priority,
+                       options: sources[selected].indexer.options)
+        }
+        try processOwned(sources.map(\.indexer), nextJob: nextJob, shouldStop: shouldStop,
+            decorate: { snapshot in for queue in queues { queue.decorate(&snapshot) } },
+            onSnapshot: onSnapshot, onVerified: onVerified, committed: { _, job, results, seconds in
+                let source = job.source
+                for (offset, file) in job.files.enumerated() {
+                    let (state, note) = results[offset]
+                    states[source][state, default: 0] += 1
+                    onEvent(source, job.priority == 0, Event(done: done[source] + offset + 1,
+                        total: queues[source].total, path: file.path, kind: file.kind,
+                        state: state, seconds: seconds, note: note, fileID: file.id))
+                }
+                done[source] += job.files.count
+            })
+        for index in queues.indices { onRemaining(index, try queues[index].remainingPriorityIDs()) }
         return states
     }
 
@@ -177,73 +237,222 @@ public final class Indexer {
     @discardableResult
     public func finishLongFiles(shouldStop: () -> Bool = { false }, onStep: (Step) -> Void = { _ in }) throws
         -> [String: Int] {
-        var jobs: [Job] = []
-        for file in try store.unfinished() {
-            let info = try store.info(of: file.id)
-            let size = file.kind == .pdf ? options.pdfStep : options.docStep
-            // Where it stopped (after the last page or chunk stored, should its info not say; nothing stored: the start).
-            var start = try info["read_to"].flatMap(Int.init) ?? store.lastPlace(of: file.id) ?? 0
-            // At least one step, which settles a file whose length was only guessed (documents cut before schema 5).
-            let end = max(info["read_end"].flatMap(Int.init) ?? 0, start + 1)
-            while start < end {
-                jobs.append(Job(files: [file], step: start..<min(start + size, end)))
-                start += size
-            }
-        }
-        // Progress counts pages and chunks: what's read once each job is through.
-        var through: [Int] = []
-        for job in jobs { through.append((through.last ?? 0) + (job.step?.count ?? 0)) }
-        var files = Set(jobs.map { $0.files[0].id }).count
+        lastPipeline = nil
+        let queue = try store.pendingQueue(state: "partial")
+        defer { queue.close() }
+        let total = try queue.longFileUnits()
+        var files = queue.total
         var states: [String: Int] = [:]
-        var finished = Set<Int64>()
-        try process(jobs, shouldStop: shouldStop) { index, job, results, seconds in
-            let file = job.files[0]
-            let (state, note) = results[0]
-            if state != "partial", finished.insert(file.id).inserted {
-                states[state, default: 0] += 1
-                files -= 1
+        var finishedFile: Int64?
+        var current: FileRecord?
+        var next = 0
+        var end = 0
+        var through = 0
+        func nextJob() throws -> Job? {
+            while true {
+                if current?.id == finishedFile { next = end }
+                if let file = current, next < end {
+                    let size = file.kind == .pdf ? options.pdfStep : options.docStep
+                    let range = next..<min(next + size, end)
+                    next = range.upperBound
+                    through += range.count
+                    return Job(files: [file], step: range, options: options, through: through)
+                }
+                guard let entry = try queue.take() else { return nil }
+                let file = entry.file
+                let info = try store.info(of: file.id)
+                next = try info["read_to"].flatMap(Int.init) ?? store.lastPlace(of: file.id) ?? 0
+                end = max(info["read_end"].flatMap(Int.init) ?? 0, next + 1)
+                current = file
             }
-            onStep(Step(done: through[index], total: through.last ?? 0, files: files, path: file.path, kind: file.kind,
-                        state: state, seconds: seconds, note: note))
-        } skip: { job in
-            // Finished sooner than its steps said: a document whose length was guessed, or a file that went unreadable.
-            finished.contains(job.files[0].id)
         }
+        try Indexer.processOwned([self], nextJob: nextJob, shouldStop: shouldStop,
+            decorate: { queue.decorate(&$0) }, committed: { _, job, results, seconds in
+                let file = job.files[0]
+                let (state, note) = results[0]
+                if state != "partial" {
+                    finishedFile = file.id
+                    states[state, default: 0] += 1
+                    files -= 1
+                }
+                onStep(Step(done: job.through, total: total, files: files, path: file.path, kind: file.kind,
+                            state: state, seconds: seconds, note: note))
+            }, skip: { $0.files[0].id == finishedFile })
         return states
     }
 
-    /// Runs `jobs` in order until `shouldStop` (asked between jobs), passing each one's results to `committed` (with
-    /// its place in `jobs`). Jobs that `skip` turns down when their turn comes are left out.
-    ///
-    /// Two stages overlap: while the model embeds one job, the next one is read and decoded on another thread
-    /// (images scaled, screenshots OCR'd, PDF pages rendered, audio and video decoded). OCR alone is ~0.24 s per Retina
-    /// screenshot, about as long as embedding it.
-    private func process(_ jobs: [Job], shouldStop: () -> Bool,
-                         committed: (Int, Job, [(String, String?)], Double) -> Void,
-                         skip: (Job) -> Bool = { _ in false }) throws {
-        var ahead: PendingBatch?
-        defer {
-            // A job prepared for a run that stopped early: throw its files away.
-            if let ahead { try? FileManager.default.removeItem(at: ahead.wait().folder) }
-            if let costsFolder, !measured.tallies.isEmpty {
-                MeasuredCosts.merge(measured, into: costsFolder)
-                measured = MeasuredCosts()
-            }
+    private static func processOwned(_ indexers: [Indexer], nextJob: @escaping () throws -> Job?,
+        shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
+        onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
+        onVerified: (WorkerInfo) -> Void = { _ in },
+        committed: (Int, Job, [(String, String?)], Double) -> Void,
+        skip: (Job) -> Bool = { _ in false }) throws {
+        let folders = indexers.map { $0.scratch.appendingPathComponent(UUID().uuidString) }
+        let options = indexers.map(\.options)
+        // Concrete type references avoid Swift 6.4's dynamic-Self closure-specialization crash.
+        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob,
+            source: { String($0.source) }, sizes: { $0.footprint },
+            prepare: { index, job in
+                autoreleasepool {
+                    Indexer.prepare(job, options: job.options ?? options[job.source],
+                                 into: folders[job.source].appendingPathComponent("batch-\(index)"))
+                }
+            }, cleanup: { prepared in
+                try? FileManager.default.removeItem(at: prepared.folder)
+            })
+        var modelLoadMs = 0.0
+        var notificationMs = 0.0
+        var lastNotification = 0.0
+        var verified = false
+        func snapshot() -> IndexPipelineSnapshot {
+            var value = pipeline.snapshot(modelLoadMs: modelLoadMs)
+            value.notificationMs = notificationMs
+            decorate(&value)
+            return value
         }
-        for (index, job) in jobs.enumerated() {
-            guard !shouldStop() else { break }
-            let started = Date()
-            let prepared = (ahead ?? prepare(job)).wait()
-            ahead = index + 1 < jobs.count ? prepare(jobs[index + 1]) : nil
-            defer { try? FileManager.default.removeItem(at: prepared.folder) }
-            guard !skip(job) else { continue }
-            // The helper's and the CLI's main thread has no run loop to drain what Foundation autoreleases while a job
-            // commits: without a pool per job it all stayed until the process exited (~30 KB a text chunk).
-            let modelWasRunning = worker != nil
-            let results = try autoreleasepool { try commit(prepared) }
-            let seconds = Date().timeIntervalSince(started)
-            if modelWasRunning { measure(prepared, seconds: seconds) }   // else it's seconds of the model starting
-            committed(index, job, results, seconds / Double(job.files.count))
+        func progress(force: Bool = false) {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard force || now - lastNotification >= 1 else { return }
+            lastNotification = now
+            let start = ProcessInfo.processInfo.systemUptime
+            onSnapshot(snapshot())
+            notificationMs += (ProcessInfo.processInfo.systemUptime - start) * 1000
+        }
+        defer {
+            pipeline.close()
+            let value = snapshot()
+            for index in indexers.indices {
+                var own = value
+                own.source = String(index)
+                indexers[index].lastPipeline = own
+                try? FileManager.default.removeItem(at: folders[index])
+                if let costsFolder = indexers[index].costsFolder, !indexers[index].measured.tallies.isEmpty {
+                    MeasuredCosts.merge(indexers[index].measured, into: costsFolder)
+                    indexers[index].measured = MeasuredCosts()
+                }
+            }
+            progress(force: true)
+        }
+
+        func publish(_ item: IndexPipeline<Job, Prepared, ComputedEmbedding?>.Item,
+                     computed: ComputedEmbedding?, inferenceMs: Double) throws {
+            let start = ProcessInfo.processInfo.systemUptime
+            var didCommit = false
+            defer {
+                if shouldStop() { pipeline.stop() }
+                pipeline.release(item, commitMs: (ProcessInfo.processInfo.systemUptime - start) * 1000, committed: didCommit)
+            }
+            guard !skip(item.input) else { return }
+            let owner = indexers[item.input.source]
+            if !verified, let computed, computed.hasVectors, computed.info.executionPolicy == "accelerator-only",
+               let device = computed.info.device, !device.isEmpty {
+                verified = true
+                onVerified(computed.info)
+            }
+            let results: [(String, String?)]
+            do { results = try owner.publish(item.value, computed: computed) }
+            catch { pipeline.fail(error); throw error }
+            didCommit = true
+            let seconds = (item.preparationMs + inferenceMs) / 1000
+            owner.measure(item.value, seconds: seconds)
+            let notificationStart = ProcessInfo.processInfo.systemUptime
+            committed(item.index, item.input, results, seconds / Double(item.input.files.count))
+            notificationMs += (ProcessInfo.processInfo.systemUptime - notificationStart) * 1000
+        }
+
+        do {
+            while let item = pipeline.nextPrepared(shouldStop: shouldStop, canStartWith: {
+                Indexer.embeddingCalls($0, options: $0.options).contains(where: { !$0.inputs.isEmpty })
+            }, onTick: { progress() }) {
+                if skip(item.input) || !Indexer.embeddingCalls(item.value, options: item.value.options).contains(where: { !$0.inputs.isEmpty }) {
+                    try publish(item, computed: nil, inferenceMs: 0)
+                    continue
+                }
+                let start = ProcessInfo.processInfo.systemUptime
+                let models = try indexers.map { try $0.fullWorker() }
+                guard let first = models.first, models.allSatisfy({
+                    $0.info.vectorSource == first.info.vectorSource && $0.info.backend == first.info.backend
+                        && $0.info.deviceId == first.info.deviceId && $0.info.device == first.info.device
+                }) else { throw WorkerError.failed("Scheduled indexes resolved different embedding devices or identities.") }
+                modelLoadMs = (ProcessInfo.processInfo.systemUptime - start) * 1000
+                let owners = InferenceOwners(models)
+                let width = models.map { ($0 as? any ParallelEmbedding)?.maximumParallelJobs ?? 1 }.min() ?? 1
+                pipeline.startInference(parallelism: width) { prepared in
+                    let calls = Indexer.embeddingCalls(prepared, options: prepared.options)
+                    guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
+                    return try ComputedEmbedding(calls: calls, worker: owners.models[prepared.source])
+                }
+                while let result = pipeline.next(shouldStop: shouldStop, onTick: { progress() }) {
+                    try publish(result.item, computed: result.result.get(), inferenceMs: result.inferenceMs)
+                }
+                break
+            }
+            try pipeline.throwIfFailed()
+        } catch {
+            pipeline.fail(error)
+            throw error
+        }
+    }
+
+    private func publish(_ prepared: Prepared, computed: ComputedEmbedding?) throws -> [(String, String?)] {
+        let changed = prepared.batch.contains { file in
+            guard let current = FileSystem.info(of: file.path), current.isRegular else { return true }
+            return current.size != file.size || abs(current.mtime - file.mtime) > 0.001 ||
+                file.inode != 0 && current.inode != 0 && (current.inode != file.inode || current.device != file.device)
+        }
+        replay = computed
+        defer { replay = nil }
+        return try store.db.transaction {
+            if let computed {
+                let expected = "\(computed.info.vectorSource) | \(options.fingerprint)"
+                let actual = try store.meta("fingerprint") ?? ""
+                if actual != expected { throw IndexerError.fingerprintMismatch(index: actual, now: expected) }
+            }
+            for file in prepared.batch {
+                var matches = false
+                try store.db.query("SELECT path,size,mtime,inode,device FROM files WHERE id=?", [.int(file.id)]) { row in
+                    matches = row.text(0) == file.path && row.int(1) == file.size &&
+                        abs(row.double(2) - file.mtime) < 0.001 &&
+                        UInt64(bitPattern: row.int(3)) == file.inode && UInt64(bitPattern: row.int(4)) == file.device
+                }
+                if !matches { return prepared.batch.map { _ in ("pending", "source_changed") } }
+            }
+            if changed {
+                for file in prepared.batch { try store.requeue(file.id) }
+                return prepared.batch.map { _ in ("pending", "source_changed") }
+            }
+            return try autoreleasepool { try commit(prepared) }
+        }
+    }
+
+    private final class InferenceOwners: @unchecked Sendable {
+        let models: [any Embedder]
+        init(_ models: [any Embedder]) { self.models = models }
+    }
+
+    private static func embeddingCalls(_ prepared: Prepared, options: IndexOptions) -> [EmbeddingCall] {
+        let file=prepared.batch[0]
+        let title=URL(fileURLWithPath:file.path).deletingPathExtension().lastPathComponent
+        switch prepared.payload {
+        case .nothing:return []
+        case .images(let screenshot,let ready):
+            return [EmbeddingCall(kind:.image,inputs:ready.map(\.image.path),
+                budget:screenshot ? options.screenshotBudget : options.photoBudget)]
+        case .pdf(let pages,_,_,let documentTitle):
+            let title=documentTitle ?? title
+            return [
+                EmbeddingCall(kind:.text,inputs:pages.filter{$0.imagePath==nil && SearchText.hasWords($0.text)}.map{Prompts.document(title:title,text:String($0.text.prefix(4000)))}),
+                EmbeddingCall(kind:.image,inputs:pages.compactMap(\.imagePath),budget:options.pageBudget),
+                EmbeddingCall(kind:.text,inputs:pages.compactMap(\.garbled).map{Prompts.document(title:title,text:String($0.prefix(4000)))})
+            ]
+        case .doc(let chunks,_,_,_):
+            return [EmbeddingCall(kind:.text,inputs:chunks.filter(SearchText.hasWords).map{Prompts.document(title:title,text:$0)})]
+        case .code(let code):
+            return [EmbeddingCall(kind:.text,inputs:code.pieces.filter{SearchText.hasWords($0.text)}.map{Prompts.document(title:code.title,text:$0.text)})]
+        case .audio(let pieces,_):return [EmbeddingCall(kind:.audio,inputs:pieces.map(\.path))]
+        case .video(let frames,let sound,_):
+            return [EmbeddingCall(kind:.image,inputs:frames.map(\.path),budget:options.frameBudget),
+                EmbeddingCall(kind:.audio,inputs:sound.map(\.path))]
         }
     }
 
@@ -270,6 +479,10 @@ public final class Indexer {
     struct Job: Sendable {
         let files: [FileRecord]
         var step: Range<Int>?
+        var source = 0
+        var priority = 1
+        var options: IndexOptions?
+        var through = 0
     }
 
     /// Images and screenshots go to the model 8 at a time; other files one by one.
@@ -307,6 +520,7 @@ public final class Indexer {
     }
 
     private func fullWorker() throws -> any Embedder {
+        if let replay { return replay }
         if let worker { return worker }
         let started = try makeEmbedder()
         let fingerprint = "\(started.info.vectorSource) | \(options.fingerprint)"
@@ -331,6 +545,28 @@ public final class Indexer {
         let folder: URL
         var outcomes: [Int: Outcome] = [:]   // files already settled (skipped or failed while reading)
         var payload = Payload.nothing
+        let source: Int
+        let options: IndexOptions
+
+        var footprint: (memory: Int, scratch: Int) {
+            var memory = 0
+            var paths: [String] = []
+            switch payload {
+            case .nothing: break
+            case .images(_, let images): paths = images.map(\.image.path); memory = images.reduce(0) { $0 + $1.ocr.utf8.count }
+            case .pdf(let pages, _, _, _):
+                memory = pages.reduce(0) { $0 + $1.text.utf8.count + ($1.garbled?.utf8.count ?? 0) }
+                paths = pages.compactMap(\.imagePath)
+            case .doc(let chunks, _, _, _): memory = chunks.reduce(0) { $0 + $1.utf8.count }
+            case .code(let code): memory = code.pieces.reduce(0) { $0 + $1.text.utf8.count }
+            case .audio(let pieces, _): paths = pieces.map(\.path)
+            case .video(let frames, let sound, _): paths = frames.map(\.path) + sound.map(\.path)
+            }
+            let scratch = Set(paths).reduce(0) { total, path in
+                total + ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0)
+            }
+            return (memory + paths.reduce(0) { $0 + $1.utf8.count }, scratch)
+        }
     }
 
     struct Outcome: Sendable {
@@ -356,54 +592,29 @@ public final class Indexer {
         let ocr: String
     }
 
-    /// A batch being prepared on the preparation queue.
-    final class PendingBatch: @unchecked Sendable {
-        private let ready = DispatchSemaphore(value: 0)
-        private var value: Prepared?
-
-        fileprivate func fulfill(_ prepared: Prepared) {
-            value = prepared
-            ready.signal()
-        }
-
-        /// Blocks until it's ready. Call once.
-        func wait() -> Prepared {
-            ready.wait()
-            return value!
-        }
+    /// The oldest active extraction remains visible when another preparation finishes.
+    public static var nowReading: (path: String, since: Date)? {
+        readingLock.withLock { reading.values.min { $0.since < $1.since } }
     }
-
-    private let preparing = DispatchQueue(label: "DigUp.prepare", qos: .utility)
-    private var jobsPrepared = 0   // names the scratch folders
-
-    /// The file being read (extracted) right now, and since when: for a watchdog. Apple's frameworks have run away on
-    /// some files (PDF text extraction growing by gigabytes a minute, never returning), and nothing stops them from
-    /// outside but ending the process, so it has to know which file that was. One value for the whole process, since
-    /// files are read one at a time.
-    public static var nowReading: (path: String, since: Date)? { readingLock.withLock { reading } }
-    nonisolated(unsafe) private static var reading: (path: String, since: Date)?
+    nonisolated(unsafe) private static var reading: [String: (path: String, since: Date)] = [:]
     private static let readingLock = NSLock()
 
-    private static func startReading(_ path: String) {
-        readingLock.withLock { reading = (path, Date()) }
+    static var activeReadPaths: Set<String> { readingLock.withLock { Set(reading.values.map(\.path)) } }
+
+    static func startReading(_ path: String, token: String) {
+        readingLock.withLock { reading[token] = (path, Date()) }
     }
 
-    private func prepare(_ job: Job) -> PendingBatch {
-        let pending = PendingBatch()
-        jobsPrepared += 1
-        let (options, folder) = (options, scratch.appendingPathComponent("batch-\(jobsPrepared)"))
-        preparing.async {
-            pending.fulfill(Self.prepare(job, options: options, into: folder))
-        }
-        return pending
+    static func endReading(token: String) {
+        _ = readingLock.withLock { reading.removeValue(forKey: token) }
     }
 
     static func prepare(_ job: Job, options: IndexOptions, into folder: URL) -> Prepared {
         let batch = job.files
-        var prepared = Prepared(batch: batch, step: job.step, folder: folder)
+        var prepared = Prepared(batch: batch, step: job.step, folder: folder, source: job.source, options: options)
         let url = URL(fileURLWithPath: batch[0].path)
-        startReading(batch[0].path)
-        defer { readingLock.withLock { reading = nil } }
+        startReading(batch[0].path, token: folder.path)
+        defer { endReading(token: folder.path) }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             switch batch[0].kind {
@@ -412,7 +623,7 @@ public final class Indexer {
                 var ready: [ReadyImage] = []
                 for (slot, file) in batch.enumerated() {
                     let url = URL(fileURLWithPath: file.path)
-                    startReading(file.path)
+                    startReading(file.path, token: folder.path)
                     do {
                         let image = try ImageExtractor.prepare(url, maxPixel: screenshot ? 1536 : 1024,
                                                                minSide: options.minImageSide, to: folder,
@@ -481,7 +692,7 @@ public final class Indexer {
         return prepared
     }
 
-    // MARK: Commit (the indexing thread: the model and the database)
+    // Commit owns the database; its embedder replays prepared results.
 
     private func commit(_ prepared: Prepared) throws -> [(String, String?)] {
         let batch = prepared.batch

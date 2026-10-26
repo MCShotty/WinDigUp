@@ -1,0 +1,589 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "key": "bluetooth",
+      "name": "Bluetooth",
+      "description": "Pair headphones, speakers, keyboards and other Bluetooth devices.",
+      "uri": "ms-settings:bluetooth",
+      "hardware": "bluetooth",
+      "aliases": [
+        "wireless headphones",
+        "pair device",
+        "بلوتوث"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "بلوتوث"
+      }
+    },
+    {
+      "key": "display",
+      "name": "Display",
+      "description": "Adjust screen resolution, display scaling, brightness and multiple monitors.",
+      "uri": "ms-settings:display",
+      "hardware": "",
+      "aliases": [
+        "screen",
+        "monitor",
+        "resolution",
+        "brightness",
+        "شاشة"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الشاشة"
+      }
+    },
+    {
+      "key": "night-light",
+      "name": "Night light",
+      "description": "Reduce blue light and use warmer screen colors at night.",
+      "uri": "ms-settings:nightlight",
+      "hardware": "",
+      "aliases": [
+        "blue light",
+        "warm screen",
+        "night mode",
+        "ضوء أزرق"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الإضاءة الليلية"
+      }
+    },
+    {
+      "key": "sound",
+      "name": "Sound",
+      "description": "Choose speakers, headphones and microphones and adjust their volume.",
+      "uri": "ms-settings:sound",
+      "hardware": "",
+      "aliases": [
+        "audio",
+        "volume",
+        "microphone",
+        "صوت"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الصوت"
+      }
+    },
+    {
+      "key": "wifi",
+      "name": "Wi-Fi",
+      "description": "Connect to wireless networks and manage Wi-Fi connections.",
+      "uri": "ms-settings:network-wifi",
+      "hardware": "wifi",
+      "aliases": [
+        "wireless internet",
+        "واي فاي"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "واي فاي"
+      }
+    },
+    {
+      "key": "ethernet",
+      "name": "Ethernet",
+      "description": "Configure wired network connections.",
+      "uri": "ms-settings:network-ethernet",
+      "hardware": "",
+      "aliases": [
+        "wired internet",
+        "LAN"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "إيثرنت"
+      }
+    },
+    {
+      "key": "network",
+      "name": "Network status",
+      "description": "Review network connections and troubleshoot internet connectivity.",
+      "uri": "ms-settings:network-status",
+      "hardware": "",
+      "aliases": [
+        "internet connection",
+        "network"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "حالة الشبكة"
+      }
+    },
+    {
+      "key": "vpn",
+      "name": "VPN",
+      "description": "Add or manage virtual private network connections.",
+      "uri": "ms-settings:network-vpn",
+      "hardware": "",
+      "aliases": [
+        "virtual private network"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "شبكة افتراضية خاصة"
+      }
+    },
+    {
+      "key": "proxy",
+      "name": "Proxy",
+      "description": "Configure a proxy server for network connections.",
+      "uri": "ms-settings:network-proxy",
+      "hardware": "",
+      "aliases": [
+        "proxy server"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الوكيل"
+      }
+    },
+    {
+      "key": "installed-apps",
+      "name": "Installed apps",
+      "description": "Review, repair, modify or uninstall installed applications.",
+      "uri": "ms-settings:appsfeatures",
+      "hardware": "",
+      "aliases": [
+        "remove program",
+        "uninstall application",
+        "حذف تطبيق"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "التطبيقات المثبتة"
+      }
+    },
+    {
+      "key": "default-apps",
+      "name": "Default apps",
+      "description": "Choose default applications for browsing, mail and file types.",
+      "uri": "ms-settings:defaultapps",
+      "hardware": "",
+      "aliases": [
+        "default browser",
+        "file associations"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "التطبيقات الافتراضية"
+      }
+    },
+    {
+      "key": "startup-apps",
+      "name": "Startup apps",
+      "description": "Choose which applications start when you sign in.",
+      "uri": "ms-settings:startupapps",
+      "hardware": "",
+      "aliases": [
+        "login programs",
+        "autostart"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "تطبيقات بدء التشغيل"
+      }
+    },
+    {
+      "key": "storage",
+      "name": "Storage",
+      "description": "Review disk space and storage categories and find cleanup options.",
+      "uri": "ms-settings:storagesense",
+      "hardware": "",
+      "aliases": [
+        "disk space",
+        "cleanup",
+        "free space",
+        "مساحة القرص"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "التخزين"
+      }
+    },
+    {
+      "key": "notifications",
+      "name": "Notifications",
+      "description": "Manage application notifications and notification sounds.",
+      "uri": "ms-settings:notifications",
+      "hardware": "",
+      "aliases": [
+        "alerts",
+        "notification sounds"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الإشعارات"
+      }
+    },
+    {
+      "key": "power",
+      "name": "Power and sleep",
+      "description": "Choose screen-off and sleep behavior and power settings.",
+      "uri": "ms-settings:powersleep",
+      "hardware": "",
+      "aliases": [
+        "sleep",
+        "screen timeout",
+        "power"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الطاقة والسكون"
+      }
+    },
+    {
+      "key": "battery",
+      "name": "Battery",
+      "description": "Review battery usage and available battery-saving settings.",
+      "uri": "ms-settings:batterysaver",
+      "hardware": "",
+      "aliases": [
+        "battery saver",
+        "energy"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "البطارية"
+      }
+    },
+    {
+      "key": "windows-update",
+      "name": "Windows Update",
+      "description": "Check Windows updates and review update status.",
+      "uri": "ms-settings:windowsupdate",
+      "hardware": "",
+      "aliases": [
+        "system updates",
+        "تحديث"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "تحديث Windows"
+      }
+    },
+    {
+      "key": "update-history",
+      "name": "Update history",
+      "description": "Review Windows updates previously installed on this computer.",
+      "uri": "ms-settings:windowsupdate-history",
+      "hardware": "",
+      "aliases": [
+        "installed updates"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "محفوظات التحديثات"
+      }
+    },
+    {
+      "key": "accessibility",
+      "name": "Accessibility",
+      "description": "Find settings that help with vision, hearing and interaction.",
+      "uri": "ms-settings:easeofaccess",
+      "hardware": "",
+      "aliases": [
+        "ease of access",
+        "accessible"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "إمكانية الوصول"
+      }
+    },
+    {
+      "key": "text-size",
+      "name": "Text size",
+      "description": "Make text larger throughout Windows.",
+      "uri": "ms-settings:easeofaccess-display",
+      "hardware": "",
+      "aliases": [
+        "large text",
+        "readable text",
+        "تكبير النص"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "حجم النص"
+      }
+    },
+    {
+      "key": "magnifier",
+      "name": "Magnifier",
+      "description": "Magnify part or all of the screen.",
+      "uri": "ms-settings:easeofaccess-magnifier",
+      "hardware": "",
+      "aliases": [
+        "zoom screen",
+        "magnify"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "المكبر"
+      }
+    },
+    {
+      "key": "narrator",
+      "name": "Narrator",
+      "description": "Configure the Windows screen reader.",
+      "uri": "ms-settings:easeofaccess-narrator",
+      "hardware": "",
+      "aliases": [
+        "screen reader",
+        "read screen"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الراوي"
+      }
+    },
+    {
+      "key": "contrast",
+      "name": "Contrast themes",
+      "description": "Improve visibility using high-contrast colors.",
+      "uri": "ms-settings:easeofaccess-highcontrast",
+      "hardware": "",
+      "aliases": [
+        "high contrast",
+        "contrast"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "نُسق التباين"
+      }
+    },
+    {
+      "key": "mouse",
+      "name": "Mouse",
+      "description": "Adjust mouse buttons, pointer speed and scrolling.",
+      "uri": "ms-settings:mousetouchpad",
+      "hardware": "",
+      "aliases": [
+        "pointer",
+        "scroll speed"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الماوس"
+      }
+    },
+    {
+      "key": "keyboard",
+      "name": "Keyboard accessibility",
+      "description": "Configure sticky keys, filter keys and accessibility keyboard options.",
+      "uri": "ms-settings:easeofaccess-keyboard",
+      "hardware": "",
+      "aliases": [
+        "sticky keys",
+        "filter keys"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "إمكانية الوصول للوحة المفاتيح"
+      }
+    },
+    {
+      "key": "background",
+      "name": "Background",
+      "description": "Change the desktop wallpaper and background.",
+      "uri": "ms-settings:personalization-background",
+      "hardware": "",
+      "aliases": [
+        "wallpaper",
+        "desktop picture",
+        "خلفية"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الخلفية"
+      }
+    },
+    {
+      "key": "colors",
+      "name": "Colors",
+      "description": "Choose Windows colors, dark mode and transparency options.",
+      "uri": "ms-settings:colors",
+      "hardware": "",
+      "aliases": [
+        "dark mode",
+        "accent color",
+        "theme"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الألوان"
+      }
+    },
+    {
+      "key": "taskbar",
+      "name": "Taskbar",
+      "description": "Customize taskbar appearance and behavior.",
+      "uri": "ms-settings:taskbar",
+      "hardware": "",
+      "aliases": [
+        "taskbar icons"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "شريط المهام"
+      }
+    },
+    {
+      "key": "language",
+      "name": "Language",
+      "description": "Manage preferred languages and Windows display language.",
+      "uri": "ms-settings:regionlanguage",
+      "hardware": "",
+      "aliases": [
+        "display language",
+        "keyboard language",
+        "لغة"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "اللغة"
+      }
+    },
+    {
+      "key": "date-time",
+      "name": "Date and time",
+      "description": "Set the time zone, date and clock synchronization.",
+      "uri": "ms-settings:dateandtime",
+      "hardware": "",
+      "aliases": [
+        "timezone",
+        "clock",
+        "وقت"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "التاريخ والوقت"
+      }
+    },
+    {
+      "key": "accounts",
+      "name": "Your account",
+      "description": "Review your Windows account information.",
+      "uri": "ms-settings:yourinfo",
+      "hardware": "",
+      "aliases": [
+        "user account",
+        "profile"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "حسابك"
+      }
+    },
+    {
+      "key": "sign-in",
+      "name": "Sign-in options",
+      "description": "Manage Windows Hello, PIN, password and sign-in behavior.",
+      "uri": "ms-settings:signinoptions",
+      "hardware": "",
+      "aliases": [
+        "password",
+        "PIN",
+        "Windows Hello"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "خيارات تسجيل الدخول"
+      }
+    },
+    {
+      "key": "clipboard",
+      "name": "Clipboard",
+      "description": "Configure clipboard history and synchronization.",
+      "uri": "ms-settings:clipboard",
+      "hardware": "",
+      "aliases": [
+        "clipboard history",
+        "paste history"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الحافظة"
+      }
+    },
+    {
+      "key": "about",
+      "name": "About this PC",
+      "description": "Review Windows version, device specifications and computer name.",
+      "uri": "ms-settings:about",
+      "hardware": "",
+      "aliases": [
+        "system information",
+        "specifications",
+        "computer name"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "حول هذا الكمبيوتر"
+      }
+    },
+    {
+      "key": "privacy-microphone",
+      "name": "Microphone privacy",
+      "description": "Choose which applications may access the microphone.",
+      "uri": "ms-settings:privacy-microphone",
+      "hardware": "",
+      "aliases": [
+        "microphone permission"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "خصوصية الميكروفون"
+      }
+    },
+    {
+      "key": "privacy-camera",
+      "name": "Camera privacy",
+      "description": "Choose which applications may access the camera.",
+      "uri": "ms-settings:privacy-webcam",
+      "hardware": "",
+      "aliases": [
+        "camera permission",
+        "webcam"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "خصوصية الكاميرا"
+      }
+    },
+    {
+      "key": "privacy-location",
+      "name": "Location privacy",
+      "description": "Manage Windows location services and app permissions.",
+      "uri": "ms-settings:privacy-location",
+      "hardware": "",
+      "aliases": [
+        "location permission",
+        "GPS"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "خصوصية الموقع"
+      }
+    },
+    {
+      "key": "recovery",
+      "name": "Recovery",
+      "description": "Find Windows recovery and advanced startup options.",
+      "uri": "ms-settings:recovery",
+      "hardware": "",
+      "aliases": [
+        "reset PC",
+        "advanced startup"
+      ],
+      "minBuild": 19041,
+      "translations": {
+        "ar": "الاسترداد"
+      }
+    }
+  ]
+}

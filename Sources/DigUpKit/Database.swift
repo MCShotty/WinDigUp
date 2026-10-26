@@ -5,7 +5,7 @@ import SQLite3   // the system's (3.51 on macOS 26, FTS5 built in)
 import CSQLite   // the amalgamation in Vendor/sqlite, with FTS5 (scripts/fetch-vendor.sh)
 #endif
 
-/// A thin wrapper over SQLite. One connection, used from one thread.
+/// A thin wrapper over SQLite. One connection, confined to one serial owner.
 public final class Database {
     public struct Failure: Error, CustomStringConvertible {
         public let message: String
@@ -13,16 +13,19 @@ public final class Database {
     }
 
     let handle: OpaquePointer
+    private var transactionDepth=0
 
-    public init(path: String) throws {
+    public init(path: String, readOnly: Bool = false) throws {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK, let db else {
+        let flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK, let db else {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open \(path)"
             sqlite3_close(db)
             throw Failure(message: message)
         }
         handle = db
         sqlite3_busy_timeout(db, 5000)
+        if readOnly { return } // A reader must never negotiate WAL or run migrations.
         // Two processes opening a new index at once (a shell starts its search and index helpers together): the switch
         // to WAL can fail at once with "database is locked" rather than wait (SQLite's rule against deadlocks), so it's
         // tried again for up to five seconds.
@@ -60,13 +63,18 @@ public final class Database {
 
     @discardableResult
     public func transaction<T>(_ body: () throws -> T) throws -> T {
-        try execute("BEGIN IMMEDIATE")
+        let depth=transactionDepth
+        let savepoint="digup_transaction_\(depth)"
+        try execute(depth==0 ? "BEGIN IMMEDIATE" : "SAVEPOINT \(savepoint)")
+        transactionDepth+=1
+        defer{transactionDepth-=1}
         do {
-            let result = try body()
-            try execute("COMMIT")
+            let result=try body()
+            try execute(depth==0 ? "COMMIT" : "RELEASE SAVEPOINT \(savepoint)")
             return result
         } catch {
-            try? execute("ROLLBACK")
+            if depth==0 {try? execute("ROLLBACK")}
+            else {try? execute("ROLLBACK TO SAVEPOINT \(savepoint)");try? execute("RELEASE SAVEPOINT \(savepoint)")}
             throw error
         }
     }

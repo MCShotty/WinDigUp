@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "applications": [
+    {"name":"Photo Studio","purpose":"Edit photos, retouch portraits, remove blemishes and correct image colors."},
+    {"name":"Sound Workshop","purpose":"Record and edit sound, trim podcast recordings and remove background noise."},
+    {"name":"Video Workshop","purpose":"Edit videos, cut footage, add subtitles and export movies."},
+    {"name":"Web Browser","purpose":"Browse websites, open web pages and manage bookmarks."},
+    {"name":"Code Editor","purpose":"Write source code, debug programs and work on software projects."},
+    {"name":"Spreadsheet","purpose":"Create spreadsheets, calculate budgets and organize tabular data."},
+    {"name":"Mail","purpose":"Read and send email messages and organize an inbox."},
+    {"name":"Calculator","purpose":"Perform arithmetic calculations, percentages and unit conversions."},
+    {"name":"Drawing Canvas","purpose":"Draw illustrations, sketch with a pen and paint digital artwork."},
+    {"name":"Archive Manager","purpose":"Compress files into archives and extract ZIP and 7z files."}
+  ],
+  "queries": [
+    {"q":"retouch a portrait","expected":["Photo Studio"]},
+    {"q":"remove blemishes from a photograph","expected":["Photo Studio"]},
+    {"q":"clean up noise in a podcast","expected":["Sound Workshop"]},
+    {"q":"record my voice","expected":["Sound Workshop"]},
+    {"q":"cut a movie and add subtitles","expected":["Video Workshop"]},
+    {"q":"visit a website","expected":["Web Browser"]},
+    {"q":"debug a software project","expected":["Code Editor"]},
+    {"q":"make a budget spreadsheet","expected":["Spreadsheet"]},
+    {"q":"send an email","expected":["Mail"]},
+    {"q":"calculate percentages","expected":["Calculator"]},
+    {"q":"sketch an illustration","expected":["Drawing Canvas"]},
+    {"q":"extract a zip archive","expected":["Archive Manager"]},
+    {"q":"zebra standing beside a river","expected":[]},
+    {"q":"the clause about pets in my lease","expected":[]},
+    {"q":"an invoice for replacement brake pads","expected":[]},
+    {"q":"a recording of whales singing underwater","expected":[]},
+    {"q":"which folder contains my passport scan","expected":[]},
+    {"q":"a photograph of a dog on the beach","expected":[]}
+  ]
+}

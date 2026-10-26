@@ -1,0 +1,48 @@
+.pipeline-drives { margin-top:12px; }
+.pipeline-drive { padding:16px 0; border-top:1px solid var(--line); min-width:0; }
+.pipeline-drive:first-child { border-top:0; padding-top:4px; }
+.pipeline-drive-name { margin:0 0 5px; color:var(--text); font-size:14px; font-weight:650; overflow-wrap:anywhere; }
+.pipeline-drive-phase { color:var(--text); font-weight:550; }
+.pipeline-drive-counts { font-variant-numeric:tabular-nums; color:var(--text); line-height:1.6; }
+.pipeline-drive-note, .pipeline-drive-empty, .pipeline-timing-owner { color:var(--secondary); line-height:1.5; overflow-wrap:anywhere; }
+.pipeline-drive-error { color:var(--problem,#ae421c); white-space:pre-line; overflow-wrap:anywhere; }
+.pipeline-drive-details summary { cursor:pointer; min-height:32px; padding-top:5px; color:var(--secondary); }
+.pipeline-timing-owner { margin-top:12px !important; font-weight:600; }
+.pipeline-timings, .pipeline-jobs { margin:4px 0; }
+.pipeline-timings > div, .pipeline-jobs > div { display:flex; justify-content:space-between; gap:16px; padding:4px 0; }
+.pipeline-timings dt, .pipeline-jobs dt { color:var(--secondary); min-width:0; }
+.pipeline-timings dd, .pipeline-jobs dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+.pipeline-source-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.pipeline-source-state { color:var(--secondary); font-size:12px; font-weight:400; text-align:right; }
+.source-section > summary { min-height:44px; padding:10px 0; }
+.source-candidate { scroll-margin:12px; }
+.source-candidate:focus-visible, .pipeline-drive-details summary:focus-visible { outline:2px solid var(--moss); outline-offset:3px; }
+.source-candidate .apps-settings-actions { flex-wrap:wrap; }
+.source-candidate button { min-height:36px; }
+.source-message { margin-top:8px; color:var(--secondary); overflow-wrap:anywhere; }
+.source-message:empty { display:none; }
+.source-candidate[data-pending=true] .apps-settings-actions { opacity:.65; }
+.gpu-jobs-control { margin-top:16px; max-width:420px; }
+.gpu-jobs-control label { display:block; margin-bottom:6px; }
+.activity-meter.indeterminate { display:none; }
+.activity-meter.indeterminate span { animation:none; }
+.activity-progress-label { text-align:left; }
+.activity-view button, .activity-report button { min-height:36px; }
+.activity-view h4 { text-transform:none; letter-spacing:0; }
+@media (max-width:540px) {
+  .pipeline-source-heading { align-items:flex-start; flex-direction:column; gap:4px; }
+  .pipeline-source-state { text-align:left; }
+  .pipeline-jobs > div { flex-direction:column; gap:2px; }
+  .pipeline-jobs dd { text-align:left; }
+  .source-candidate button, .activity-view button, .activity-report button { min-height:44px; }
+}
+@media (pointer:coarse) {
+  .source-candidate button, .activity-view button, .activity-report button { min-height:44px; }
+}
+
+.activity-view button:focus-visible, .activity-report button:focus-visible,
+.pipeline-drive-details summary:focus-visible, .source-candidate button:focus-visible,
+.source-section > summary:focus-visible {
+  outline:2px solid var(--leaf-text,var(--moss)); outline-offset:3px;
+}
+.gpu-jobs-control select, #appearance { min-height:44px; }

@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "DigUp for Windows and Linux: the tray icon, the hotkey and the search panel, over DigUp's helper"
 edition = "2021"
 publish = false
+default-run = "digup-shell"
+
+[[bin]]
+name = "digup-discovery"
+path = "src/bin/discovery.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
@@ -20,6 +25,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }
 tauri-plugin-updater = "2.13.3"
+sha2 = "0.10"
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
+
+
+# Structured, bounded app metadata; no executable code is loaded from descriptions.
+yaml-rust2 = { version = "=0.13.0", default-features = false }
+url = "=2.5.8"
+rustls = { version = "=0.23.45", default-features = false, features = ["ring","std","tls12"] }
+dom_query = "=0.28.0"
+reqwest = { version = "=0.13.5", default-features = false, features = ["blocking","rustls-no-provider","system-proxy"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -27,9 +43,13 @@ libc = "0.2"
 # A job object that ends the helpers with the shell, the taskbar's theme for the tray icon, and the local time for set
 # hours (already in Tauri's build on Windows).
 [target.'cfg(windows)'.dependencies]
+window-vibrancy = "=0.8.1"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem", "Win32_System_Variant"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects",
-                                              "Win32_System_Registry", "Win32_System_SystemInformation",
-                                              "Win32_UI_Shell", "Win32_System_DataExchange", "Win32_System_Memory"] }
+                                              "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_SystemInformation",
+                                              "Win32_UI_Shell", "Win32_System_DataExchange", "Win32_System_Memory",
+                                              "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
 
 # GNOME's shortcut settings, `--toggle` handed to the running DigUp, and the panel's window on Wayland (all already in
 # Tauri's build on Linux).

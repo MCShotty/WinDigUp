@@ -6,9 +6,24 @@ use crate::hours::Hours;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+#[derive(Clone,Debug,Default,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="snake_case")]
+pub enum Appearance { #[default] System, Light, Dark }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelMaterial { #[default] Automatic, Solid }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    pub appearance: Appearance,
+    pub panel_material: PanelMaterial,
+    pub applications: crate::applications::Options,
+    pub windows_settings: crate::system_settings::Options,
+    pub discovery: crate::discovery::Options,
+    pub enrichment: crate::applications::enrichment::Options,
+    pub acceleration: crate::acceleration::Acceleration,
     /// The folders searched and kept indexed.
     pub folders: Vec<String>,
     /// Folders inside them that aren't (`FolderSelection` in the engine).
@@ -56,7 +71,23 @@ pub struct WindowPlace {
 impl Settings {
     /// The file's settings, or the defaults when there's none (or it can't be read).
     pub fn load(path: &Path) -> Settings {
-        std::fs::read(path).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default()
+        let read = std::fs::read(path);
+        if read.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) { return Settings::default(); }
+        let mut settings: Settings = match read.ok().and_then(|data| serde_json::from_slice(&data).ok()) {
+            Some(settings) => settings,
+            None => {
+                let mut settings = Settings::default();
+                settings.acceleration.discovery_pending = false;
+                settings.acceleration.discovery_error = Some("Settings could not be read. The original settings file was preserved; restore it or review Settings before enabling inference.".into());
+                return settings;
+            }
+        };
+        if settings.acceleration.migrate() {
+            if let Err(error) = settings.save(path) {
+                settings.acceleration.discovery_error = Some(format!("Can't save accelerator settings migration: {error}"));
+            }
+        }
+        settings
     }
 
     /// Written whole to a temporary file first, so a crash never leaves half of it.
@@ -67,5 +98,85 @@ impl Settings {
         let temporary = path.with_extension("json.new");
         std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temporary, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn migration_is_atomic_isolated_and_preserves_annotations_and_folders() {
+        let dir=std::env::temp_dir().join(format!("digup-settings-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path=dir.join("custom-settings.json");
+        let original=json!({"acceleration":{"backend":"nvidia-vulkan","gpu":"Vulkan1"},
+            "folders":["C:/Users/Zoë/Documents"],"codeFolders":["C:/src"],"indexHoursOn":true,
+            "applications":{"enabled":true,"overrides":{"app:one":{"aliases":["写真"],"purpose":"Edit images","hidden":true}}}});
+        std::fs::write(&path,serde_json::to_vec(&original).unwrap()).unwrap();
+        let migrated=Settings::load(&path);
+        assert_eq!(migrated.acceleration.backend,"nvidia-cuda"); assert!(migrated.acceleration.gpu.is_empty());
+        assert_eq!(migrated.folders,vec!["C:/Users/Zoë/Documents"]); assert!(migrated.index_hours_on);
+        assert_eq!(migrated.applications.overrides["app:one"].aliases,vec!["写真"]);
+        assert!(migrated.applications.overrides["app:one"].hidden);
+        assert_eq!(migrated.applications.mixed_search,crate::applications::MixedSearch::Smart);
+        let mut changed=migrated.clone();changed.applications.mixed_search=crate::applications::MixedSearch::AppsOnly;
+        changed.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).applications.mixed_search,crate::applications::MixedSearch::AppsOnly);
+        assert_eq!(Settings::load(&path).applications.overrides["app:one"].aliases,vec!["写真"]);
+        let once=std::fs::read(&path).unwrap();
+        let again=Settings::load(&path); assert_eq!(again.acceleration.version,2);
+        assert_eq!(std::fs::read(&path).unwrap(),once);
+        assert!(!dir.join("settings.json").exists());
+        std::fs::write(&path,b"{broken").unwrap(); let _=Settings::load(&path);
+        assert_eq!(std::fs::read(&path).unwrap(),b"{broken");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]mod discovery_preferences_tests{
+    use super::*;
+    #[test]fn optional_sources_roundtrip_without_changing_existing_preferences(){
+        let root=std::env::temp_dir().join(format!("digup-sources-{}-{}",std::process::id(),crate::applications::digest(&format!("{:?}",std::time::SystemTime::now()))));
+        std::fs::create_dir_all(&root).unwrap();let file=root.join("custom-settings.json");
+        let volume=r"\\?\Volume{12345678-1234-abcd-9876-1234567890ab}\";
+        let input=serde_json::json!({"folders":["C:\\Documents"],"setUp":true,"skipTypes":["tmp"],"indexHoursOn":true,
+            "applications":{"enabled":true,"overrides":{"app:fixture":{"aliases":["Editor"],"purpose":"My work","hidden":true}}},
+            "discovery":{"enabled":true,"volumes":[volume],"paused":true,"included":[format!("exe:{}","1".repeat(64))]},
+            "windowsSettings":{"enabled":true,"semanticEnabled":false,"ordinarySearches":false},
+            "enrichment":{"enabled":true,"publisherPages":false}});
+        let settings:Settings=serde_json::from_value(input).unwrap();settings.discovery.validate().unwrap();settings.save(&file).unwrap();
+        let saved=Settings::load(&file);assert_eq!(saved.folders,settings.folders);assert_eq!(saved.skip_types,settings.skip_types);
+        assert!(saved.index_hours_on&&saved.set_up&&saved.discovery.paused&&saved.enrichment.enabled);
+        assert!(!saved.enrichment.publisher_pages&&!saved.windows_settings.semantic_enabled&&!saved.windows_settings.ordinary_searches);
+        assert_eq!(saved.applications.overrides["app:fixture"].purpose,"My work");
+        assert_eq!(saved.discovery.volumes,vec![volume]);let _=std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod panel_preferences_tests {
+    use super::*;
+    #[test]
+    fn panel_defaults_and_isolated_save_preserve_other_preferences() {
+        let root = std::env::temp_dir().join(format!("digup-panel-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let path = root.join("isolated.json");
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "folders":["C:/Users/Zoë/Documents"], "indexHoursOn":true, "appearance":"dark",
+            "applications":{"overrides":{"app:fixture":{"aliases":["写真"],"purpose":"Edit photos","hidden":true}}}
+        })).unwrap();
+        assert_eq!(settings.panel_material, PanelMaterial::Automatic);
+        settings.panel_material = PanelMaterial::Solid;
+        settings.save(&path).unwrap();
+        let saved = Settings::load(&path);
+        assert_eq!(saved.panel_material, PanelMaterial::Solid);
+        assert_eq!(saved.appearance, Appearance::Dark);
+        assert_eq!(saved.folders, settings.folders);
+        assert!(saved.index_hours_on);
+        assert_eq!(saved.applications.overrides["app:fixture"].aliases, ["写真"]);
+        assert!(saved.applications.overrides["app:fixture"].hidden);
+        assert!(!root.join("settings.json").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

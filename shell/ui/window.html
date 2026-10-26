@@ -3,14 +3,21 @@
 <head>
   <meta charset="utf-8">
   <title>DigUp</title>
+  <link rel="icon" href="icon.png">
   <link rel="stylesheet" href="window.css">
+  <link rel="stylesheet" href="applications.css">
+  <link rel="stylesheet" href="activity.css">
+  <link rel="stylesheet" href="appearance.css">
+  <link rel="stylesheet" href="pipeline.css">
+  <link rel="stylesheet" href="desktop.css">
+  <script src="appearance.js"></script>
 </head>
 <body>
   <header class="top">
     <div class="bar">
       <label class="field" id="field">
         <span class="glass" id="glass" aria-hidden="true"></span>
-        <input id="query" type="text" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search">
+        <input id="query" type="text" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search files, apps and settings" placeholder="Search files, apps and settings">
         <button class="clear" id="clear" title="Clear" aria-label="Clear" hidden>
           <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/><path d="M7 7 L13 13 M13 7 L7 13"/></svg>
         </button>
@@ -25,7 +32,7 @@
         <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>
       </button>
     </div>
-    <nav class="kinds" id="kinds" aria-label="Kinds of files"></nav>
+    <nav class="kinds" id="kinds" aria-label="Search categories"></nav>
   </header>
 
   <div class="split">
@@ -35,7 +42,7 @@
 
   <footer class="status">
     <span class="ring" id="ring" hidden></span>
-    <button class="status-line" id="status-line" title="Folders and indexing"></button>
+    <button class="status-line" id="status-line" title="Open Activity and diagnostics" aria-label="Open Activity and diagnostics"></button>
     <span class="spacer"></span>
     <span class="count" id="count"></span>
     <button class="update" id="update" title="See what's new and update" hidden></button>
@@ -43,6 +50,11 @@
 
   <div class="menu" id="menu" role="menu" hidden></div>
   <script src="results.js"></script>
+  <script src="applications.js"></script>
+  <script src="windows-settings.js"></script>
+  <script src="mixed-results.js"></script>
+  <script src="pipeline.js"></script>
+  <script src="activity.js"></script>
   <script src="window.js"></script>
 </body>
 </html>

@@ -15,6 +15,17 @@ public struct CrawlReport: Sendable {
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
+    /// Paths whose metadata or directory listing failed. Their cached rows must survive a partial scan.
+    public var unreadable: Set<String> = []
+    public var visited = 0
+}
+
+public struct CrawlProgress: Sendable {
+    public let stage: String
+    public let root: String
+    public let path: String
+    public let visited: Int
+    public let candidates: Int
 }
 
 /// Walks the chosen folders and applies `Rules`. Reads metadata only, never file contents (except the 600-byte
@@ -23,7 +34,8 @@ public struct CrawlReport: Sendable {
 /// For the code index (`IndexOptions.code`) it walks the code folders instead: code files only (`Rules.classifyCode`),
 /// in a git repo only those git keeps (`GitFiles`), and none in vendored or built folders.
 public enum Crawler {
-    public static func crawl(_ roots: [URL], options: IndexOptions) -> CrawlReport {
+    public static func crawl(_ roots: [URL], options: IndexOptions,
+                             onProgress: (CrawlProgress) -> Void = { _ in }) -> CrawlReport {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path
         let keys = FileSystem.crawlKeys
@@ -33,8 +45,15 @@ public enum Crawler {
         var found: [Candidate] = []
         var foundPaths = Set<String>()   // a folder inside another root would be walked twice
         let rootPaths = Set(roots.map { $0.standardizedFileURL.path })
+        var lastProgress = Date.distantPast
+        func progress(_ stage: String, root: String, path: String, force: Bool = false) {
+            guard force || Date().timeIntervalSince(lastProgress) >= 0.5 else { return }
+            lastProgress = Date()
+            onProgress(CrawlProgress(stage: stage, root: root, path: path, visited: report.visited, candidates: found.count))
+        }
 
         for root in roots.map({ $0.standardizedFileURL }) {
+            progress("root", root: root.path, path: root.path, force: true)
             if options.code {
                 repos.enterRoot(root.path)
             } else if Rules.isProjectRoot(root.path) {
@@ -47,16 +66,41 @@ public enum Crawler {
                 FolderSelection.isInside($0, root.path) || FolderSelection.isInside($0, real)
             }.flatMap { [$0, FolderSelection.realPath($0)] }
             #if os(Windows)
-            guard let walker = FileSystem.walk(root, keys: keys) else { continue }
+            guard let walker = FileSystem.walk(root, keys: keys) else {
+                report.unreadable.insert(real)
+                continue
+            }
             #else
             guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                              options: [.skipsHiddenFiles, .skipsPackageDescendants],
-                                             errorHandler: { _, _ in true }) else { continue }
+                                             errorHandler: { url, _ in
+                                                 report.unreadable.insert(FolderSelection.realPath(url.path))
+                                                 return true
+                                             }) else {
+                report.unreadable.insert(real)
+                continue
+            }
             #endif
             func visit(_ url: URL) {
-                let values = try? url.resourceValues(forKeys: Set(keys))
+                report.visited += 1
+                progress("entries", root: root.path, path: url.path)
+                #if os(Windows)
+                // The native walk already has the directory attribute. Asking Foundation again follows reparse
+                // points and invokes filesystem providers for metadata we already obtained without opening files.
+                let values: URLResourceValues? = nil
+                let isDirectory = walker.currentIsDirectory
+                #else
+                let values: URLResourceValues
+                do { values = try url.resourceValues(forKeys: Set(keys)) }
+                catch {
+                    report.unreadable.insert(url.path)
+                    walker.skipDescendants()
+                    return
+                }
+                let isDirectory = values.isDirectory == true
+                #endif
                 let isPackage = FileSystem.isPackage(url, values)
-                if values?.isDirectory == true, !isPackage {
+                if isDirectory, !isPackage {
                     if let reason = Rules.skipReason(forFolder: url, home: home, excluded: skips)
                         ?? (options.code ? Rules.codeSkipReason(forFolder: url) : nil) {
                         walker.skipDescendants()
@@ -73,6 +117,27 @@ public enum Crawler {
                     report.skipped["app or bundle", default: 0] += 1
                     return
                 }
+                func localFileInfo() -> FileInfo? {
+                    guard let info = FileSystem.info(of: url.path) else {
+                        report.unreadable.insert(url.path)
+                        report.skipped["metadata unavailable", default: 0] += 1
+                        return nil
+                    }
+                    guard info.isRegular else {
+                        report.skipped["link or special file", default: 0] += 1
+                        return nil
+                    }
+                    if info.dataless || FileSystem.isInCloud(values) {
+                        report.skipped["in the cloud, not downloaded", default: 0] += 1
+                        return nil
+                    }
+                    return info
+                }
+                // These extensions require reading a media header to distinguish video from TypeScript. Check
+                // metadata first: opening a pipe can block forever; opening an offline placeholder can download it.
+                let readsHeader = ["ts", "mts", "m2ts"].contains(url.pathExtension.lowercased())
+                let checked = readsHeader ? localFileInfo() : nil
+                if readsHeader && checked == nil { return }
                 let classification = options.code ? Rules.classifyCode(url, options: options)
                     : Rules.classify(url, values: values, options: options)
                 switch classification {
@@ -81,15 +146,7 @@ public enum Crawler {
                 case .skip(let reason):
                     report.skipped[reason, default: 0] += 1
                 case .index(let kind):
-                    guard let info = FileSystem.info(of: url.path), info.isRegular else {
-                        report.skipped["link or special file", default: 0] += 1
-                        return
-                    }
-                    // Reading a dataless placeholder (iCloud "Optimize Mac Storage", File Providers) downloads it.
-                    if info.dataless || FileSystem.isInCloud(values) {
-                        report.skipped["in the cloud, not downloaded", default: 0] += 1
-                        return
-                    }
+                    guard let info = checked ?? localFileInfo() else { return }
                     if options.code {
                         // Too big to be written by hand; a notebook's file holds its outputs too.
                         let limit = url.pathExtension.lowercased() == "ipynb" ? options.maxNotebookBytes
@@ -116,7 +173,12 @@ public enum Crawler {
                     visit(url)
                 }
             }
+            #if os(Windows)
+            report.unreadable.formUnion(walker.unreadable)
+            #endif
         }
+
+        progress("filtering", root: "", path: "", force: true)
 
         // Inside a code project only screenshots count (assets, fixtures and datasets don't).
         var inProject: [String: Bool] = [:]
@@ -152,6 +214,7 @@ public enum Crawler {
             }
         }
         report.candidates = kept
+        onProgress(CrawlProgress(stage: "complete", root: "", path: "", visited: report.visited, candidates: kept.count))
         return report
     }
 }

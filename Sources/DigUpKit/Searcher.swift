@@ -37,10 +37,14 @@ public final class Searcher {
     /// False for the vectors the later pass adds (`Indexer.finishLongFiles`): scored, but they don't set the scale.
     private var rowSetsScale: [Bool] = []
     private var fileKind: [Int64: FileKind] = [:]
+    private var exactNames: [String: [String]] = [:]
+    private var namesVersion: Int64?
     public private(set) var vectorSource: String?
     /// False after `releaseVectors()` (or `loadVectors: false`): keyword search still works, and the next search with
     /// a query vector loads them again.
     public private(set) var vectorsLoaded = false
+    public private(set) var facetCounts: [String: Int] = [:]
+    public private(set) var timings: [String: Double] = [:]
 
     public var vectorCount: Int { rowFile.count }
 
@@ -49,9 +53,34 @@ public final class Searcher {
 
     /// With `loadVectors: false` only keyword search is ready; vectors load on the first meaning search. The app
     /// uses that to stay small while idle: 20k vectors are ~30 MB.
-    public init(store: IndexStore, loadVectors: Bool = true) throws {
+    public init(store: IndexStore, loadVectors: Bool = true, loadNames: Bool = false) throws {
         self.store = store
         if loadVectors { try reload() } else { try reloadFiles() }
+        if loadNames {
+            try store.db.execute("BEGIN")
+            defer { try? store.db.execute("ROLLBACK") }
+            var version: Int64 = 0
+            try store.db.query("PRAGMA data_version") { version=$0.int(0) }
+            try store.db.query("SELECT path FROM files") { row in
+                guard let path=row.text(0) else { return }
+                let name=(path as NSString).lastPathComponent
+                exactNames[Self.nameKey(name),default:[]].append(path)
+                let stem=(name as NSString).deletingPathExtension
+                if stem != name { exactNames[Self.nameKey(stem),default:[]].append(path) }
+            }
+            namesVersion=version
+        }
+    }
+    private static func nameKey(_ value:String) -> String {
+        SearchText.normalized(value).folding(options:[.caseInsensitive,.diacriticInsensitive,.widthInsensitive],locale:Locale(identifier:"en_US_POSIX"))
+    }
+    /// nil means the name snapshot is unknown/stale. Callers then suppress app promotion conservatively.
+    public func exactNamePaths(_ query:String) throws -> [String]? {
+        guard let namesVersion else { return nil }
+        var current:Int64=0
+        try store.db.query("PRAGMA data_version") { current=$0.int(0) }
+        guard current==namesVersion else { return nil }
+        return exactNames[Self.nameKey(query)] ?? []
     }
 
     /// Reads the files and all vectors again (after indexing added some).
@@ -60,10 +89,11 @@ public final class Searcher {
         try reloadFiles()
         var rows = 0
         try store.db.query("SELECT COUNT(*) FROM segments WHERE vec IS NOT NULL") { rows = Int($0.int(0)) }
-        guard let matrix = VectorStorage(rows: rows) else {
+        if rows == 0 {
             vectorsLoaded = true   // nothing to load
             return
         }
+        guard let matrix = VectorStorage(rows: rows) else { throw Database.Failure(message:"Not enough host memory for search vectors") }
         let rowBytes = Vectors.dimension * MemoryLayout<Float16>.stride
         let steps = IndexOptions()
         try store.db.query("""
@@ -113,11 +143,14 @@ public final class Searcher {
     public static let codeWordWeight = 1.0
 
     public func search(_ text: String, queryVector: [Float]?, kinds: Set<FileKind>? = nil, limit: Int = 20,
-                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false) throws -> [SearchHit] {
+                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false,
+                       includeFacets: Bool = false) throws -> [SearchHit] {
+        let started = ProcessInfo.processInfo.systemUptime
+        facetCounts = [:]; timings = [:]
         let wordWeight = wordWeight ?? (isCode ? Self.codeWordWeight : Self.wordWeight)
         if queryVector != nil, !vectorsLoaded { try reload() }
         let fileKind = self.fileKind
-        let allowed = { (file: Int64) -> Bool in kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
+        let allowed = { (file: Int64) -> Bool in includeFacets || kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
 
         // Meaning: score every vector on this query's scale (`meaning`), keep each file's best segment.
         var best: [Int64: (z: Double, cosine: Double, row: Int)] = [:]
@@ -132,6 +165,7 @@ public final class Searcher {
 
         // Words: FTS5 with Porter stemming over file names, folder names, OCR, page and document text. A name from code
         // ("quantize_row_q8_0_ref") is matched as one phrase, as it's written.
+        let encodedScores = ProcessInfo.processInfo.systemUptime
         let terms = Self.terms(text)
         let identifier = isCode ? CodeLookup.identifier(text) : nil
         var words: [(file: Int64, segment: Int64, snippet: String?)] = []
@@ -149,13 +183,17 @@ public final class Searcher {
         }
         if !patterns.isEmpty {
             var seen = Set<Int64>()
+            var kindWords: [FileKind: Int] = [:]
             try store.db.query("""
                 SELECT s.file, s.id, snippet(fts, 1, '«', '»', '…', 12), fts.original FROM fts
                 JOIN segments s ON s.id = fts.rowid
                 WHERE fts MATCH ? ORDER BY bm25(fts, 3.0, 1.0) LIMIT 1000
                 """, [.text(patterns.joined(separator: " OR "))]) { row in
                 let file = row.int(0)
-                guard words.count < 100, allowed(file), seen.insert(file).inserted else { return }
+                let kind = fileKind[file] ?? .doc
+                guard words.count < (includeFacets ? 700 : 100), kindWords[kind, default: 0] < 100,
+                      allowed(file), seen.insert(file).inserted else { return }
+                kindWords[kind, default: 0] += 1
                 // Text that normalizing changed is quoted as it's written (with its hamza, harakat, joiners).
                 let snippet = row.text(3).flatMap { SearchText.snippet($0, terms: terms) } ?? row.text(2)
                 words.append((file, row.int(1), snippet))
@@ -187,12 +225,19 @@ public final class Searcher {
             scored[file] = score
         }
 
+        if includeFacets, let top = scored.values.max() {
+            for (file, value) in scored where value >= top * 0.5 {
+                if let kind = fileKind[file] { facetCounts[kind.rawValue, default: 0] += 1 }
+            }
+        }
+        let hydrated = ProcessInfo.processInfo.systemUptime
         let wordRank = Dictionary(words.enumerated().map { ($0.element.file, ($0.offset + 1, $0.element)) },
                                   uniquingKeysWith: { first, _ in first })
-        var hits: [SearchHit] = []
-        for (file, score) in scored.sorted(by: { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) })
+        var places: [(file: Int64, score: Double, segment: Int64, focus: Double?)] = []
+        for (file, score) in scored.filter({ kinds == nil || fileKind[$0.key].map { kinds!.contains($0) } ?? false })
+            .sorted(by: { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) })
             .prefix(limit) {
-            let rank = hits.count
+            let rank = places.count
             let semantic = best[file]
             let keyword = wordRank[file]
             // Point at the best meaning segment if it stands out; else at the segment the words matched.
@@ -207,42 +252,49 @@ public final class Searcher {
                                                    identifier: rank < 10 ? identifier : nil, query: text, terms: terms,
                                                    wordsHere: keyword?.1.segment == segmentID || identifier != nil)
             }
-            var path = "", kind = FileKind.doc, modified = 0.0, size: Int64 = 0, info: [String: String] = [:]
-            try store.db.query("SELECT path, kind, mtime, size, info FROM files WHERE id = ?", [.int(file)]) {
-                path = $0.text(0) ?? ""
-                kind = FileKind(rawValue: $0.text(1) ?? "") ?? .doc
-                modified = $0.double(2)
-                size = $0.int(3)
-                if let json = $0.text(4)?.data(using: .utf8) {
-                    info = (try? JSONSerialization.jsonObject(with: json) as? [String: String]) ?? [:]
-                }
+            places.append((file, score, segmentID, focus))
+        }
+        // Hydrate the bounded candidate set in two reads, instead of issuing SQL for each displayed result.
+        // IDs come from SQLite, never query text. Code definition lookup above retains its own bounded behavior.
+        var files: [Int64: (path: String, kind: FileKind, modified: Double, size: Int64, info: [String: String])] = [:]
+        var segments: [Int64: (kind: SegmentKind, loc: Double?, end: Double?, text: String?)] = [:]
+        if !places.isEmpty {
+            let ids = places.map { String($0.file) }.joined(separator: ",")
+            try store.db.query("SELECT id, path, kind, mtime, size, info FROM files WHERE id IN (\(ids))") { row in
+                let info = row.text(5)?.data(using: .utf8).flatMap {
+                    (try? JSONSerialization.jsonObject(with: $0)) as? [String: String]
+                } ?? [:]
+                files[row.int(0)] = (row.text(1) ?? "", FileKind(rawValue: row.text(2) ?? "") ?? .doc,
+                                     row.double(3), row.int(4), info)
             }
-            var segment = SegmentKind.name, loc: Double?, locEnd: Double?, storedExcerpt: String?
-            try store.db.query("SELECT kind, loc, loc_end, excerpt FROM segments WHERE id = ?", [.int(segmentID)]) {
-                segment = SegmentKind(rawValue: $0.text(0) ?? "") ?? .name
-                loc = $0.isNull(1) ? nil : $0.double(1)
-                locEnd = $0.isNull(2) ? nil : $0.double(2)
-                storedExcerpt = $0.text(3)
+            let segmentIDs = Set(places.map(\.segment) + places.compactMap { wordRank[$0.file]?.1.segment })
+                .sorted().map(String.init).joined(separator: ",")
+            try store.db.query("SELECT id, kind, loc, loc_end, excerpt FROM segments WHERE id IN (\(segmentIDs))") { row in
+                segments[row.int(0)] = (SegmentKind(rawValue: row.text(1) ?? "") ?? .name,
+                                       row.isNull(2) ? nil : row.double(2), row.isNull(3) ? nil : row.double(3), row.text(4))
             }
+        }
+        var hits: [SearchHit] = []
+        for place in places {
+            guard let file = files[place.file], let segment = segments[place.segment] else { continue }
+            let semantic = best[place.file], keyword = wordRank[place.file]
             // Quote the matched words only when they come from the segment we point at, so a PDF hit on page 5
             // never shows page 2's words. A segment with no place and no text of its own (a screenshot's image
             // vector) can borrow them from its file's OCR text, which describes the same picture.
-            var snippet = keyword.flatMap { $0.1.segment == segmentID ? $0.1.snippet : nil }
+            var snippet = keyword.flatMap { $0.1.segment == place.segment ? $0.1.snippet : nil }
                 .flatMap { $0.contains("«") ? excerpt($0, limit: 400) : nil }
-            if snippet == nil, storedExcerpt == nil, loc == nil, let match = keyword?.1,
+            if snippet == nil, segment.text == nil, segment.loc == nil, let match = keyword?.1,
                let text = match.snippet, text.contains("«") {
-                var matchedKind: String?
-                try store.db.query("SELECT kind FROM segments WHERE id = ?", [.int(match.segment)]) {
-                    matchedKind = $0.text(0)
-                }
-                if matchedKind != SegmentKind.name.rawValue { snippet = excerpt(text, limit: 400) }
+                if segments[match.segment]?.kind != .name { snippet = excerpt(text, limit: 400) }
             }
-            hits.append(SearchHit(path: path, kind: kind, score: score, z: semantic?.z, cosine: semantic?.cosine,
-                                  keywordRank: keyword?.0, segment: segment, segmentID: segmentID, loc: loc,
-                                  locEnd: locEnd,
-                                  excerpt: snippet ?? storedExcerpt, modified: modified, size: size, info: info,
-                                  focus: focus))
+            hits.append(SearchHit(path: file.path, kind: file.kind, score: place.score, z: semantic?.z, cosine: semantic?.cosine,
+                                  keywordRank: keyword?.0, segment: segment.kind, segmentID: place.segment, loc: segment.loc,
+                                  locEnd: segment.end,
+                                  excerpt: snippet ?? segment.text, modified: file.modified, size: file.size, info: file.info,
+                                  focus: place.focus))
         }
+        timings = ["scoring": (encodedScores - started) * 1000, "keywords": (hydrated - encodedScores) * 1000,
+                   "metadata": (ProcessInfo.processInfo.systemUptime - hydrated) * 1000]
         return hits
     }
 
@@ -378,14 +430,15 @@ public final class Searcher {
         "صورة", "صور", "لقطة", "شاشة", "فيديو", "ملف", "مستند",
     ]
 
-    /// The content words of a query, normalized as keyword search keeps its text (`SearchText`). Kind words
-    /// ("screenshot", "video") and stopwords are dropped: they describe what to look for, not what's in it. Words of
-    /// two letters or more count; a Bengali letter with its vowel sign ("মা") is two.
+    /// Bare category names remain keywords; descriptive queries drop category words with other stopwords.
+    /// Two Unicode scalars count, including a Bengali letter with its vowel sign ("মা").
     public static func terms(_ text: String) -> [String] {
         var seen = Set<String>()
-        return SearchText.normalized(text).lowercased()
+        let words = SearchText.normalized(text).lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.unicodeScalars.count >= 2 && !stopwords.contains($0) && seen.insert($0).inserted }
+            .filter { $0.unicodeScalars.count >= 2 && seen.insert($0).inserted }
+        let content = words.filter { !stopwords.contains($0) }
+        return content.isEmpty ? words.filter { kindWord($0) != nil } : content
     }
 
     /// FTS5 patterns for the query's words: quoted, and as prefixes for the last word while it's being typed and for
@@ -424,14 +477,25 @@ public final class Searcher {
         "مقطع": .video, "صوت": .audio, "تسجيل": .audio, "اغنية": .audio,
     ]
 
-    /// Kinds the query asks for ("…in a video", "screenshot of…", "ভিডিওতে"): a soft boost, not a filter. Bengali
-    /// attaches case endings, so a Bengali kind word also counts at the start of a longer word.
-    static func kindHints(_ text: String) -> Set<FileKind> {
-        Set(SearchText.normalized(text).lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .compactMap { word in
-                kindWords[word] ?? kindWords.first { key, _ in
-                    SearchText.inflects(key) && key.unicodeScalars.count >= 3 && word.hasPrefix(key)
-                }?.value
-            })
+    private static func kindWord(_ word: String) -> FileKind? {
+        kindWords[word] ?? kindWords.first { key, _ in
+            SearchText.inflects(key) && key.unicodeScalars.count >= 3 && word.hasPrefix(key)
+        }?.value
+    }
+
+    /// A category hint requires a subject beyond the category or a settings/application action.
+    public static func kindHints(_ text: String) -> Set<FileKind> {
+        let words = SearchText.normalized(text).lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let actions: Set<String> = [
+            "app", "apps", "application", "applications", "settings", "setting", "options", "preferences",
+            "change", "configure", "configuration", "enable", "disable", "turn", "open", "launch",
+            "edit", "editor", "play", "player", "default", "manage", "adjust"
+        ]
+        let hasSubject = words.contains {
+            $0.unicodeScalars.count >= 2 && kindWord($0) == nil && !stopwords.contains($0) && !actions.contains($0)
+        }
+        guard hasSubject else { return [] }
+        return Set(words.compactMap { kindWord($0) })
     }
 }

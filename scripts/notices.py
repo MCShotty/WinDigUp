@@ -144,8 +144,10 @@ def main():
         "Face on first launch.",
         "",
         section("DigUp", need(ROOT / "LICENSE")),
-        section("llama.cpp and ggml (https://github.com/ggml-org/llama.cpp), the embedding runtime, with one small "
-                "change in scripts/llama.cpp-no-logits.patch",
+        section("Fluent UI System Icons (https://github.com/microsoft/fluentui-system-icons), generic application icon",
+                need(ROOT / "shell/ui/fluent-icons-LICENSE.txt")),
+        section("llama.cpp and ggml (https://github.com/ggml-org/llama.cpp), the embedding runtime, with output-memory and "
+                "accelerator-only patches in scripts/llama.cpp-*.patch",
                 need(llama / "LICENSE"),
                 *[f"{path.name}:\n\n{read(path)}" for path in sorted((llama / "licenses").glob("*")) if path.is_file()]),
         section("Vulkan headers (https://github.com/KhronosGroup/Vulkan-Headers), compiled into ggml's Vulkan backend",
@@ -182,6 +184,15 @@ def main():
                 "PDFium's above)", need(pdfium / "licenses/icu.txt")),
     ]
     if windows:
+        cuda = VENDOR / "cuda"
+        record = json.loads(need(cuda / "redistribution.json"))
+        if record["version"] != "12.9.1" or record["platform"] != "windows-x86_64":
+            sys.exit("notices: pinned Windows CUDA redistribution is missing")
+        licenses = sorted((cuda / "licenses").rglob("*"))
+        licenses = [path for path in licenses if path.is_file()]
+        if not licenses:
+            sys.exit("notices: CUDA redistribution license files are missing")
+        parts += [section("NVIDIA CUDA 12.9.1 redistributable components", *[need(path) for path in licenses])]
         parts += [section("Microsoft Visual C++ runtime and WebView2",
                           "DigUp's helper ships Microsoft's Visual C++ runtime libraries, which their license allows "
                           "redistributing, and the app's window uses the Microsoft Edge WebView2 runtime that Windows "

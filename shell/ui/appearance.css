@@ -1,0 +1,23 @@
+:root[data-theme="light"] {
+  color-scheme:light;
+  --surface:#fbfbfb; --card:#fff; --text:#1d1d1f; --secondary:#626269; --tertiary:#626269;
+  --pane:rgba(0,0,0,.025); --line:rgba(0,0,0,.12); --fill:rgba(0,0,0,.06);
+  --fill-strong:rgba(0,0,0,.1); --tile:rgba(0,0,0,.05); --menu:#fff;
+  --chip:rgba(79,128,88,.1); --chip-hover:rgba(79,128,88,.2); --leaf-text:#356652;
+  --problem:#ae421c;
+}
+:root[data-theme="dark"] {
+  color-scheme:dark;
+  --surface:#1f1f21; --card:#2a2a2d; --text:#f2f2f7; --secondary:#b0b0b6; --tertiary:#b0b0b6;
+  --pane:rgba(255,255,255,.025); --line:rgba(255,255,255,.16); --fill:rgba(255,255,255,.08);
+  --fill-strong:rgba(255,255,255,.14); --tile:rgba(255,255,255,.05); --menu:#2c2c2e;
+  --chip:rgba(162,199,142,.12); --chip-hover:rgba(162,199,142,.22); --leaf-text:#a2c78e;
+  --problem:#ffb89c;
+}
+:root[data-theme="system"] { color-scheme:light dark; }
+@media (prefers-color-scheme:light) {
+  :root[data-theme="system"] { --secondary:#626269; --tertiary:#626269; --leaf-text:#356652; --problem:#ae421c; }
+}
+@media (prefers-color-scheme:dark) {
+  :root[data-theme="system"] { --secondary:#b0b0b6; --tertiary:#b0b0b6; --leaf-text:#a2c78e; --problem:#ffb89c; }
+}
