@@ -119,7 +119,12 @@ window.PipelineUI = (() => {
       this.detail = create("p", "pipeline-drive-note");
       this.jobs = create("dl", "pipeline-jobs");
       this.capacity = create("p", "pipeline-drive-note");
-      host.append(this.title, this.state, this.detail, this.jobs, this.capacity);
+      this.telemetry=create("section","pipeline-device-measurements");
+      this.telemetryState=create("p","pipeline-drive-note");
+      this.telemetryValues=create("p","pipeline-drive-counts");
+      this.telemetrySource=create("p","pipeline-drive-note");
+      this.telemetry.append(create("h4","","Measured device activity"),this.telemetryState,this.telemetryValues,this.telemetrySource);
+      host.append(this.title, this.state, this.detail, this.jobs, this.capacity, this.telemetry);
     }
     update(inference = {}) {
       const backend = inference.configured?.backend;
@@ -131,7 +136,8 @@ window.PipelineUI = (() => {
       const configured = inference.configured?.jobs || 3;
       const limit = configured;
       text(this.state, jobs.length ? running.length + " running · " + waiting.length + " waiting" : "Worker activity has not been reported.");
-      text(this.detail, "Up to " + limit + " concurrent GPU jobs. Foreground search receives the next available slot.");
+      text(this.detail, "Up to " + limit + " concurrent GPU jobs. Foreground search receives the next available slot." +
+        (inference.configured?.resourceProfile === "quiet" ? " Quiet limits background preparation to one model owner." : ""));
       this.jobs.replaceChildren();
       for (const job of jobs.filter(job => ["running","waiting"].includes(job.phase)).slice(0, 4)) {
         const row = create("div");
@@ -139,6 +145,22 @@ window.PipelineUI = (() => {
         row.append(create("dt", "", name), create("dd", "", job.phase === "running" ? "Running" : "Waiting"));
         this.jobs.append(row);
       }
+      const measured=inference.telemetry;
+      const supported=measured?.schemaVersion===1;
+      const utilization=supported&&Number.isFinite(measured.utilizationPercent)&&measured.utilizationPercent>=0&&measured.utilizationPercent<=100
+        ? measured.utilizationPercent.toFixed(0)+"% device utilization" : "Device utilization not reported";
+      const memory=supported&&Number.isFinite(measured.memoryUsedBytes)&&measured.memoryUsedBytes>=0
+        ? (measured.memoryUsedBytes/1073741824).toFixed(2)+" GiB device memory used"+
+          (Number.isFinite(measured.memoryTotalBytes)&&measured.memoryTotalBytes>0?" of "+(measured.memoryTotalBytes/1073741824).toFixed(2)+" GiB":"")
+        : "Device memory not reported";
+      text(this.telemetryState,supported ? measured.state==="ready" ? "Measured by the device provider." :
+        measured.state==="stale" ? "Last device sample is stale." : measured.message||"Device measurements are unavailable."
+        : "Device measurements have not been reported.");
+      text(this.telemetryValues,utilization+" · "+memory);
+      text(this.telemetrySource,supported ? [measured.source?"Source: "+measured.source:"",
+        measured.deviceId?"Device: "+measured.deviceId:"",Number.isFinite(measured.ageMs)?"Sample age "+Math.round(measured.ageMs/1000)+" s":"",Number.isFinite(measured.intervalMs)?"Sample interval "+measured.intervalMs+" ms":"",
+        "Device-wide counters include other applications."].filter(Boolean).join(" · ") :
+        "Worker request counts do not measure GPU utilization.");
       this.capacity.hidden = !inference.capacity?.reason;
       text(this.capacity, (inference.capacity?.backgroundWorkers ? "Background preparation: " + inference.capacity.backgroundWorkers + " workers. " : "") + (inference.capacity?.reason || "").replace(/^(?:worker error:\s*)?capacity_limited:\s*/i,""));
     }

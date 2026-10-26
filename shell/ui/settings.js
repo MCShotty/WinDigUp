@@ -21,11 +21,14 @@ const notes = {
 
 let info = {};
 let accelerationDirty = false;
+let personalizationPending = false;
+let personalizationRevision = 0;
 let displayedBackend = null;
 let deviceProbe = null;
 let deviceProbeStarted = false;
 let deviceProbeBusy = false;
 const gpuDrafts = new Map();
+const priorityPending = new Set();
 let summaries = null;        // what's indexed under each folder (search-service's summaries)
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
@@ -35,22 +38,42 @@ const activityView = new ActivityUI.View($("settings-activity"), { onSettings: t
 // MARK: Tabs
 
 function showTab(name) {
-  if (!["activity", "general", "folders", "code", "apps", "drives", "storage"].includes(name)) name = "general";
-  if (name === "drives" && !info.discovery?.supported) name = "general";
+  if (!["activity", "general", "folders", "code", "apps", "drives", "executable-review", "windows-settings", "storage"].includes(name)) name = "general";
+  if (["drives", "executable-review", "windows-settings"].includes(name) && !info.discovery?.supported) name = "general";
   if (name === "activity") activityView.show(); else activityView.hide();
   for (const button of document.querySelectorAll("#tabs button")) {
-    button.setAttribute("aria-selected", String(button.dataset.tab === name));
+    const selected = button.dataset.tab === name;
+    button.setAttribute("aria-selected", String(selected)); button.tabIndex = selected ? 0 : -1;
+    if (selected) button.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== name;
   if (name === "folders") loadSummaries();
   if (name === "code") loadCodeSummaries();
   if (name === "apps") { loadApplicationSettings(); DiscoverySettings.render(); }
-  if (name === "drives") { DiscoverySettings.render(); DiscoverySettings.refreshVolumes(); DiscoverySettings.candidates(); }
+  if (name === "drives") { DiscoverySettings.render(); DiscoverySettings.refreshVolumes(); }
+  if (name === "executable-review") { DiscoverySettings.render(); DiscoverySettings.candidates(); }
+  if (name === "windows-settings") DiscoverySettings.render();
 }
 
-for (const button of document.querySelectorAll("#tabs button")) button.onclick = () => showTab(button.dataset.tab);
+for (const button of document.querySelectorAll("#tabs button")) {
+  button.id ||= "settings-tab-" + button.dataset.tab;
+  button.setAttribute("aria-controls", button.dataset.tab);
+  $(button.dataset.tab)?.setAttribute("aria-labelledby", button.id);
+  button.onclick = () => showTab(button.dataset.tab);
+}
+$("tabs").onkeydown = event => {
+  const tabs = [...$("tabs").querySelectorAll('button:not([hidden])')], current = tabs.indexOf(event.target);
+  if (current < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+    : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  showTab(tabs[next].dataset.tab); tabs[next].focus();
+};
 $("open-drives").onclick = $("folders-drives").onclick = () => showTab("drives");
 $("drive-file-settings").onclick = () => showTab("folders");
+$("open-app-review").onclick = () => showTab("executable-review");
+$("review-drive-settings").onclick = () => showTab("drives");
+$("win-settings-activity").onclick = () => showTab("activity");
 
 // MARK: General
 
@@ -64,6 +87,7 @@ function renderGeneral() {
     $("npu-python").value = acceleration.python || "";
     $("npu-models").value = acceleration.models || "";
     $("gpu-jobs").value=String(acceleration.jobs||0);
+    $("resource-profile").value = acceleration.resourceProfile || "balanced";
   }
   $("accelerator").querySelector('option[value="metal"]').hidden = !/Mac/.test(navigator.platform);
   showAcceleratorOptions();
@@ -85,6 +109,7 @@ function renderGeneral() {
   $("shortcut-command").textContent = info.shortcut.command;
   $("change-shortcut").hidden = info.shortcut.method !== "grab" || recording;
   $("recording").hidden = !recording;
+  renderPersonalization();
   renderUpdates();
 }
 
@@ -93,6 +118,7 @@ function showAcceleratorOptions() {
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
   $("gpu-jobs-control").hidden=npu||$("accelerator").value==="metal";
+  $("resource-profile").disabled = npu || $("accelerator").value === "metal";
   $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
   renderGPUDevices();
 }
@@ -136,13 +162,14 @@ $("refresh-gpus").onclick = refreshGPUDevices;
 window.__TAURI__.event.listen("acceleration", ({ payload }) => {
   if (!accelerationDirty && info.shortcut) { info.acceleration = payload; renderGeneral(); }
 });
-for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs"]) $(id).oninput = () => { accelerationDirty = true; };
+for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs", "resource-profile"]) $(id).oninput = () => { accelerationDirty = true; };
 $("apply-accelerator").onclick = async () => {
   $("problem").hidden = true;
   $("apply-accelerator").disabled = true;
   try {
     await invoke("set_acceleration", { acceleration: {
       backend: $("accelerator").value, gpu: $("gpu-device").value.trim(), jobs:Number($("gpu-jobs").value),
+      resourceProfile: $("resource-profile").value,
       python: $("npu-python").value.trim(), models: $("npu-models").value.trim(),
     } });
   } catch (error) {
@@ -150,6 +177,33 @@ $("apply-accelerator").onclick = async () => {
     $("apply-accelerator").disabled = false;
   }
 };
+
+function renderPersonalization() {
+  const preference = info.personalization;
+  const available = preference?.version === 1;
+  if (!personalizationPending) $("personalization-enabled").checked = available && preference.enabled;
+  $("personalization-enabled").disabled = personalizationPending || !available;
+  $("clear-personalization").disabled = personalizationPending || !available || !preference.entries;
+  if (!personalizationPending) $("personalization-status").textContent = !available
+    ? "Local relevance history has not been reported by this build."
+    : preference.enabled ? "Local result history is on." : "Consistent ranking is on; local history is not used.";
+}
+async function changePersonalization(command, args) {
+  if (personalizationPending) return;
+  personalizationRevision++; personalizationPending = true; $("personalization-status").textContent = "Updating local relevance history…";
+  renderPersonalization();
+  try {
+    info.personalization = await invoke(command, args);
+    $("personalization-status").textContent = command === "clear_personalization" ? "Local relevance history cleared." : "Result-order preference saved.";
+  } catch (error) { $("personalization-status").textContent = error?.message || String(error); }
+  finally {
+    personalizationPending = false; personalizationRevision++;
+    const message = $("personalization-status").textContent;
+    renderPersonalization(); $("personalization-status").textContent = message;
+  }
+}
+$("personalization-enabled").onchange = () => changePersonalization("set_personalization", { enabled: $("personalization-enabled").checked });
+$("clear-personalization").onclick = () => changePersonalization("clear_personalization");
 
 /// Updates: the daily check, and this version or the one waiting (updates.rs).
 function renderUpdates() {
@@ -330,6 +384,25 @@ function folderRow(folder, summary, code = false) {
     ].filter(Boolean).join(" · ");
     if (states) side.append(element("div", "states", states));
   }
+  const priority = element("button", "link folder-priority", "Index this first");
+  const priorityKey = (code ? "code:" : "files:") + folder;
+  priority.type = "button";
+  priority.setAttribute("aria-label", "Index " + nameOf(folder) + " first");
+  priority.disabled = priorityPending.has(priorityKey) || Boolean(summary?.missing || summary?.unreadable);
+  priority.onclick = async () => {
+    if (priorityPending.has(priorityKey)) return;
+    priorityPending.add(priorityKey); priority.disabled = true;
+    const message = $(code ? "code-priority-status" : "folder-priority-status");
+    message.textContent = "Saving folder priority…";
+    try {
+      const result = await invoke("index_folder_first", { path: folder, code });
+      message.textContent = result?.active
+        ? "Folder prioritized. The current operation can finish before it takes effect."
+        : "Priority saved for the next indexing batch. Pause and schedule settings are unchanged.";
+    } catch (error) { message.textContent = error?.message || String(error); }
+    finally { priorityPending.delete(priorityKey); if (priority.isConnected) priority.disabled = false; }
+  };
+  side.append(priority);
   row.append(text, side, removeButton(code ? "Stop searching the code in this folder" : "Stop searching this folder", () => {
     if (code) {
       removingCode = folder;
@@ -591,7 +664,9 @@ function fail(error) {
 // MARK: Start
 
 async function refresh() {
+  const personalRevision = personalizationRevision;
   const fresh = await invoke("settings_info"), previousDiscovery = info.discovery;
+  if (personalizationPending || personalRevision !== personalizationRevision) fresh.personalization = info.personalization;
   info = fresh;
   if (previousDiscovery && fresh.discovery) {
     info.discovery = previousDiscovery; DiscoverySettings.accept("discovery", fresh.discovery);

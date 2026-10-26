@@ -2,8 +2,8 @@
 
 body { display: flex; flex-direction: column; }
 
-.tabs { flex: none; display: flex; justify-content: center; gap: 4px; padding: 12px 20px 10px; border-bottom: 1px solid var(--line); }
-.tabs button { border: 0; border-radius: 7px; padding: 5px 14px; background: none; color: var(--secondary); font-weight: 500; }
+.tabs { flex: none; display: flex; justify-content: flex-start; gap: 4px; overflow-x: auto; padding: 12px 20px 10px; border-bottom: 1px solid var(--line); }
+.tabs button { flex: none; min-height: 36px; white-space: nowrap; border: 0; border-radius: 7px; padding: 5px 14px; background: none; color: var(--secondary); font-weight: 500; }
 .tabs button:hover { background: var(--line); }
 .tabs button[aria-selected="true"] { background: var(--moss); color: white; }
 
@@ -82,3 +82,27 @@ select.field {
 }
 
 #drive-file-settings, #folders-drives { color: var(--leaf-text, var(--moss)); }
+
+.tabs button:focus-visible { outline:2px solid var(--moss); outline-offset:-2px; }
+.source-volume { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 16px; padding:16px 0; }
+.source-volume > .drive-description { min-width:0; }
+.drive-name, .drive-state, .drive-selection { overflow-wrap:anywhere; }
+.drive-name { font-weight:650; }
+.drive-state, .drive-selection { color:var(--secondary); font-size:12px; line-height:1.5; margin:5px 0 0; }
+.drive-state { color:var(--text); }
+.drive-actions { grid-column:1 / -1; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.source-drive-options { align-self:start; }
+.settings-source { margin-top:16px; }
+#executable-review .source-candidate:first-child { margin-top:12px; }
+@media(max-width:600px),(pointer:coarse) {
+  .tabs { padding:8px 12px; }
+  .tabs button { min-height:44px; padding:8px 12px; }
+  .source-volume { grid-template-columns:minmax(0,1fr); }
+  .source-drive-options label { min-height:44px; }
+  main.settings { padding-inline:18px; }
+  .drive-actions button, #windows-settings button, #executable-review button, #general button { min-height:44px; }
+}
+
+.folder-priority { margin-top:4px; white-space:nowrap; }
+
+.drive-source-policy { border-top:1px solid var(--line); margin-top:12px; }
