@@ -4,7 +4,11 @@ This stage starts from merged main `4aa0e49`. It changes presentation and additi
 
 ## Source choices
 
-Settings has separate destinations for Drives, Review apps and Windows settings. Drives retains independent Files and Applications choices per volume GUID, Save/Revert, pending edits across refresh, unavailable volumes and optional administrator-installed fast NTFS discovery. Drive rows are updated by identity rather than replaced when progress arrives. View activity opens the corresponding observed drive row.
+Settings has separate destinations for Drives, Review apps and Windows settings. Drives retains independent Files
+and Applications choices in stable per-volume rows, Save/Revert, pending edits across refresh, unavailable volumes
+and optional administrator-installed fast NTFS discovery. App discovery selections use volume GUIDs; file indexing
+uses its existing path-based folder scopes. Drive rows are updated by identity rather than replaced when progress
+arrives. View activity opens the corresponding observed drive row.
 
 Review apps contains executable filters and include/hide/reset decisions. Including a candidate does not run it. The preferred registered shortcut still owns launch arguments and working directory. Online descriptions remain an opt-in Apps source.
 

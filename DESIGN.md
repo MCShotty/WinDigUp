@@ -53,10 +53,12 @@ single full-width result list. Its top anchor stays fixed, and its height is lim
 A file preview or application details view opens deliberately in the same window. The compact panel
 does not reserve a second column or prepare a full preview merely because a row is selected.
 
-Use one native material surface. Windows Acrylic is requested through the already-pinned
-window-vibrancy runtime; native application success determines the material receipt. Respect Windows
-transparency, contrast and Remote Desktop restrictions. The Solid preference and unsupported desktops
-use an opaque neutral surface. The result list and footer remain opaque to protect reading contrast.
+Use one restrained neutral surface. The shaped Windows panel currently uses the Solid fallback:
+both native Acrylic paths painted outside the capsule in real WebView2 pixel checks. Clear whole-window
+backdrops and preserve the transparent WebView canvas and native rounded hit region. Respect Windows
+transparency, contrast and Remote Desktop restrictions. Restore Acrylic only after native pixel
+validation proves the shaped surface renders correctly. The result list and footer remain opaque
+to protect reading contrast.
 
 The circular button opens full search and retains the query, compatible scope and selected result ID.
 It has a visible focus state, a tooltip and an accessible name. The input uses the existing Segoe UI
@@ -65,7 +67,7 @@ colour; DigUp does not capture wallpaper or add an image behind the launcher.
 
 Purpose notes:
 - The capsule shape identifies the quick-search entry point.
-- Native material places one transient launcher over the desktop; it does not decorate every row.
+- One transient surface keeps the launcher compact without decorating every result row.
 - Moss selection and a full outline identify exactly what Enter activates.
 - A compact footer keeps primary actions reachable and sends failures to Activity.
 - Shared field, control and spacing tokens connect the panel, full search and Settings.

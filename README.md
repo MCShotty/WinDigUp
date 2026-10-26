@@ -7,7 +7,7 @@ Search the files on your computer by what's in them, with Google DeepMind's
 <a href="https://huggingface.co/google/embeddinggemma-2">EmbeddingGemma 2</a>.</p>
 
 <p align="center"><a href="https://github.com/ARahim3/DigUp/releases/latest"><b>Download for Mac</b></a> ·
-<a href="https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.1"><b>Windows and Linux (beta)</b></a><br>
+<a href="https://github.com/MCShotty/WinDigUp/pull/21"><b>Windows fork build status</b></a><br>
 <sub>Free and open source. Everything runs on your computer.</sub></p>
 
 <p align="center"><img src="docs/demo.gif" width="800" alt="DigUp's search panel on a Mac, on Windows and on Linux: a zebra in a video, a podcast minute, a clause in a lease, a dog on the beach in English, Bengali and Arabic, and code that opens in Zed."></p>
@@ -36,8 +36,11 @@ so a search gets both the meaning and the exact string. On a Mac that includes t
 
 ## Private
 
-Nothing you index leaves your computer. DigUp goes online only to download the model once and to check for updates
-once a day. The update check sends nothing about your files, and you can turn it off. No account, no telemetry.
+File contents, private paths and search queries stay on your computer. By default, DigUp goes online to download
+the model and check for updates; update checks can be disabled. Online app descriptions are off by default. If you
+enable them, public package/publisher services receive the product URLs requested and your IP address, as explained
+in Settings. Local result personalization stays on this computer and can be disabled or cleared. No account is
+required, and DigUp sends no usage analytics.
 
 ## Install
 
@@ -45,10 +48,10 @@ once a day. The update check sends nothing about your files, and you can turn it
 Applications, or use Homebrew: `brew install --cask arahim3/tap/digup`. It needs an Apple Silicon Mac with macOS 14 or
 later.
 
-**Windows.** Download `DigUp_x.y.z_x64-setup.exe` from the
-[beta release](https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.1) and run it. It installs for you only, with
-no admin rights. Windows may say it doesn't recognize the app, because the installer isn't signed yet: choose More
-info, then Run anyway. It needs 64-bit Windows 10 or 11.
+**Windows fork.** See [Windows build status and validation](https://github.com/MCShotty/WinDigUp/pull/21) for this
+fork's reviewed installer and its current checks. A download is listed there after the package and installed checks
+pass. Extract the installer ZIP and run its setup executable. The desktop app installs for your account on 64-bit
+Windows 10 or 11. The optional fast NTFS discovery component has a separate, explicit administrator approval step.
 
 **Linux.** On Ubuntu, Debian, Mint and the like, download the .deb and install it:
 
@@ -79,9 +82,11 @@ On Windows, this fork also finds and launches registered applications. Type a na
 work before the model is ready. With an accelerator, DigUp can also match what an application does.
 See [Windows application search](docs/application-search.md) for discovery, aliases and validation limits.
 
-Windows search shows keyword results immediately and adds meaning matches after a short typing pause. Apps normally
-follow file results; Settings → Apps offers Smart placement, Files first, or Apps view only. Activity's **Last search**
-breakdown shows where time was spent. See [search responsiveness and measurement limits](docs/search-responsiveness.md).
+Windows search publishes native name and keyword results independently, then adds meaning matches after a short
+typing pause. Shared **Best matches** can contain files, applications and Windows settings, with exact names and
+aliases leading qualified suggestions. Files first and Apps view only preferences remain available. Activity's
+**Last search** breakdown shows measured waits, loading and search work. See
+[search responsiveness and measurement limits](docs/search-responsiveness.md).
 
 Drive discovery can scan independent physical disks together. Activity shows each drive's phase and separate stage
 measurements. GPU jobs in General settings allows up to three AMD Vulkan/NVIDIA CUDA operations, subject to device
@@ -169,11 +174,16 @@ your folders ─► readers that turn files into pictures, text and sound
 your words   ─► the same model's text part (~250 MB, only while you search) ─► nearest vectors + exact words
 ```
 
-DigUp runs ggml-org's 8-bit build of EmbeddingGemma 2 through [llama.cpp](https://github.com/ggml-org/llama.cpp): on
-the Mac's GPU with Metal, and on Windows and Linux on the GPU with Vulkan when a quick check at setup finds it faster
-than the processor and getting the same results. Every vector lives in the same 768-dimensional space, which is why
-one query can rank a video frame against a PDF page. A search embeds your words in milliseconds and compares them with
-everything in the index. Exact-word matches get a boost, because no embedding holds an invoice number exactly.
+The pinned [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime uses Q8 EmbeddingGemma 2 with Metal on Mac,
+NVIDIA CUDA for supported RTX GPUs, or AMD/non-NVIDIA Vulkan. Intel NPU mode uses a verified OpenVINO bundle. Windows
+and Linux model inference stays on the selected accelerator, including pooling and normalization; failures stop
+inference without choosing another device or a CPU fallback. Ordinary file reading, tokenization and similarity
+scoring run on the host.
+
+Compatible indexes retain the model's shared 768-dimensional space, so a query can retrieve a video frame or a PDF
+page. Exact names and text remain independently useful. Semantic latency depends on the accelerator, model readiness,
+index size and current work; Activity reports measured timings. See [accelerator requirements and validation
+limits](docs/acceleration.md).
 
 The search engine is the same Swift code on every system. On a Mac it reads files with macOS's own frameworks (ImageIO,
 PDFKit, AVFoundation, and Vision for the text in screenshots) and the app is SwiftUI. On Windows and Linux it reads
@@ -214,9 +224,9 @@ missing for now. The text inside screenshots isn't read yet, so a screenshot is 
 an exact code typed into the search. And doc files from old Word versions, RAW photos and SVG pictures are only read
 on a Mac.
 
-**Why is the download 865 MB?** That's the model: the text part (310 MB) and the image and audio encoders (555 MB).
-The app itself is about 20 MB on a Mac, and on Windows and Linux 40 to 140 MB depending on the package, since those
-carry their own PDF, video and image readers.
+**What makes up the download?** The model is downloaded separately from the application. The Windows fork also
+bundles CUDA and Vulkan runtimes and PDF, video and image readers. The reviewed build lists its compressed installer
+download size; it is not the same as installed disk usage.
 
 **Will it slow my computer down?** Only the first pass is heavy. After that it reads new files only. The model runs in
 a separate process that quits when it's done, and the search side only loads while you're searching.
@@ -257,6 +267,6 @@ trademarks of Apple Inc.; Windows is a trademark of Microsoft Corporation.
 
 MIT
 
-### Additional Windows search sources (PR #8, depends on PR #7)
+### Additional Windows search sources
 
 Windows settings can be searched by name or purpose with `settings:` / the Settings filter. Optional drive discovery finds unregistered desktop apps using NTFS records or directory fallback. Optional WinGet/publisher descriptions add attributed purpose information; online fetching is off by default. [Configuration and validation status](docs/windows-discovery.md).
