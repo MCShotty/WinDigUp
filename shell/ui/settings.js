@@ -387,6 +387,8 @@ function folderRow(folder, summary, code = false) {
   const priority = element("button", "link folder-priority", "Index this first");
   const priorityKey = (code ? "code:" : "files:") + folder;
   priority.type = "button";
+  priority.dataset.priorityKey = priorityKey;
+  priority.dataset.unavailable = String(Boolean(summary?.missing || summary?.unreadable));
   priority.setAttribute("aria-label", "Index " + nameOf(folder) + " first");
   priority.disabled = priorityPending.has(priorityKey) || Boolean(summary?.missing || summary?.unreadable);
   priority.onclick = async () => {
@@ -400,7 +402,11 @@ function folderRow(folder, summary, code = false) {
         ? "Folder prioritized. The current operation can finish before it takes effect."
         : "Priority saved for the next indexing batch. Pause and schedule settings are unchanged.";
     } catch (error) { message.textContent = error?.message || String(error); }
-    finally { priorityPending.delete(priorityKey); if (priority.isConnected) priority.disabled = false; }
+    finally {
+      priorityPending.delete(priorityKey);
+      for (const button of document.querySelectorAll(".folder-priority"))
+        if (button.dataset.priorityKey === priorityKey) button.disabled = button.dataset.unavailable === "true";
+    }
   };
   side.append(priority);
   row.append(text, side, removeButton(code ? "Stop searching the code in this folder" : "Stop searching this folder", () => {
