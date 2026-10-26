@@ -145,7 +145,7 @@ window.ActivityUI = (() => {
   }
   function searchBreakdown(sample) {
     return [["debounce","Typing pause"],["queue","Helper queue"],["transport","Dispatch"],["model_load","Model startup"],
-      ["encode","Query encoding"],["scoring","Vector scoring"],["keywords","Keyword search"],["metadata","Metadata"],["render","Rendering"]]
+      ["encode","Query encoding"],["scoring","Vector scoring"],["keywords","Keyword search"],["metadata","Metadata"],["availability","Availability cache lookup"],["render","Rendering"]]
       .filter(([key])=>Number.isFinite(sample?.[key])).map(([key,label])=>`${label} ${Math.round(sample[key])} ms`).join(" · ");
   }
 

@@ -137,7 +137,7 @@ impl Diagnostics {
             "timingOrigin":"ui_input",
             "generation":sample["generation"].as_u64().unwrap_or(0),"requestId":sample["requestId"].as_u64().unwrap_or(0)});
         if let Some(id)=sample["nativeRequestId"].as_u64() { clean["nativeRequestId"]=json!(id); }
-        for key in ["total", "roundtrip", "debounce", "render", "native", "queue", "helper_total", "helper_startup", "model_load", "encode", "search", "scoring", "keywords", "metadata", "vector_load", "retrieval_queue", "transport"] {
+        for key in ["total", "roundtrip", "debounce", "render", "native", "queue", "helper_total", "helper_startup", "model_load", "encode", "search", "scoring", "keywords", "metadata", "availability", "vector_load", "retrieval_queue", "transport"] {
             if let Some(value) = sample[key].as_f64().filter(|v| v.is_finite() && *v >= 0.0 && *v <= 86_400_000.0) { clean[key] = json!(value); }
         }
         clean["cacheHit"] = json!(sample["cacheHit"] == true);
@@ -171,6 +171,15 @@ pub fn tail(path: &Path, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn availability_duration_is_retained_without_turning_probe_counts_into_timings() {
+        let directory = std::env::temp_dir().join("digup-availability-timing-contract");
+        let diagnostics = Diagnostics::new(&directory);
+        diagnostics.record_search("panel", &json!({"phase":"file_words","total":10.0,"availability":2.5,"availability_checks":7})).unwrap();
+        let history = diagnostics.search_timings();
+        assert_eq!(history[0]["availability"], 2.5);
+        assert!(history[0].get("availability_checks").is_none());
+    }
     #[test]
     fn search_timing_history_is_bounded_numeric_and_in_memory() {
         let dir=std::env::temp_dir().join("digup-search-timings-absent");
