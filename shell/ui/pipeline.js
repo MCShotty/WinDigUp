@@ -174,10 +174,14 @@ window.PipelineUI = (() => {
     return Object.values(files.pipeline || {}).filter(value => value?.schemaVersion === 2)
       .sort((a,b) => (b.receivedAt || b.capturedAt || 0) - (a.receivedAt || a.capturedAt || 0))[0];
   }
+  function heldFiles(files = {}) {
+    return files.phase === "waiting" && Number.isFinite(files.pending) && files.pending > 0
+      && [files.unreadable, files.missing].some(paths => Array.isArray(paths) && paths.length > 0);
+  }
   function indexSummary(files = {}) {
     const sample = indexingSample(files);
     if (!sample) return "";
-    return "Indexing pipeline: " + (indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
+    return "Indexing pipeline: " + (heldFiles(files) ? "Queued work held for unavailable folders" : indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
       "; " + sample.readyJobs + " ready; " + sample.runningJobs + " inference requests; " +
       sample.completedJobs + " awaiting publication; admission capacity " + sample.capacity;
   }
@@ -209,6 +213,7 @@ window.PipelineUI = (() => {
       const sample=indexingSample(files);this.host.hidden=!sample;
       if(!sample)return;
       const phase=files.paused?"Indexing paused":files.phase==="scheduled"?"Waiting for the indexing schedule":
+        heldFiles(files)?"Queued work held for unavailable folders":
         indexingReasons[sample.blockedBy] || "Pipeline status unavailable";
       text(this.state,phase);
       text(this.counts,sample.readyJobs+" ready · "+sample.runningJobs+" inference requests · "+
@@ -229,5 +234,5 @@ window.PipelineUI = (() => {
     return entries(discovery).map(({ volume, progress }) =>
       "Volume: " + label(volume) + "\nActivity: " + phase(discovery, progress) + "; " + metrics(progress)).join("\n");
   }
-  return { DriveList, InferenceView, IndexingView, indexSummary, summary, entries, phase, metrics };
+  return { DriveList, InferenceView, IndexingView, indexSummary, summary, entries, phase, metrics, heldFiles };
 })();

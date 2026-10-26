@@ -10,7 +10,7 @@ let browser;
   await page.addInitScript(()=>{
     const old=window.__TAURI__.core.invoke,time=Date.now()/1000;
     window.personalization={version:1,enabled:true,entries:3};
-    window.activityMode="indexing";window.activityPaused=false;
+    window.activityMode="indexing";window.activityPaused=false;window.activityDiscovery=true;window.activityUnreadable=[];
     window.holdSettings=false;window.settingsWaiters=[];window.failDriveSave=false;window.failReview=false;window.reviewHit=null;
     window.sourceDrive={version:2,supported:true,catalogEnabled:true,options:{enabled:true,paused:false,revision:1,volumes:["volume-a"],included:[],hidden:[]},
       volumes:[{id:"volume-a",name:"Local SSD",paths:["C:\\"],filesystem:"NTFS",available:true},
@@ -29,7 +29,9 @@ let browser;
       if(command==="activity_snapshot"){
         const reply=await old(command,args);
         reply.files={...reply.files,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,total:100,done:17,
-          discoveryActive:true,entriesChecked:443831,candidates:107857,candidatesFinal:false,lastProgressAt:time};
+          discoveryActive:window.activityDiscovery,unreadable:window.activityUnreadable,entriesChecked:443831,candidates:107857,candidatesFinal:false,lastProgressAt:time};
+        if(window.activityMode==="waiting")reply.files.pipeline={files:{schemaVersion:2,epoch:"held-fixture",blockedBy:"idle",capacity:8,
+          preparationWorkers:2,inferenceWorkers:3,readyJobs:0,runningJobs:0,completedJobs:0}};
         reply.search={last:{phase:"file_words",total:12,availability:2.3,availability_checks:7}};
         reply.discovery=structuredClone(sourceDrive);reply.windowsSettings={catalog:windowsCatalog,purpose:{state:"ready"}};
         reply.inference.configured={backend:"amd-vulkan",jobs:2,resourceProfile:"balanced"};
@@ -95,6 +97,13 @@ let browser;
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Indexing paused");
   assert.equal(await page.locator(".activity-stages").isVisible(),false);
   await page.evaluate(()=>{activityMode="indexing";activityPaused=false;emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
+  await page.evaluate(()=>{activityMode="waiting";activityDiscovery=false;activityUnreadable=["C:/Locked"];emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="explanation"]').textContent.includes("queued files are held"));
+  assert.match(await page.locator('[data-key="indexing-work"]').innerText(),/Queued work held/);
+  assert.equal(await page.locator('[data-key="pending"]').innerText(),"66");
+  assert.ok(!(await page.locator('[data-key="indexing-work"]').innerText()).includes("Queue completed"));
+  await page.evaluate(()=>{activityMode="indexing";activityDiscovery=true;activityUnreadable=[];emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
   assert.match(await page.locator(".pipeline-device-measurements").innerText(),/Device utilization not reported/);
   assert.ok(!(await page.locator(".pipeline-device-measurements").innerText()).includes("0%"));

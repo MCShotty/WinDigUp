@@ -298,7 +298,8 @@ window.ActivityUI = (() => {
         preparing_queue: "Applying exclusions and reconciling supported files with the index.",
         not_configured: "Apps work without folders. Choose folders in Settings to add file search.",
         indexing: "Reading eligible files and preparing searchable content on your selected accelerator.",
-        waiting: "Files are queued, but no file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
+        waiting: PipelineUI.heldFiles(f) ? "Some queued files are held because folders are unavailable or unreadable. Existing searchable content is kept. Restore access, then choose Index now in Diagnostics."
+          : "Files are queued, but no file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
         finishing: "Reading the remaining pages and chunks of long files. Partial content is already searchable.",
         scheduled: `Existing results remain searchable. Indexing resumes from ${f.scheduledAt || "the scheduled time"}.`,
         paused: "Existing results and application launching remain available.", pausing: "Waiting for the file worker to stop. Search remains available.",
