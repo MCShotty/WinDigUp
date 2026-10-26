@@ -22,6 +22,7 @@ final class PendingFileQueue {
     private var exhausted = false
     private var closed = false
     private var preferredPath: String?
+    private var preferredAvailable=false
     private(set) var buildMs = 0.0
     private(set) var fetchMs = 0.0
     private(set) var pages = 0
@@ -76,14 +77,27 @@ final class PendingFileQueue {
 
     func append(_ ids: [Int64]) throws {
         guard !closed, !ids.isEmpty else { return }
+        var preferenceArrived=false
         try store.db.transaction {
             for id in ids {
                 try store.db.run("""
                     INSERT OR IGNORE INTO \(table)(ord,file,priority)
                     SELECT ?,id,1 FROM files WHERE id=? AND state=?\(scopeSQL)
                     """,[.int(lastOrdinal+1),.int(id),.text(state)] + scopeValues)
-                try store.db.query("SELECT changes()") { if $0.int(0)>0 {total += 1;lastOrdinal += 1} }
+                var inserted=false
+                try store.db.query("SELECT changes()") { if $0.int(0)>0 {total += 1;lastOrdinal += 1;inserted=true} }
+                if inserted,let preferredPath,!preferenceArrived {
+                    try store.db.query("SELECT path FROM files WHERE id=?",[.int(id)]) {row in
+                        guard let path=row.text(0) else{return}
+                        preferenceArrived=path==preferredPath || IndexStore.pathRanges(under:preferredPath).contains {path.hasPrefix($0.from)}
+                    }
+                }
             }
+        }
+        if preferenceArrived {
+            try flushConsumed()
+            buffer.removeAll(keepingCapacity:true)
+            offset=0;after=0;preferredAvailable=true
         }
         exhausted=false
     }
@@ -99,6 +113,7 @@ final class PendingFileQueue {
     func prioritize(_ path: String) throws {
         try flushConsumed()
         preferredPath=path
+        preferredAvailable=true
         buffer.removeAll(keepingCapacity:true)
         offset=0;after=0;exhausted=false
     }
@@ -111,18 +126,18 @@ final class PendingFileQueue {
             buffer.removeAll(keepingCapacity: true)
             offset = 0
             let start = ProcessInfo.processInfo.systemUptime
-            if let path=preferredPath {
+            if let path=preferredPath,preferredAvailable {
                 let ranges=IndexStore.pathRanges(under:path)
                 let conditions=ranges.map {_ in "(f.path>=? AND f.path<?)"}.joined(separator:" OR ")
                 let columns=IndexStore.fileColumns.split(separator:",").map {"f." + $0.trimmingCharacters(in:.whitespaces)}.joined(separator:",")
                 let values=ranges.flatMap {[SQLValue.text($0.from),.text($0.to)]}
                 try store.db.query("""
-                    SELECT \(columns),-1,q.ord FROM \(table) q CROSS JOIN files f ON f.id=q.file
+                    SELECT \(columns),-1,q.ord FROM files f INDEXED BY sqlite_autoindex_files_1 CROSS JOIN \(table) q ON q.file=f.id
                     WHERE f.state=? AND (\(conditions)) ORDER BY q.ord LIMIT ?
                     """,[.text(state)] + values + [.int(Int64(pageSize))]) {
                     buffer.append(Entry(file:IndexStore.record($0),priority:-1,ordinal:$0.int(9)))
                 }
-                if buffer.isEmpty {preferredPath=nil;after=0}
+                if buffer.isEmpty {preferredAvailable=false;after=0}
             }
             if buffer.isEmpty {
                 try store.db.query(pageSQL, [.int(after), .text(state), .int(Int64(pageSize))]) {

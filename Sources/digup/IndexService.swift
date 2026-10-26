@@ -276,7 +276,16 @@ final class IndexService: @unchecked Sendable {
             let gate=NSLock()
             for part in requested {
                 let available=availableRoots(part)
-                let roots=changed[part.code].map {rootsForChanges($0,part:part,available:available)} ?? available
+                let requestedRoots=changed[part.code].map {rootsForChanges($0,part:part,available:available)} ?? available
+                let preferred=lock.withLock {preferredFolders[part.code]}
+                let roots=requestedRoots.enumerated().sorted {left,right in
+                    let rank:(URL)->Int={root in
+                        guard let preferred else{return 1}
+                        return preferred==root.path || FolderSelection.isInside(preferred,root.path) ? 0 : 1
+                    }
+                    let first=rank(left.element),second=rank(right.element)
+                    return first==second ? left.offset<right.offset : first<second
+                }.map(\.element)
                 let session=try part.indexer.beginScan(roots)
                 let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,selectedRoots:part.roots,
                     beforeFolder:beforeScanFolder,scanGate:gate)
@@ -493,7 +502,8 @@ final class IndexService: @unchecked Sendable {
         if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
            let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
            request["command"] as? String=="prioritize",
-           let path=request["path"] as? String {
+           let rawPath=request["path"] as? String {
+            let path=URL(fileURLWithPath:rawPath).standardizedFileURL.path
             let isCode=request["code"] as? Bool ?? false
             if let part=parts.first(where:{$0.code==isCode}),
                part.roots.contains(where:{$0.path==path || FolderSelection.isInside(path,$0.path)}) {
