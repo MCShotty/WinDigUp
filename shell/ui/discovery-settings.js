@@ -51,7 +51,6 @@ const DiscoverySettings = {
   },
   message(source,value){
     this.messages.set(source,value);
-    this.text("source-message",value);
     this.text("source-message-"+source,value);
   },
   render(){
