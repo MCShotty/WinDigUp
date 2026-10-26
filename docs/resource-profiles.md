@@ -8,6 +8,8 @@ selected accelerator, index scope or retained vectors.
 Settings stores acceleration.resourceProfile independently of acceleration.jobs. Existing settings
 default to balanced, including custom --settings files. Applying the preference uses the existing
 Apply and Restart flow. The CLI accepts DIGUP_RESOURCE_PROFILE=quiet|balanced|faster.
+Unknown future profile strings remain intact when settings are saved or reloaded. They block
+inference with a readable error until a supported profile is selected; other preferences are retained.
 
 - Quiet admits one background GPU model owner.
 - Balanced preserves the existing job limit.
