@@ -177,7 +177,7 @@ window.PipelineUI = (() => {
   function heldSummary(files = {}) {
     return [[files.heldPending,"pending files"],[files.heldUnfinished,"long files"]]
       .filter(([value]) => Number.isFinite(value) && value > 0)
-      .map(([value,label]) => count(value)+" "+label+" held for folder access").join(" · ");
+      .map(([value,label]) => count(value)+" "+label+" held until folders are checked").join(" · ");
   }
   function heldFiles(files = {}) {
     return files.phase === "waiting" && Boolean(heldSummary(files))
@@ -192,7 +192,7 @@ window.PipelineUI = (() => {
   function indexSummary(files = {}) {
     const sample = indexingSample(files);
     if (!sample) return "";
-    return "Indexing pipeline: " + (heldFiles(files) ? "Queued work held for unavailable folders" : stoppedPipeline[files.phase] || indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
+    return "Indexing pipeline: " + (heldFiles(files) ? "Queued work held until folders are checked" : stoppedPipeline[files.phase] || indexingReasons[sample.blockedBy] || sample.blockedBy || "Unknown") +
       "; last reported " + count(sample.readyJobs) + " ready; " + count(sample.runningJobs) + " inference requests; " +
       count(sample.completedJobs) + " awaiting publication; admission capacity " + count(sample.capacity);
   }
@@ -224,7 +224,7 @@ window.PipelineUI = (() => {
       const sample=indexingSample(files);this.host.hidden=!sample;
       if(!sample)return;
       const phase=files.paused?"Indexing paused":files.phase==="scheduled"?"Waiting for the indexing schedule":
-        heldFiles(files)?"Queued work held for unavailable folders":
+        heldFiles(files)?"Queued work held until folders are checked":
         stoppedPipeline[files.phase] || "Latest pipeline report: "+(indexingReasons[sample.blockedBy] || "Status unavailable");
       text(this.state,phase);
       text(this.counts,"Last reported: "+count(sample.readyJobs)+" ready · "+count(sample.runningJobs)+" inference requests · "+

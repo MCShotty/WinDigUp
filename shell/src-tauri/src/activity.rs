@@ -17,6 +17,14 @@ pub fn snapshot(input: Input) -> Value {
     let Input { state, catalog, semantic, configured, helpers, runtime, events, has_folders, blocked_by } = input;
     let scan = &state["scan"];
     let active = helpers["index"]["pid"].is_number() || helpers["index"]["busy"] == true;
+    let measured_held = state["heldPending"].as_u64().is_some_and(|value| value > 0)
+        || state["heldUnfinished"].as_u64().is_some_and(|value| value > 0);
+    let all_held = measured_held && state["runnablePending"].as_u64() == Some(0)
+        && state["runnableUnfinished"].as_u64() == Some(0);
+    let known_counts_complete = state["knownCountsComplete"].as_bool().unwrap_or(true);
+    let inventory_count = |key: &str| if !known_counts_complete && state[key].as_u64() == Some(0) {
+        Value::Null
+    } else { state[key].clone() };
     let phase = if !has_folders { "not_configured" }
         else if state["paused"] == true { if active { "pausing" } else { "paused" } }
         else if state["activity"] == "failed" || (state["lastError"].is_string() && state["activity"] == "idle") { "failed" }
@@ -30,7 +38,8 @@ pub fn snapshot(input: Input) -> Value {
                 Some("cleanup" | "checking_index") => "starting",
                 _ => "discovering",
             },
-            "indexing" => "indexing", "finishing" => "finishing",
+            "indexing" => "indexing", "finishing" => "finishing", "waiting" => "waiting",
+            "idle" if all_held => "waiting",
             "idle" if !active && scan["event"] == "scan_progress" => "stopped",
             "idle" if state["pending"].as_u64().unwrap_or(0) > 0 => "waiting",
             "idle" => "idle", _ => "starting",
@@ -64,7 +73,8 @@ pub fn snapshot(input: Input) -> Value {
         "search":{"schemaVersion":1,"last":runtime["lastSearch"],"index":runtime["searchIndex"]},
         "files":{"schemaVersion":2,"phase":phase,
             "discoveryActive":state["discoveryActive"].as_bool().unwrap_or(scan["discoveryActive"] == true),"line":state["line"],"pipeline":runtime["indexPipeline"],"pipelineHistory":runtime["indexPipelineHistory"],
-            "searchable":state["searchable"],"knownFiles":state["files"],"pending":state["pending"],"unfinished":state["unfinished"],
+            "knownCountsComplete":known_counts_complete,
+            "searchable":inventory_count("searchable"),"knownFiles":inventory_count("files"),"pending":inventory_count("pending"),"unfinished":inventory_count("unfinished"),
             "heldPending":state["heldPending"],"heldUnfinished":state["heldUnfinished"],
             "runnablePending":state["runnablePending"],"runnableUnfinished":state["runnableUnfinished"],
             "done":done,"total":total,"entriesChecked":scan["visited"],"candidates":scan["candidates"],
@@ -126,6 +136,30 @@ mod tests {
         let legacy = fixture(json!({"activity":"idle","model":{"state":"ready"}}));
         assert!(legacy["files"]["heldPending"].is_null());
         assert!(legacy["files"]["runnablePending"].is_null());
+    }
+    #[test]
+    fn held_long_files_wait_even_without_pending_first_pass_files() {
+        let report = fixture(json!({"activity":"idle","model":{"state":"ready"},"pending":0,"unfinished":3,
+            "heldPending":0,"heldUnfinished":3,"runnablePending":0,"runnableUnfinished":0}));
+        assert_eq!(report["files"]["phase"], "waiting");
+        assert_eq!(report["files"]["pending"], 0);
+        assert_eq!(report["files"]["heldUnfinished"], 3);
+        let unknown = fixture(json!({"activity":"idle","model":{"state":"ready"},"pending":0,"unfinished":3,
+            "heldPending":null,"heldUnfinished":null,"runnablePending":null,"runnableUnfinished":null}));
+        assert_eq!(unknown["files"]["phase"], "idle");
+        assert!(unknown["files"]["heldUnfinished"].is_null());
+        let waiting = fixture(json!({"activity":"waiting","model":{"state":"ready"}}));
+        assert_eq!(waiting["files"]["phase"], "waiting");
+    }
+    #[test]
+    fn incomplete_inventory_zero_is_unknown_and_legacy_zero_remains_observed() {
+        let report = fixture(json!({"activity":"idle","model":{"state":"ready"},"knownCountsComplete":false,
+            "files":0,"searchable":0,"pending":0,"unfinished":0}));
+        for key in ["knownFiles","searchable","pending","unfinished"] { assert!(report["files"][key].is_null()); }
+        assert_eq!(report["files"]["knownCountsComplete"], false);
+        let legacy = fixture(json!({"activity":"idle","model":{"state":"ready"},"files":0,"searchable":0}));
+        assert_eq!(legacy["files"]["knownFiles"], 0);
+        assert_eq!(legacy["files"]["knownCountsComplete"], true);
     }
     #[test]
     fn discovery_is_not_zero_percent_and_does_not_hide_available_apps() {

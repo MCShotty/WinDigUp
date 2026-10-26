@@ -127,6 +127,8 @@ window.ActivityUI = (() => {
     return ["DigUp activity summary", `Files: ${phases[f.phase] || f.phase}`,
       `Entries checked: ${number(f.entriesChecked)}; candidates${f.candidatesFinal ? "" : " so far"}: ${number(f.candidates)}`,
       `Searchable files: ${number(f.searchable)}; queued: ${number(f.pending)}`,
+      f.knownCountsComplete === false ? "Selected-folder totals are incomplete; reported counts are lower bounds." : "",
+      PipelineUI.heldSummary(f),
       f.error ? `File error: ${f.error}` : "", `Applications: ${number(apps.catalog.count)} available; discovery ${apps.catalog.enabled ? "on" : "off"}`,
       `Purpose matching: ${apps.purpose.state || "idle"}; ${number(apps.purpose.embedded)} of ${number(apps.purpose.total)} prepared`,
       `Configured accelerator: ${inference.configured.backend || "unknown"}`,
@@ -166,7 +168,7 @@ window.ActivityUI = (() => {
             <p data-key="progress-label" class="activity-progress-label"></p>
             <div class="activity-metrics"><div><strong data-key="first-value"></strong><span data-key="first-label"></span></div>
               <div><strong data-key="second-value"></strong><span data-key="second-label"></span></div></div>
-            <p data-key="candidates-note" class="activity-muted"></p><p data-key="held-work" class="activity-muted" hidden></p>
+            <p data-key="candidates-note" class="activity-muted"></p><p data-key="held-work" class="activity-muted" hidden></p><p data-key="inventory-note" class="activity-muted" hidden></p>
             <div class="activity-location"><div><span data-key="root"></span><p data-key="path" class="activity-path"></p></div>
               <button data-key="pause" type="button">Pause indexing</button></div>
             <p data-key="freshness" class="activity-muted"></p>
@@ -174,10 +176,10 @@ window.ActivityUI = (() => {
             <details data-key="file-details"><summary>File statistics and exclusions</summary>
               <dl><div><dt>Discovered file names</dt><dd data-key="known-files"></dd></div><div><dt>Content searchable</dt><dd data-key="searchable"></dd></div><div><dt>Queued files</dt><dd data-key="pending"></dd></div>
               <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div>
-              <div><dt>Queued files ready to process</dt><dd data-key="runnable-pending"></dd></div>
-              <div><dt>Long files ready to finish</dt><dd data-key="runnable-unfinished"></dd></div>
-              <div><dt>Queued files held for access</dt><dd data-key="held-pending"></dd></div>
-              <div><dt>Long files held for access</dt><dd data-key="held-unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
+              <div><dt>Eligible queued files</dt><dd data-key="runnable-pending"></dd></div>
+              <div><dt>Eligible long files</dt><dd data-key="runnable-unfinished"></dd></div>
+              <div><dt>Queued files held</dt><dd data-key="held-pending"></dd></div>
+              <div><dt>Long files held</dt><dd data-key="held-unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
           </section>
           <section class="activity-section" data-key="indexing-work" hidden></section>
           <section class="activity-section"><h3>Last search</h3><p data-key="search-total">No search timing reported yet.</p>
@@ -302,8 +304,9 @@ window.ActivityUI = (() => {
         preparing_queue: "Applying exclusions and reconciling supported files with the index.",
         not_configured: "Apps work without folders. Choose folders in Settings to add file search.",
         indexing: "Reading eligible files and preparing searchable content on your selected accelerator.",
-        waiting: PipelineUI.heldFiles(f) ? "Some queued files are held because folders are unavailable or unreadable. Existing searchable content is kept. Restore access, then choose Index now in Diagnostics."
-          : "Files are queued, but no file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
+        waiting: PipelineUI.heldFiles(f) ? "Some file work is held until its folders are checked. Existing searchable content is kept. "
+          + ((f.unreadable?.length || f.missing?.length) ? "Review the unavailable or unreadable folders below, then choose Index now in Diagnostics." : "Choose Index now in Diagnostics to retry scanning.")
+          : "No file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
         finishing: "Reading the remaining pages and chunks of long files. Partial content is already searchable.",
         scheduled: `Existing results remain searchable. Indexing resumes from ${f.scheduledAt || "the scheduled time"}.`,
         paused: "Existing results and application launching remain available.", pausing: "Waiting for the file worker to stop. Search remains available.",
@@ -319,7 +322,7 @@ window.ActivityUI = (() => {
         : discovery && ["preparing_model", "unavailable", "checking_accelerator"].includes(f.phase)
           ? "File names are being discovered. Content matching is waiting for the selected accelerator; its status is shown independently below."
           : explanations[f.phase] || "Waiting for the next file-worker update.");
-      const known = !scanning && typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
+      const known = f.knownCountsComplete !== false && !scanning && typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
       const meter = this.get("meter"); meter.classList.toggle("indeterminate", !known);
       meter.hidden = !known && !scanning && !["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
       meter.firstElementChild.style.width = known ? `${100 * f.done / f.total}%` : "";
@@ -331,9 +334,12 @@ window.ActivityUI = (() => {
       this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (overlap && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
       this.host.querySelector(".activity-stages").setAttribute("aria-label", overlap ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");
       this.host.querySelector(".activity-stages").hidden = !discovery && ["not_configured", "failed", "unavailable", "preparing_model", "paused", "pausing"].includes(f.phase);
-      put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
-      put("second-value", number(scanning ? f.candidates : f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
+      const inventoryNumber = value => f.knownCountsComplete === false ? Number.isFinite(value) && value > 0 ? "At least "+number(value) : "Not known yet" : number(value);
+      put("first-value", scanning ? number(f.entriesChecked) : inventoryNumber(f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
+      put("second-value", scanning ? number(f.candidates) : inventoryNumber(f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
       put("candidates-note", scanning && !f.candidatesFinal ? "Candidates are checked against exclusions before indexing." : "");
+      put("inventory-note",f.knownCountsComplete === false ? "Some selected-folder totals are unknown. Shown totals are lower bounds; missing totals stay unknown." : "");
+      this.get("inventory-note").hidden=f.knownCountsComplete !== false;
       const held=PipelineUI.heldSummary(f);
       put("held-work",held ? held+". Existing searchable content is kept." : "");
       this.get("held-work").hidden=!held;
@@ -343,7 +349,7 @@ window.ActivityUI = (() => {
       put("path", shortPath(f.path)); this.get("path").title = f.path || "";
       put("freshness", `Last progress: ${ago(f.lastProgressAt)}${snapshot.helpers.index?.pid ? " · File worker running" : snapshot.helpers.index?.busy ? " · Reading worker state" : " · File worker stopped"}`);
       put("file-error", f.error); this.get("file-error").hidden = !f.error;
-      put("known-files", number(f.knownFiles)); put("searchable", number(f.searchable)); put("pending", scanning && !f.candidatesFinal ? "Not known yet" : number(f.pending)); put("unfinished", number(f.unfinished));
+      put("known-files", inventoryNumber(f.knownFiles)); put("searchable", inventoryNumber(f.searchable)); put("pending", scanning && !f.candidatesFinal ? "Not known yet" : inventoryNumber(f.pending)); put("unfinished", inventoryNumber(f.unfinished));
       const skips = [...Object.entries(f.skipped || {}).map(([reason, count]) => `${number(count)} files: ${reason}`),
         ...Object.entries(f.skippedFolders || {}).map(([reason, count]) => `${number(count)} folders: ${reason}`),
         ...(f.missing || []).map(path => `Unavailable: ${shortPath(path)}`), ...(f.unreadable || []).map(path => `Unreadable: ${shortPath(path)}`)];

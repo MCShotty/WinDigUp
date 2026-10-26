@@ -10,7 +10,7 @@ let browser;
   await page.addInitScript(()=>{
     const old=window.__TAURI__.core.invoke,time=Date.now()/1000;
     window.personalization={version:1,enabled:true,entries:3};
-    window.activityMode="indexing";window.activityPaused=false;window.activityDiscovery=true;window.activityUnreadable=[];window.activityHeld={};
+    window.activityMode="indexing";window.activityPaused=false;window.activityDiscovery=true;window.activityUnreadable=[];window.activityHeld={};window.activityInventoryPending=66;window.activityKnownComplete=true;
     window.resourceFixtureProfile="balanced";
     window.holdSettings=false;window.settingsWaiters=[];window.failDriveSave=false;window.failReview=false;window.reviewHit=null;
     window.sourceDrive={version:2,supported:true,catalogEnabled:true,options:{enabled:true,paused:false,revision:1,volumes:["volume-a"],included:[],hidden:[]},
@@ -29,7 +29,7 @@ let browser;
       }
       if(command==="activity_snapshot"){
         const reply=await old(command,args);
-        reply.files={...reply.files,...window.activityHeld,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,unfinished:3,total:100,done:17,
+        reply.files={...reply.files,...window.activityHeld,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:window.activityInventoryPending,unfinished:3,knownCountsComplete:window.activityKnownComplete,total:100,done:17,
           discoveryActive:window.activityDiscovery,unreadable:window.activityUnreadable,entriesChecked:443831,candidates:107857,candidatesFinal:false,lastProgressAt:time};
         if(window.activityMode==="waiting")reply.files.pipeline={files:{schemaVersion:2,epoch:"held-fixture",blockedBy:"idle",capacity:8,
           preparationWorkers:2,inferenceWorkers:3,readyJobs:0,runningJobs:0,completedJobs:0}};
@@ -101,7 +101,7 @@ let browser;
   await page.evaluate(()=>{activityMode="indexing";activityPaused=false;emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
   await page.evaluate(()=>{activityMode="waiting";activityDiscovery=false;activityUnreadable=["C:/Locked"];activityHeld={heldPending:66,heldUnfinished:3,runnablePending:0,runnableUnfinished:0};emit("helper",{});});
-  await page.waitForFunction(()=>document.querySelector('[data-key="explanation"]').textContent.includes("queued files are held"));
+  await page.waitForFunction(()=>document.querySelector('[data-key="explanation"]').textContent.includes("file work is held"));
   assert.match(await page.locator('[data-key="indexing-work"]').innerText(),/Queued work held/);
   assert.equal(await page.locator('[data-key="pending"]').innerText(),"66");
   assert.ok(!(await page.locator('[data-key="indexing-work"]').innerText()).includes("Queue completed"));
@@ -111,8 +111,20 @@ let browser;
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
   assert.match(await page.locator('[data-key="held-work"]').innerText(),/62 pending files held/);
   assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",heldPending:66,heldUnfinished:0,runnablePending:4,runnableUnfinished:0})),false);
+  await page.evaluate(()=>{activityMode="waiting";activityDiscovery=false;activityInventoryPending=0;activityUnreadable=[];activityHeld={heldPending:0,heldUnfinished:3,runnablePending:0,runnableUnfinished:0};emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="held-work"]').textContent.includes("3 long files held"));
+  assert.match(await page.locator('[data-key="explanation"]').innerText(),/retry scanning/);
+  assert.ok(!(await page.locator('[data-key="explanation"]').innerText()).includes("Restore access"));
+  assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",pending:0,heldPending:0,heldUnfinished:3,runnablePending:0,runnableUnfinished:0})),true);
+  await page.evaluate(()=>{activityHeld={heldPending:null,heldUnfinished:null,runnablePending:null,runnableUnfinished:null};activityKnownComplete=false;emit("helper",{});});
+  await page.waitForFunction(()=>document.querySelector('[data-key="held-work"]').hidden);
+  assert.equal(await page.locator('[data-key="held-pending"]').innerText(),"Not known yet");
+  assert.equal(await page.locator('[data-key="pending"]').innerText(),"Not known yet");
+  assert.match(await page.locator('[data-key="searchable"]').innerText(),/At least 17/);
+  assert.equal(await page.evaluate(()=>PipelineUI.heldFiles({phase:"waiting",heldPending:null,heldUnfinished:null,runnablePending:null,runnableUnfinished:null})),false);
 
-  await page.evaluate(()=>{activityMode="indexing";activityDiscovery=true;activityUnreadable=[];activityHeld={};emit("helper",{});});
+
+  await page.evaluate(()=>{activityMode="indexing";activityDiscovery=true;activityUnreadable=[];activityHeld={};activityInventoryPending=66;activityKnownComplete=true;emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering and indexing files");
   assert.match(await page.locator(".pipeline-device-measurements").innerText(),/Device utilization not reported/);
   assert.ok(!(await page.locator(".pipeline-device-measurements").innerText()).includes("0%"));
@@ -154,6 +166,10 @@ let browser;
   await page.waitForFunction(()=>document.querySelector("#resource-profile").value==="future-profile");
   assert.equal(await page.locator("#resource-profile option:checked").isDisabled(),true);
   assert.match(await page.locator("#resource-profile-message").innerText(),/unsupported/);
+  await page.evaluate(()=>renderResourceProfile(""));
+  assert.equal(await page.locator("#resource-profile").inputValue(),"","Empty saved profile was silently defaulted");
+  assert.equal(await page.locator("#resource-profile option:checked").isDisabled(),true);
+  await page.evaluate(()=>renderResourceProfile("future-profile"));
   await page.locator("#apply-accelerator").click();
   await page.waitForFunction(()=>document.querySelector("#problem").textContent.includes("resource profile unsupported"));
   assert.equal(await page.evaluate(()=>calls.filter(call=>call.command==="set_acceleration").at(-1).args.acceleration.resourceProfile),"future-profile");
