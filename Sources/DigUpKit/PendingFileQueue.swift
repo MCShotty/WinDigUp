@@ -104,7 +104,7 @@ final class PendingFileQueue {
             if let path=preferredPath {
                 let ranges=IndexStore.pathRanges(under:path)
                 let conditions=ranges.map {_ in "(f.path>=? AND f.path<?)"}.joined(separator:" OR ")
-                let columns=IndexStore.fileColumns.split(separator:",").map {"f."+ $0.trimmingCharacters(in:.whitespaces)}.joined(separator:",")
+                let columns=IndexStore.fileColumns.split(separator:",").map {"f." + $0.trimmingCharacters(in:.whitespaces)}.joined(separator:",")
                 let values=ranges.flatMap {[SQLValue.text($0.from),.text($0.to)]}
                 try store.db.query("""
                     SELECT \(columns),-1,q.ord FROM \(table) q CROSS JOIN files f ON f.id=q.file

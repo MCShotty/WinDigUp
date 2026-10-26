@@ -9,6 +9,7 @@ public struct IndexScanProgress {
 public final class IndexScanSession {
     private let store: IndexStore
     private let roots: [URL]
+    private let rootSpellings: [(String,[String])]
     private let original: String
     private let seen: String
     private let deferred: String
@@ -23,6 +24,12 @@ public final class IndexScanSession {
     init(store: IndexStore, roots: [URL]) throws {
         self.store = store
         self.roots = roots
+        rootSpellings=roots.map {root in
+            let path=root.standardizedFileURL.path
+            return (path,IndexStore.pathRanges(under:path).map {range in
+                range.from.hasSuffix("/") ? String(range.from.dropLast()) : range.from
+            })
+        }
         let suffix = UUID().uuidString.replacingOccurrences(of:"-",with:"")
         original = "digup_scan_original_" + suffix
         seen = "digup_scan_seen_" + suffix
@@ -125,8 +132,15 @@ public final class IndexScanSession {
 
     public func finish(_ report: CrawlReport) throws -> Indexer.SyncSummary {
         guard !closed else { throw Database.Failure(message:"The scan session has ended.") }
-        let unavailable = Array(report.unreadable) + roots.map { $0.standardizedFileURL.path }
-            .filter { !FileManager.default.fileExists(atPath:$0) }
+        func aliases(_ path: String) -> [String] {
+            var values=[path,FolderSelection.realPath(path)]
+            for (root,spellings) in rootSpellings where path==root || FolderSelection.isInside(path,root) {
+                values += spellings.map {$0+String(path.dropFirst(root.count))}
+            }
+            return values
+        }
+        let unavailable=Array(report.unreadable).flatMap(aliases)
+            + roots.filter {!FileManager.default.fileExists(atPath:$0.path)}.flatMap {aliases($0.standardizedFileURL.path)}
         func protected(_ path: String) -> Bool {
             unavailable.contains { path == $0 || FolderSelection.isInside(path,$0) }
         }

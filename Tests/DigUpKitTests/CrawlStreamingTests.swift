@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 struct CrawlStreamingTests {
     func temporary() throws -> URL {
-        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         return root
     }

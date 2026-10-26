@@ -30,7 +30,7 @@ struct StreamingServiceTests {
     }
 
     @Test func firstFileIndexesWhileTheNextFolderIsStillBeingDiscovered() throws {
-        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files")
         let child=files.appendingPathComponent("later")
@@ -54,7 +54,7 @@ struct StreamingServiceTests {
         #expect(try store.counts().vectors==65)
     }
     @Test func slowCodeDiscoveryCannotBlockReadyFileInference() throws {
-        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
         defer {try? FileManager.default.removeItem(at:root)}
         let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
         try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
