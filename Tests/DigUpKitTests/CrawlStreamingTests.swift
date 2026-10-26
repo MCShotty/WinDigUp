@@ -194,5 +194,59 @@ struct CrawlStreamingTests {
         #expect(peak<=64)
     }
 
+    @Test func targetedSubtreesRespectExclusionsAndExplicitNestedSelections() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let excluded=root.appendingPathComponent("excluded")
+        try FileManager.default.createDirectory(at:excluded,withIntermediateDirectories:true)
+        try write(excluded.appendingPathComponent("note.txt"))
+        var options=IndexOptions();options.excludedFolders=[excluded.path]
+        var hidden:[Candidate]=[]
+        _=try Crawler.scan([excluded],options:options,selectedRoots:[root],onBatch:{hidden += $0})
+        #expect(hidden.isEmpty)
+        var selected:[Candidate]=[]
+        _=try Crawler.scan([excluded],options:options,selectedRoots:[root,excluded],onBatch:{selected += $0})
+        #expect(selected.count==1)
+        let vendor=root.appendingPathComponent("vendor")
+        try FileManager.default.createDirectory(at:vendor,withIntermediateDirectories:true)
+        var code=IndexOptions();code.code=true
+        #expect(!Crawler.canScanSubtree(vendor,selectedRoots:[root],options:code))
+    }
+
+    #if !os(Windows)
+    @Test func childDirectoryLinksCannotEscapeOrCycleTheSelectedRoot() throws {
+        let root=try temporary(),outside=try temporary()
+        defer {try? FileManager.default.removeItem(at:root);try? FileManager.default.removeItem(at:outside)}
+        try write(root.appendingPathComponent("inside.txt"))
+        try write(outside.appendingPathComponent("outside.txt"))
+        try FileManager.default.createSymbolicLink(at:root.appendingPathComponent("escape"),withDestinationURL:outside)
+        try FileManager.default.createSymbolicLink(at:root.appendingPathComponent("cycle"),withDestinationURL:root)
+        var candidates:[Candidate]=[]
+        _=try Crawler.scan([root],options:IndexOptions(),onBatch:{candidates += $0})
+        #expect(candidates.count==1)
+        #expect(candidates.first?.path==root.appendingPathComponent("inside.txt").path)
+    }
+    #endif
+
+    @Test(.enabled(if:FileSystem.git != nil))
+    func codeGitIgnoreBehaviorMatchesTheCompleteCrawler() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let process=Process()
+        process.executableURL=URL(fileURLWithPath:try #require(FileSystem.git))
+        process.arguments=["-C",root.path,"init","--quiet"]
+        process.standardOutput=FileHandle.nullDevice;process.standardError=FileHandle.nullDevice
+        try process.run();process.waitUntilExit()
+        #expect(process.terminationStatus==0)
+        try "ignored.py\n".write(to:root.appendingPathComponent(".gitignore"),atomically:false,encoding:.utf8)
+        try write(root.appendingPathComponent("kept.py"));try write(root.appendingPathComponent("ignored.py"))
+        var options=IndexOptions();options.code=true
+        var streamed:[Candidate]=[]
+        _=try Crawler.scan([root],options:options,onBatch:{streamed += $0})
+        let legacy=Crawler.crawl([root],options:options)
+        #expect(Set(streamed.map(\.path))==Set(legacy.candidates.map(\.path)))
+        #expect(streamed.map{URL(fileURLWithPath:$0.path).lastPathComponent}==["kept.py"])
+    }
+
     enum FixtureError:Error {case noModel}
 }

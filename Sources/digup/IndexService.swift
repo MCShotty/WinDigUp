@@ -254,6 +254,7 @@ final class IndexService: @unchecked Sendable {
             if url.path==root.path {parent=root}
             while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
             if parent.path.count<root.path.count {parent=root}
+            if !Crawler.canScanSubtree(parent,selectedRoots:part.roots,options:part.indexer.scanOptions) {parent=root}
             let canonical=parent.resolvingSymlinksInPath().standardizedFileURL.path
             if !canonical.utf8.elementsEqual(parent.path.utf8) {selected.insert(root.path)}
             else {selected.insert(parent.path)}

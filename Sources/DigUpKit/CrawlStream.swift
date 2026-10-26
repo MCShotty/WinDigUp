@@ -85,6 +85,27 @@ public final class CrawlStream: @unchecked Sendable {
 }
 
 extension Crawler {
+    public static func canScanSubtree(_ folder:URL,selectedRoots:[URL],options:IndexOptions) -> Bool {
+        selectedRoots.contains {selection in
+            let root=selection.standardizedFileURL.path
+            let path=folder.standardizedFileURL.path
+            guard path==root || FolderSelection.isInside(path,root) else{return false}
+            if path==root {return true}
+            let excluded=options.excludedFolders.filter {FolderSelection.isInside($0,root)}
+            guard Rules.isWalked(path,root:root,home:FileManager.default.homeDirectoryForCurrentUser.path,excluded:excluded) else{return false}
+            var current=folder
+            while current.path != root {
+                if options.code && Rules.codeSkipReason(forFolder:current) != nil {return false}
+                let values=try? current.resourceValues(forKeys:[.isPackageKey])
+                if FileSystem.isPackage(current,values) {return false}
+                let parent=current.deletingLastPathComponent()
+                if parent.path==current.path {return false}
+                current=parent
+            }
+            return true
+        }
+    }
+
     private static func scanProjectRoot(_ folder:String) -> Bool {
         if FileManager.default.fileExists(atPath:folder+"/.git") {return true}
         let url=URL(fileURLWithPath:folder,isDirectory:true)
@@ -96,7 +117,7 @@ extension Crawler {
         #endif
         while let child=autoreleasepool(invoking:{walker.nextObject() as? URL}) {
             let name=child.lastPathComponent
-            if Rules.projectMarkers.contains(name) || Rules.projectBundleExtensions.contains(child.pathExtension.lowercased()) {return true}
+            if Rules.projectMarkers.contains(name) || Rules.projectBundleExtensions.contains(child.pathExtension) {return true}
             #if os(Windows)
             if walker.currentIsDirectory {walker.skipDescendants()}
             #else
@@ -137,6 +158,7 @@ extension Crawler {
         for root in roots.map({ $0.standardizedFileURL }) {
             if shouldStop() { break }
             progress("root", root: root.path, path: root.path, force: true)
+            if selectedRoots != nil && !Crawler.canScanSubtree(root,selectedRoots:selections,options:options) {continue}
             let real = FolderSelection.realPath(root.path)
             let skips = options.excludedFolders.filter {
                 FolderSelection.isInside($0, root.path) || FolderSelection.isInside($0, real)
@@ -144,9 +166,9 @@ extension Crawler {
             if options.code { repos.enterRoot(root.path) }
             var inheritedProject = false
             if !options.code {
-                for selected in selections.map({ $0.standardizedFileURL.path })
-                    where FolderSelection.isInside(root.path, selected) {
-                    var ancestor = (root.path as NSString).deletingLastPathComponent
+                for selected in selections.flatMap({ [$0.standardizedFileURL.path,FolderSelection.realPath($0.path)] })
+                    where FolderSelection.isInside(real, selected) {
+                    var ancestor = (real as NSString).deletingLastPathComponent
                     while ancestor.count >= selected.count {
                         if Crawler.scanProjectRoot(ancestor) { inheritedProject = true; break }
                         let parent = (ancestor as NSString).deletingLastPathComponent
@@ -176,7 +198,7 @@ extension Crawler {
                     report.unreadable.insert(folder.path); continue
                 }
                 #else
-                guard let walker = fm.enumerator(at: folder, includingPropertiesForKeys: FileSystem.crawlKeys,
+                guard let walker = fm.enumerator(at: folder, includingPropertiesForKeys: FileSystem.crawlKeys+[.isSymbolicLinkKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants],
                     errorHandler: { url, _ in report.unreadable.insert(url.path); return true }) else {
                     report.unreadable.insert(folder.path); continue
@@ -195,8 +217,13 @@ extension Crawler {
                         let directory = walker.currentIsDirectory
                         #else
                         let values: URLResourceValues
-                        do { values = try url.resourceValues(forKeys: Set(FileSystem.crawlKeys)) }
+                        do { values = try url.resourceValues(forKeys: Set(FileSystem.crawlKeys+[.isSymbolicLinkKey])) }
                         catch { report.unreadable.insert(url.path); walker.skipDescendants(); continue }
+                        if values.isSymbolicLink==true {
+                            report.skipped["link or special file",default:0] += 1
+                            walker.skipDescendants()
+                            continue
+                        }
                         let directory = values.isDirectory == true
                         #endif
                         let package = FileSystem.isPackage(url, values)
