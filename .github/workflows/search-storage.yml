@@ -89,12 +89,14 @@ jobs:
         run: |
           set -euo pipefail
           export LD_LIBRARY_PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/lib:${LD_LIBRARY_PATH:-}"
-          python3 scripts/benchmark-search-scale.py --helper .build/release/digup --vectors 100000 250000 1000000 --samples 100 100 100 --output search-scale.json | tee search-scale.log
+          for run in 1 2; do
+            python3 scripts/benchmark-search-scale.py --helper .build/release/digup --vectors 100000 250000 1000000 --samples 100 100 100 --output "search-scale-$run.json" | tee "search-scale-$run.log"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: search-storage-measurements
           path: |
-            search-scale.json
-            search-scale.log
+            search-scale-*.json
+            search-scale-*.log
           if-no-files-found: ignore

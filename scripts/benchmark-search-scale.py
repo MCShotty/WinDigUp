@@ -40,6 +40,7 @@ def main():
     report['cpu']=next((line.split(':',1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name')),platform.processor())
     report['physicalMemory']=next(line for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:'))
     report['swift']=subprocess.check_output([shutil.which('swift') or 'swift','--version'],text=True).strip()
+    print('HOST_IDENTITY '+json.dumps({key:report[key] for key in ['platform','cpu','physicalMemory','swift','build','binarySHA256','sourceFilesSHA256']}),flush=True)
     with tempfile.TemporaryDirectory(prefix='digup-host-scale-') as temp:
         root=Path(temp);bundle=root/'bundle';bundle.mkdir();(bundle/'manifest.json').write_text('{}')
         env.update(DIGUP_OPENVINO_MODELS=str(bundle),DIGUP_APP_TEST_LOG=str(root/'worker.jsonl'))
@@ -57,7 +58,7 @@ def main():
             while identifier not in received:
                 at,reply=responses.get(timeout=max(.01,deadline-time.perf_counter()))
                 if 'id' in reply:received[reply['id']]=(at,reply)
-                else:events.append(reply)
+                else:events.append(dict(reply,received_at=at))
             return received.pop(identifier)
         def call(**fields):return wait(send(**fields))[1]
         def rss():
@@ -101,10 +102,12 @@ def main():
                         ((n+1,n%100_000+1,'chunk','text',vector) for n in range(start,count)))
                 db.commit()
                 events.clear();peak[0]=rss();started=time.perf_counter();call(op='reload')
-                during=[];ready=False;deadline=time.perf_counter()+120
+                during=[];worst=[];ready=False;deadline=time.perf_counter()+120
                 while not ready:
-                    begin=time.perf_counter();call(op='search',q='record000001',meaning=False,limit=40)
-                    during.append((time.perf_counter()-begin)*1000)
+                    begin=time.perf_counter();during_reply=call(op='search',q='record000001',meaning=False,limit=40)
+                    elapsed=(time.perf_counter()-begin)*1000;during.append(elapsed)
+                    worst.append({'roundtripMs':elapsed,'phases':during_reply.get('ms',{}),'meaning':during_reply.get('meaning',False)})
+                    worst=sorted(worst,key=lambda value:value['roundtripMs'],reverse=True)[:8]
                     ready=any(event.get('event')=='search_index' and event.get('state')=='ready' and event.get('vectors')==count for event in events)
                     assert time.perf_counter()<deadline,(count,events[-5:])
                     if not ready:time.sleep(.01)
@@ -114,7 +117,8 @@ def main():
                     assert last['meaning'] and last.get('status')!='superseded',last
                     if n:latencies.append((time.perf_counter()-begin)*1000)
                 item={'vectors':count,'refreshMs':load_ms,'keywordDuringRefresh':stats(during),'retrievalRoundtrip':stats(latencies),
-                      'retrievalSamplesMs':latencies,'keywordDuringRefreshSamplesMs':during,
+                      'retrievalSamplesMs':latencies,'keywordDuringRefreshSamplesMs':during,'keywordRefreshOutliers':worst,
+                      'refreshEvents':[{'state':event.get('state'),'receivedSinceRefreshMs':max(0,(event['received_at']-started)*1000),'phases':event.get('ms',{}),'vectors':event.get('vectors')} for event in events if event.get('event')=='search_index'],
                       'peakHelperRssBytes':peak[0],'lastPhases':last['ms'],'databaseBytes':Path(path).stat().st_size}
                 report['stages'].append(item);out.write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(item),flush=True)
                 previous=count;db.execute('PRAGMA wal_checkpoint(PASSIVE)')
