@@ -40,9 +40,18 @@ public final class GPUAdmission: @unchecked Sendable {
     public var onActivity: (@Sendable (InferenceActivity) -> Void)?
     public var activity: InferenceActivity? { lock.withLock { last } }
     public static var configuredMaximum: Int {
-        let raw = ProcessInfo.processInfo.environment["DIGUP_GPU_JOBS"] ?? "0"
+        maximumJobs(environment: ProcessInfo.processInfo.environment)
+    }
+    private static func maximumJobs(environment: [String: String]) -> Int {
+        let raw = environment["DIGUP_GPU_JOBS"] ?? "0"
         guard let number = Int(raw), (0...3).contains(number) else { return 1 }
         return number == 0 ? 3 : number
+    }
+    public static var backgroundMaximum: Int { maximumBackgroundJobs(environment: ProcessInfo.processInfo.environment) }
+    public static func maximumBackgroundJobs(environment: [String: String]) -> Int {
+        if environment["DIGUP_RESOURCE_PROFILE"] == "quiet"
+            || ["openvino-npu", "metal"].contains(environment["DIGUP_ACCELERATOR"] ?? "") { return 1 }
+        return maximumJobs(environment: environment)
     }
     public init(identity: String, maximum: Int = GPUAdmission.configuredMaximum, root: URL? = nil) throws {
         self.maximum = min(3, max(1, maximum))

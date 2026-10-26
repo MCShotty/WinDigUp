@@ -19,6 +19,7 @@ mod system_setting_commands;
 mod application_commands;
 mod clipboard;
 mod diagnostics;
+mod gpu_telemetry;
 mod code;
 mod editors;
 mod helper;
@@ -130,6 +131,7 @@ struct Shell {
     prune: AtomicBool,
     logs: PathBuf,
     diagnostics: diagnostics::Diagnostics,
+    telemetry: gpu_telemetry::Monitor,
 }
 
 impl Shell {
@@ -888,6 +890,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         estimating: AtomicUsize::new(0),
         prune: AtomicBool::new(false),
         diagnostics: diagnostics::Diagnostics::new(&logs),
+        telemetry: gpu_telemetry::Monitor::default(),
         logs,
     });
     app.manage(shell.clone());
@@ -1470,11 +1473,14 @@ async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String
         let has_folders = !shell.folders().is_empty();
         let blocked_by = indexing_blocker(&shell);
         let mut snapshot=activity::snapshot(activity::Input {
-            state, catalog, semantic, configured: serde_json::to_value(configured).unwrap_or_default(),
+            state, catalog, semantic, configured: serde_json::to_value(&configured).unwrap_or_default(),
             helpers: json!({"index":shell.index.snapshot(),"search":shell.search.snapshot()}),
             runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
             has_folders, blocked_by,
         });
+        snapshot["inference"]["configured"]["backgroundJobs"] = json!(configured.background_jobs());
+        let telemetry = shell.telemetry.snapshot(&snapshot["inference"]["configured"], &snapshot["inference"]["verified"]);
+        snapshot["inference"]["telemetry"] = telemetry;
         snapshot["windowsSettings"]=json!({"version":1,"catalog":shell.windows_settings.info(),"purpose":shell.settings_semantic.lock().unwrap().clone()});
         snapshot["discovery"]=shell.discovery.info();snapshot["enrichment"]=shell.enrichment.info();snapshot
     }).await.map_err(|error| error.to_string())

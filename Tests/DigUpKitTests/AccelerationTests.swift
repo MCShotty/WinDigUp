@@ -96,4 +96,22 @@ struct AccelerationTests {
         #expect(Acceleration.cudaFailure(diagnostic: "no kernel image is available for execution", fallback: "failed").hasPrefix("unsupported_operation:"))
         #expect(Acceleration.cudaFailure(diagnostic: "invalid model header", fallback: "failed") == "failed")
     }
+    @Test func resourceProfilesOnlyReduceBackgroundAdmission() throws {
+        for profile in ["balanced", "faster"] {
+            for (jobs, expected) in [("0",3),("1",1),("2",2),("3",3)] {
+                let environment = ["DIGUP_RESOURCE_PROFILE":profile, "DIGUP_GPU_JOBS":jobs, "DIGUP_ACCELERATOR":"amd-vulkan"]
+                try Acceleration.requireInferenceReady(environment: environment)
+                #expect(GPUAdmission.maximumBackgroundJobs(environment: environment) == expected)
+            }
+        }
+        #expect(GPUAdmission.maximumBackgroundJobs(environment: ["DIGUP_ACCELERATOR":"amd-vulkan", "DIGUP_GPU_JOBS":"2"]) == 2)
+        #expect(GPUAdmission.maximumBackgroundJobs(environment: ["DIGUP_RESOURCE_PROFILE":"quiet", "DIGUP_GPU_JOBS":"3"]) == 1)
+        for backend in ["openvino-npu", "metal"] {
+            #expect(GPUAdmission.maximumBackgroundJobs(environment: ["DIGUP_ACCELERATOR":backend, "DIGUP_RESOURCE_PROFILE":"faster", "DIGUP_GPU_JOBS":"3"]) == 1)
+        }
+        #expect(throws: WorkerError.self) {
+            try Acceleration.requireInferenceReady(environment: ["DIGUP_RESOURCE_PROFILE":"unbounded"])
+        }
+    }
+
 }

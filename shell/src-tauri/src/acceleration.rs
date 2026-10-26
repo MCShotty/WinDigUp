@@ -3,6 +3,17 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const SCHEMA: u32 = 2;
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceProfile { Quiet, #[default] Balanced, Faster }
+
+impl ResourceProfile {
+    pub fn as_str(self) -> &'static str {
+        match self { Self::Quiet => "quiet", Self::Balanced => "balanced", Self::Faster => "faster" }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Acceleration {
@@ -11,6 +22,7 @@ pub struct Acceleration {
     pub backend: String,
     pub gpu: String,
     pub jobs: u8,
+    pub resource_profile: ResourceProfile,
     pub python: String,
     pub models: String,
     pub selection_required: bool,
@@ -24,7 +36,7 @@ pub struct Acceleration {
 impl Default for Acceleration {
     fn default() -> Self {
         Self { version: SCHEMA, backend: if cfg!(target_os = "macos") { "metal" } else { "vulkan" }.into(),
-            gpu: String::new(), jobs:0, python: String::new(), models: String::new(), selection_required: false,
+            gpu: String::new(), jobs:0, resource_profile: ResourceProfile::Balanced, python: String::new(), models: String::new(), selection_required: false,
             discovery_pending: !cfg!(target_os = "macos"), discovery_error: None, legacy_vulkan_automatic: false, migration_notice: None }
     }
 }
@@ -90,8 +102,13 @@ impl Acceleration {
         else { base.to_owned() }
     }
 
+    pub fn background_jobs(&self) -> u8 {
+        if self.resource_profile == ResourceProfile::Quiet || matches!(self.backend.as_str(), "openvino-npu" | "metal") { return 1; }
+        if self.jobs == 0 { 3 } else { self.jobs.min(3) }
+    }
+
     pub fn environment(&self) -> Vec<(String, String)> {
-        vec![("DIGUP_GPU_JOBS".into(),self.jobs.to_string()),("DIGUP_ACCELERATOR".into(), self.backend.clone()), ("DIGUP_GPU".into(), self.gpu.clone()),
+        vec![("DIGUP_RESOURCE_PROFILE".into(), self.resource_profile.as_str().into()),("DIGUP_GPU_JOBS".into(),self.jobs.to_string()),("DIGUP_ACCELERATOR".into(), self.backend.clone()), ("DIGUP_GPU".into(), self.gpu.clone()),
             ("DIGUP_OPENVINO_PYTHON".into(), self.python.clone()), ("DIGUP_OPENVINO_MODELS".into(), self.models.clone()),
             ("DIGUP_GPU_SELECTION_REQUIRED".into(), if self.selection_required { "1" } else { "0" }.into()),
             ("DIGUP_ACCELERATOR_DISCOVERY_PENDING".into(), if self.discovery_pending { "1" } else { "0" }.into()),
@@ -187,4 +204,31 @@ mod tests {
         assert!(!config.ready()); assert!(config.validate().is_err());
         assert!(config.environment().iter().any(|(key,value)|key == "DIGUP_ACCELERATOR_ERROR" && value.contains("newer DigUp")));
     }
+    #[test]
+    fn resource_profiles_preserve_saved_limits_and_existing_settings() {
+        let original: Acceleration = serde_json::from_value(json!({"version":2,"backend":"amd-vulkan","gpu":"VK-stable","jobs":2})).unwrap();
+        assert_eq!(original.resource_profile, ResourceProfile::Balanced);
+        assert_eq!(original.background_jobs(), 2);
+        for profile in [ResourceProfile::Balanced, ResourceProfile::Faster] {
+            for (jobs, expected) in [(0,3),(1,1),(2,2),(3,3)] {
+                let config = Acceleration { jobs, resource_profile: profile, ..original.clone() };
+                assert_eq!(config.background_jobs(), expected);
+                assert_eq!(config.jobs, jobs);
+                assert!(config.environment().contains(&("DIGUP_GPU_JOBS".into(), jobs.to_string())));
+                assert!(config.environment().contains(&("DIGUP_RESOURCE_PROFILE".into(), profile.as_str().into())));
+            }
+        }
+        let quiet = Acceleration { resource_profile: ResourceProfile::Quiet, ..original.clone() };
+        assert_eq!(quiet.background_jobs(), 1);
+        assert_eq!(quiet.jobs, 2);
+        assert_eq!(quiet.gpu, "VK-stable");
+        assert_eq!(quiet.index_directory(Path::new("base")), original.index_directory(Path::new("base")));
+        assert!(serde_json::from_value::<Acceleration>(json!({"resourceProfile":"unbounded"})).is_err());
+        let roundtrip: Acceleration = serde_json::from_value(serde_json::to_value(&quiet).unwrap()).unwrap();
+        assert_eq!(roundtrip.resource_profile, ResourceProfile::Quiet);
+        for backend in ["openvino-npu", "metal"] {
+            assert_eq!(Acceleration { backend: backend.into(), jobs:3, resource_profile:ResourceProfile::Faster, ..original.clone() }.background_jobs(), 1);
+        }
+    }
+
 }
