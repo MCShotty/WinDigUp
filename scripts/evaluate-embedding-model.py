@@ -30,6 +30,7 @@ class Worker:
         if text_only:
             command.append("--text-only")
         self.log = (output / ("query-stderr.log" if text_only else "full-stderr.log")).open("w", encoding="utf-8")
+        began = time.perf_counter()
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
                                         text=True, encoding="utf-8", env=environment, bufsize=1)
         def read():
@@ -45,7 +46,6 @@ class Worker:
                 self.put(None)
         self.reader = threading.Thread(target=read, daemon=True)
         self.reader.start()
-        began = time.perf_counter()
         try:
             first = self.line()
             if not first.get("ready"):
@@ -151,6 +151,16 @@ def frame_document(document, root, profile=None):
     return str(path)
 
 
+def verify_inputs(documents, root, models, model_files):
+    for document in documents:
+        if document["operation"] != "text":
+            frame_document(document, root)
+    current = {str(path.relative_to(models)): contract.file_digest(path)
+               for path in sorted(models.rglob("*")) if path.is_file() and not path.is_symlink()}
+    if current != model_files:
+        raise ValueError("Model artifacts changed during collection")
+
+
 def collect(args):
     corpus = contract.validate_corpus(contract.load_json(args.corpus))
     root = (args.corpus.parent / corpus.get("root", ".")).resolve()
@@ -195,6 +205,7 @@ def collect(args):
                 report["documentTrials"].append({"trial": trial, "documents": len(documents), "elapsedMs": elapsed})
         finally:
             worker.close()
+        verify_inputs(documents, root, args.models, model_files)
         worker = Worker(args.helper, args.models, args.backend, args.device, args.output, args.timeout, True)
         try:
             if worker.identity != contract.validate_receipt(report["receipt"], args.backend, args.device):
@@ -223,9 +234,11 @@ def collect(args):
                 report["queries"].append({"id": query["id"], "modality": query["modality"],
                     "language": query["language"], "querySHA256": hashlib.sha256(query["q"].encode()).hexdigest(),
                     "expected": query["expected"], "ranked": [key for key, _ in scores[:10]], "matches": matches,
-                    "topCosines": [score for _, score in scores[:10]], "milliseconds": elapsed})
+                    "topCosines": [score for _, score in scores[:10]], "encodeMs": elapsed,
+                    "milliseconds": (time.perf_counter() - began) * 1000})
         finally:
             worker.close()
+        verify_inputs(documents, root, args.models, model_files)
         report["metrics"] = contract.metrics(report["queries"])
         report["warmLatency"] = contract.distribution([row["milliseconds"] for row in report["queries"]])
         report["completed"] = True

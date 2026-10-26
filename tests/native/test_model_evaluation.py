@@ -190,6 +190,24 @@ class ModelEvaluationTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 contract.validate_corpus(altered)
 
+    def test_audio_label_cannot_be_satisfied_by_text(self):
+        corpus = {"schemaVersion": 1, "origin": "synthetic", "split": "test",
+            "documents": [{"id": "audio", "modality": "audio", "operation": "text", "input": "speech", "language": "en"}],
+            "queries": [{"id": "q", "q": "speech", "modality": "audio", "language": "en", "expected": ["audio"]}]}
+        with self.assertRaisesRegex(ValueError, "declared modality"):
+            contract.validate_corpus(corpus)
+
+    def test_changed_model_artifacts_are_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            model = root / "model.bin"
+            model.write_bytes(b"before")
+            expected = {"model.bin": contract.file_digest(model)}
+            runner.verify_inputs([], root, root, expected)
+            model.write_bytes(b"after")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                runner.verify_inputs([], root, root, expected)
+
     def test_collector_uses_real_scopes_and_marks_synthetic_corpus(self):
         from types import SimpleNamespace
         from unittest.mock import patch

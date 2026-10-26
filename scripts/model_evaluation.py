@@ -9,7 +9,7 @@ SCHEMA = 1
 MODALITIES = ("text", "code", "image", "document", "audio", "video", "application", "windows-settings")
 BACKENDS = ("amd-vulkan", "nvidia-cuda", "vulkan", "openvino-npu", "metal")
 IDENTITY = ("model", "revision", "runtime", "dtype", "dim", "backend", "device_id",
-            "precision_profile", "build_identity")
+            "precision_profile", "build_identity", "driver_version", "runtime_version")
 
 
 def load_json(path):
@@ -103,6 +103,10 @@ def validate_corpus(corpus):
         ids.add(identifier)
         if doc.get("modality") not in MODALITIES or doc.get("operation") not in ("text", "image", "audio"):
             raise ValueError("Invalid document modality or worker operation")
+        operations = {"text": {"text"}, "code": {"text"}, "application": {"text"}, "windows-settings": {"text"},
+                      "image": {"image"}, "document": {"text", "image"}, "audio": {"audio"}, "video": {"image", "audio"}}
+        if doc["operation"] not in operations[doc["modality"]]:
+            raise ValueError("Document operation does not cover its declared modality")
         if not isinstance(doc.get("input"), str) or not doc["input"]:
             raise ValueError("Document input must be nonempty")
         if doc["operation"] != "text" and (not isinstance(doc.get("sha256"), str) or len(doc["sha256"]) != 64):
@@ -204,6 +208,8 @@ def valid_report(report):
 def compare(baseline, candidate):
     for report in (baseline, candidate):
         valid_report(report)
+    if baseline["receipt"].get("driver_version") != candidate["receipt"].get("driver_version"):
+        raise ValueError("Evidence is not comparable: driver version")
     for key in ("corpusSHA256", "backend", "deviceID", "machine", "scope", "policy"):
         if baseline.get(key) != candidate.get(key):
             raise ValueError("Evidence is not comparable: " + key)
