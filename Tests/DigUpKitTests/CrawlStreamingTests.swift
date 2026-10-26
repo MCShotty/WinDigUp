@@ -177,6 +177,15 @@ struct CrawlStreamingTests {
         let id=try store.insert(candidate)
         try queue.append([id])
         #expect(try queue.take()?.file.id==id)
+        let ordinary=first.appendingPathComponent("ordinary.txt")
+        let preferred=second.appendingPathComponent("preferred.txt")
+        try write(ordinary);try write(preferred)
+        let candidates=Crawler.crawl([first,second],options:IndexOptions()).candidates
+        let normalID=try store.insert(try #require(candidates.first{$0.path==ordinary.path}))
+        let preferredID=try store.insert(try #require(candidates.first{$0.path==preferred.path}))
+        try queue.append([normalID,preferredID])
+        #expect(try queue.take()?.file.id==preferredID)
+        #expect(try queue.take()?.file.id==normalID)
     }
 
     @Test func wideDirectoryFanoutCompletesWithBoundedCandidateBatches() throws {

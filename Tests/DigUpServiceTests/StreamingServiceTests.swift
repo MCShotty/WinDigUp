@@ -182,4 +182,32 @@ struct StreamingServiceTests {
         #expect(try store.counts().vectors==320)
     }
 
+    @Test func folderPriorityUsesNativePathSpellingAndSortsDiscoveryRoots() throws {
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:root)}
+        let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:second,withIntermediateDirectories:true)
+        try "An ordinary railway document.".write(to:first.appendingPathComponent("ordinary.txt"),atomically:false,encoding:.utf8)
+        try "A preferred railway document.".write(to:second.appendingPathComponent("preferred.txt"),atomically:false,encoding:.utf8)
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory)
+        let shared=SharedEmbedder{Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        var order:[String]=[]
+        let service=IndexService(main:.init(store:store,indexer:indexer,roots:[first,second],keepOnly:nil),
+            code:nil,folder:directory,model:shared,modelReady:{true},backfill:true,newFilesLimit:50,linger:0,
+            output:{if $0["event"] as? String=="file",let path=$0["path"] as? String {order.append(path)}})
+        #if os(Windows)
+        let path=second.path.replacingOccurrences(of:"/",with:"\\")
+        #else
+        let path=second.path
+        #endif
+        let request=try JSONSerialization.data(withJSONObject:["command":"prioritize","code":false,"path":path])
+        service.accept(try #require(String(data:request,encoding:.utf8)))
+        #expect(service.serve(commandInput:false)==0)
+        #expect(order.first==second.appendingPathComponent("preferred.txt").path)
+        #expect(try store.counts().vectors==2)
+    }
+
 }
