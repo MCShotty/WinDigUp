@@ -29,7 +29,7 @@ let browser;
         reply.inference.configured={backend:"amd-vulkan",jobs:2,resourceProfile:"balanced"};
         reply.inference.telemetry=structuredClone(window.telemetry);return reply;
       }
-      if(["refresh_discovery_volumes","discovery_candidates","set_discovery_options","set_windows_settings_options","set_personalization","clear_personalization","set_acceleration"].includes(command)){
+      if(["refresh_discovery_volumes","discovery_candidates","set_discovery_options","set_windows_settings_options","set_personalization","clear_personalization","set_acceleration","index_folder_first"].includes(command)){
         calls.push({command,args});
         if(command==="refresh_discovery_volumes")return structuredClone(sourceDrive);
         if(command==="discovery_candidates")return {generation:args.generation,hits:[],total:0,catalogTotal:0};
@@ -37,6 +37,7 @@ let browser;
         if(command==="set_windows_settings_options"){Object.assign(windowsCatalog,args.options);return structuredClone(windowsCatalog);}
         if(command==="set_personalization"){personalization.enabled=args.enabled;return structuredClone(personalization);}
         if(command==="clear_personalization"){personalization.entries=0;return structuredClone(personalization);}
+        if(command==="index_folder_first")return {queued:true,active:false};
         return {};
       }
       return old(command,args);
@@ -98,6 +99,9 @@ let browser;
   const general=page.getByRole("tab",{name:"General",exact:true});await general.focus();await page.keyboard.press("ArrowRight");
   assert.equal(await page.locator("#folders").isVisible(),true);
   assert.equal(await page.locator('[role="tab"][aria-selected="true"]').evaluate(node=>node===document.activeElement),true);
+  await page.locator("#folder-rows .folder-priority").first().click();
+  await page.waitForFunction(()=>document.querySelector("#folder-priority-status").textContent.includes("Pause and schedule"));
+  assert.deepEqual(await page.evaluate(()=>calls.find(call=>call.command==="index_folder_first").args),{path:"C:"+String.fromCharCode(92),code:false});
   assert.equal(await page.locator("#toggle-preview").count(),0);
   await page.evaluate(()=>{const label=document.createElement("p");label.className="note";label.textContent="Synthetic UI fixture. No hardware measurements.";
     label.style.cssText="position:fixed;bottom:0;right:0;background:var(--surface);color:var(--text);z-index:50;padding:4px 8px;margin:0";document.body.append(label);});

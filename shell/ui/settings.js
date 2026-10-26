@@ -27,6 +27,7 @@ let deviceProbe = null;
 let deviceProbeStarted = false;
 let deviceProbeBusy = false;
 const gpuDrafts = new Map();
+const priorityPending = new Set();
 let summaries = null;        // what's indexed under each folder (search-service's summaries)
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
@@ -381,6 +382,25 @@ function folderRow(folder, summary, code = false) {
     ].filter(Boolean).join(" · ");
     if (states) side.append(element("div", "states", states));
   }
+  const priority = element("button", "link folder-priority", "Index this first");
+  const priorityKey = (code ? "code:" : "files:") + folder;
+  priority.type = "button";
+  priority.setAttribute("aria-label", "Index " + nameOf(folder) + " first");
+  priority.disabled = priorityPending.has(priorityKey) || Boolean(summary?.missing || summary?.unreadable);
+  priority.onclick = async () => {
+    if (priorityPending.has(priorityKey)) return;
+    priorityPending.add(priorityKey); priority.disabled = true;
+    const message = $(code ? "code-priority-status" : "folder-priority-status");
+    message.textContent = "Saving folder priority…";
+    try {
+      const result = await invoke("index_folder_first", { path: folder, code });
+      message.textContent = result?.active
+        ? "Folder prioritized. The current operation can finish before it takes effect."
+        : "Priority saved for the next indexing batch. Pause and schedule settings are unchanged.";
+    } catch (error) { message.textContent = error?.message || String(error); }
+    finally { priorityPending.delete(priorityKey); if (priority.isConnected) priority.disabled = false; }
+  };
+  side.append(priority);
   row.append(text, side, removeButton(code ? "Stop searching the code in this folder" : "Stop searching this folder", () => {
     if (code) {
       removingCode = folder;

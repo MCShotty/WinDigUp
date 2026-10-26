@@ -102,3 +102,5 @@ select.field {
   main.settings { padding-inline:18px; }
   .drive-actions button, #windows-settings button, #executable-review button, #general button { min-height:44px; }
 }
+
+.folder-priority { margin-top:4px; white-space:nowrap; }

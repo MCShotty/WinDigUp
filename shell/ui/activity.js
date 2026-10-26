@@ -258,7 +258,7 @@ window.ActivityUI = (() => {
       this.pendingDrive = null;
     }
     show(tab = this.tab) { this.setTab(tab); this.stop ||= subscribe((s, error) => this.update(s, error)); }
-    hide() { this.stop?.(); this.stop = null; }
+    hide() { this.stop?.(); this.stop = null; this.pendingDrive = null; }
     destroy() { this.hide(); this.host.replaceChildren(); }
     setTab(tab) {
       this.tab = tab;
