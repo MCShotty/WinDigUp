@@ -61,7 +61,7 @@ function queryChanged(filesOnly = false) {
   filesOnly = filesOnly === true;
   const retained = filesOnly ? {selection:state.selection,chosen:state.chosen,navigated:state.navigated} : null;
   if(state.composing)return;
-  closeBig();
+  if(!filesOnly || !isLauncher(selectedHit()))closeBig();
   clearTimeout(statusTimer); state.waitingVisible = false;
   statusTimer = setTimeout(() => { state.waitingVisible = true; renderFooter(); renderPreview(); scheduleFit(); }, 180);
   state.heightFloor = FIELD_HEIGHT; lastAnnouncement = "";
