@@ -30,6 +30,7 @@ let browser;
         const reply=await old(command,args);
         reply.files={...reply.files,schemaVersion:2,phase:window.activityMode,paused:window.activityPaused,knownFiles:83,searchable:17,pending:66,total:100,done:17,
           discoveryActive:true,entriesChecked:443831,candidates:107857,candidatesFinal:false,lastProgressAt:time};
+        reply.search={last:{phase:"file_words",total:12,availability:2.3,availability_checks:7}};
         reply.discovery=structuredClone(sourceDrive);reply.windowsSettings={catalog:windowsCatalog,purpose:{state:"ready"}};
         reply.inference.configured={backend:"amd-vulkan",jobs:2,resourceProfile:"balanced"};
         reply.inference.telemetry=structuredClone(window.telemetry);
@@ -74,6 +75,8 @@ let browser;
   await page.locator('[data-key="file-details"] > summary').click();
   assert.equal(await page.locator('[data-key="known-files"]').innerText(),"83");
   assert.equal(await page.locator('[data-key="searchable"]').innerText(),"17");
+  assert.match(await page.locator('[data-key="search-breakdown"]').innerText(),/Availability cache lookup 2 ms/);
+  assert.ok(!(await page.locator('[data-key="search-breakdown"]').innerText()).includes("7 ms"));
   await page.evaluate(()=>{activityMode="discovering";emit("helper",{});});
   await page.waitForFunction(()=>document.querySelector('[data-key="phase"]').textContent==="Discovering files");
   assert.equal(await page.locator(".activity-stages .current").count(),1,"Discovery alone must not claim inference");
