@@ -245,6 +245,7 @@
           </div>
           <p id="drive-draft" class="note" role="status"></p>
           <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan applications</button></div>
+          <p id="source-message-discovery" class="source-message" role="status"></p>
           <details id="drive-measurements"><summary>Application discovery stage measurements</summary><div id="drive-progress-list"></div></details>
           <button id="drive-install">Install or update fast NTFS discovery…</button>
           <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
@@ -259,7 +260,7 @@
           <label for="drive-filter">Review discovered executables</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
           <label for="drive-visibility">Candidates</label><select id="drive-visibility" class="field"><option value="review">Needs review</option><option value="accepted">Included</option><option value="hidden">Hidden</option><option value="excluded">Excluded</option><option value="all">All</option></select>
           <p id="drive-list-state" class="note" role="status"></p><button id="drive-retry-list" type="button" hidden>Retry catalog</button><div id="drive-candidates" aria-label="Discovered executable candidates"></div><button id="drive-more" hidden>Show more executables</button><p id="drive-count" class="note"></p>
-          <p id="source-message-discovery" class="source-message" role="status"></p>
+          <p id="source-message-review" class="source-message" role="status"></p>
     </section>
 
     <section class="tab" id="windows-settings" role="tabpanel" hidden>
