@@ -7,7 +7,7 @@ struct CrawlStreamingTests {
     func temporary() throws -> URL {
         let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-        return root
+        return URL(fileURLWithPath:FolderSelection.realPath(root.path),isDirectory:true)
     }
     func write(_ file:URL) throws {
         try "A useful railway timetable document.".write(to:file,atomically:false,encoding:.utf8)

@@ -49,6 +49,11 @@ final class IndexService: @unchecked Sendable {
     private var knownCountsComplete:[Bool:Bool]=[:]
     private static let aliasKey="scan_root_aliases_v1"
     private static func aliasID(_ path:String) -> String {Data(path.utf8).base64EncodedString()}
+    private static func validAliasPath(_ path:String) -> Bool {
+        guard path.hasPrefix("/"),path.utf8.count<=32768,!path.utf8.contains(0) else{return false}
+        return path=="/" || !path.split(separator:"/",omittingEmptySubsequences:false).dropFirst()
+            .contains { $0.isEmpty || $0=="." || $0==".." }
+    }
     private struct RootAliasCache:Codable {
         let schemaVersion:Int
         let roots:[String:String]
@@ -211,7 +216,7 @@ final class IndexService: @unchecked Sendable {
         return [:]
         #else
         if aliasLoaded.insert(part.code).inserted {
-            let wanted=Set((part.keepOnly ?? part.roots).map {IndexService.aliasID($0.standardizedFileURL.path)})
+            let wanted=Set((part.keepOnly ?? part.roots).map {IndexService.aliasID($0.path)})
             let text=try? part.store.meta(IndexService.aliasKey)
             expectedAliasText[part.code]=text
             var result:[String:String]=[:]
@@ -222,10 +227,8 @@ final class IndexService: @unchecked Sendable {
                 valid=true
                 for (identity,resolved) in cache.roots {
                     guard let data=Data(base64Encoded:identity),let root=String(data:data,encoding:.utf8),
-                          root.hasPrefix("/"),resolved.hasPrefix("/"),!root.utf8.contains(0),!resolved.utf8.contains(0),
-                          root.utf8.count<=32768,resolved.utf8.count<=32768,
-                          URL(fileURLWithPath:root).standardizedFileURL.path==root,
-                          URL(fileURLWithPath:resolved).standardizedFileURL.path==resolved else {valid=false;continue}
+                          IndexService.validAliasPath(root),IndexService.validAliasPath(resolved),
+                          Data(root.utf8).base64EncodedString()==identity else {valid=false;continue}
                     if wanted.contains(identity) {result[identity]=resolved}
                 }
             }
@@ -279,12 +282,12 @@ final class IndexService: @unchecked Sendable {
         #else
         let cached=aliases(part)
         return roots.allSatisfy {root in
-            let path=root.standardizedFileURL.path
+            let path=root.path
             guard Arguments.isFolder(root) && Arguments.isReadable(root) else {return false}
             let resolved=FolderSelection.realPath(path)
             if let previous=cached[IndexService.aliasID(path)],previous != resolved {return false}
             if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {
-                return resolved==path
+                return URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
             }
             return true
         }
@@ -294,7 +297,7 @@ final class IndexService: @unchecked Sendable {
     private func namespacePaths(_ part:Part,roots:[URL]) -> [String] {
         let cached=aliases(part)
         return Array(Set(roots.flatMap {root -> [String] in
-            let path=root.standardizedFileURL.path
+            let path=root.path
             #if os(Windows)
             return [path]
             #else
@@ -326,7 +329,7 @@ final class IndexService: @unchecked Sendable {
         var complete=true
         var allLiteralAndAvailable=true
         for root in part.roots {
-            let path=root.standardizedFileURL.path
+            let path=root.path
             let identity=IndexService.aliasID(path)
             emit(["event":"phase","stage":"checking_folder","path":path,"code":part.code,
                   "message":"Checking selected folders…"])
@@ -337,10 +340,11 @@ final class IndexService: @unchecked Sendable {
                 available.append(root)
                 #else
                 let resolved=FolderSelection.realPath(path)
-                if resolved != path {allLiteralAndAvailable=false}
+                let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+                if !literal {allLiteralAndAvailable=false}
                 let changed=cached[identity].map {$0 != resolved} ?? false
                 let unverified=(invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code))
-                    && resolved != path && cached[identity]==nil
+                    && !literal && cached[identity]==nil
                 if changed || unverified {
                     unreadable.append(root)
                     if unverified {complete=false}
@@ -364,7 +368,7 @@ final class IndexService: @unchecked Sendable {
         saveAliases(part)
         if uncertainAliasCache.contains(part.code) {
             available.removeAll {folder in
-                let originals=part.roots.filter {cached[IndexService.aliasID($0.standardizedFileURL.path)]==folder.path && $0.path != folder.path}
+                let originals=part.roots.filter {cached[IndexService.aliasID($0.path)]==folder.path && $0.path != folder.path}
                 if originals.isEmpty {return false}
                 unreadable += originals
                 complete=false
@@ -415,7 +419,8 @@ final class IndexService: @unchecked Sendable {
         if part.store.pendingExcludedPaths.count>64 {return available}
         var selected=Set<String>()
         for path in paths {
-            let url=URL(fileURLWithPath:scanPath(path,part:part)).standardizedFileURL
+            let normalized=URL(fileURLWithPath:scanPath(path,part:part)).standardizedFileURL.path
+            let url=URL(fileURLWithPath:FolderSelection.realPath(normalized))
             guard let root=available.filter({url.path==$0.path || FolderSelection.isInside(url.path,$0.path)})
                 .max(by:{$0.path.count<$1.path.count}) else {continue}
             if url.lastPathComponent==".gitignore" || url.path.contains("/.git/") ||
@@ -432,7 +437,7 @@ final class IndexService: @unchecked Sendable {
             while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
             if parent.path.count<root.path.count {parent=root}
             if !Crawler.canScanSubtree(parent,selectedRoots:namespacePaths(part,roots:part.roots).map {URL(fileURLWithPath:$0,isDirectory:true)},options:part.indexer.scanOptions) {parent=root}
-            let canonical=parent.resolvingSymlinksInPath().standardizedFileURL.path
+            let canonical=FolderSelection.realPath(parent.path)
             if !canonical.utf8.elementsEqual(parent.path.utf8) {selected.insert(root.path)}
             else {selected.insert(parent.path)}
         }
@@ -691,15 +696,24 @@ final class IndexService: @unchecked Sendable {
         return false
     }
 
+    private static func commandPath(_ raw:String,roots:[URL]) -> String? {
+        let path=URL(fileURLWithPath:raw).standardizedFileURL.path
+        guard let root=roots.filter({root in
+            let prefix=root.standardizedFileURL.path
+            return path==prefix || FolderSelection.isInside(path,prefix)
+        }).max(by:{$0.path.count<$1.path.count}) else{return nil}
+        let prefix=root.standardizedFileURL.path
+        return root.path+String(path.dropFirst(prefix.count))
+    }
+
     func accept(_ line: String) {
         if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
            let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
            request["command"] as? String=="prioritize",
            let rawPath=request["path"] as? String {
-            let path=URL(fileURLWithPath:rawPath).standardizedFileURL.path
             let isCode=request["code"] as? Bool ?? false
             if let part=parts.first(where:{$0.code==isCode}),
-               part.roots.contains(where:{$0.path==path || FolderSelection.isInside(path,$0.path)}) {
+               let path=IndexService.commandPath(rawPath,roots:part.roots) {
                 lock.withLock {preferredFolders[isCode]=path;priorityRevision+=1}
                 wake.signal()
             }
@@ -710,11 +724,9 @@ final class IndexService: @unchecked Sendable {
            request["command"] as? String=="changes" {
             let isCode=request["code"] as? Bool ?? false
             guard let part=parts.first(where:{$0.code==isCode}) else {return}
-            let paths=(request["paths"] as? [String] ?? []).map {URL(fileURLWithPath:$0).standardizedFileURL.path}
+            let paths=request["paths"] as? [String] ?? []
             let dirty=request["dirtyRoots"] as? [String] ?? []
-            let valid=Set(paths.filter {path in
-                part.roots.contains {root in path==root.path || FolderSelection.isInside(path,root.path)}
-            })
+            let valid=Set(paths.compactMap {IndexService.commandPath($0,roots:part.roots)})
             lock.withLock {
                 let alreadyRequested=isCode ? codeSyncRequested : syncRequested
                 if !dirty.isEmpty || paths.count>1024 || valid.count != Set(paths).count {
