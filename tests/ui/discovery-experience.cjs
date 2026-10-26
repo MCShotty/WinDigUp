@@ -64,6 +64,7 @@ let browser;
   assert.match(await page.locator(".activity-stages").getAttribute("aria-label"),/overlap/);
   assert.equal(await page.locator('[data-key="meter"]').getAttribute("aria-valuenow"),null);
   assert.match(await page.locator('[data-key="progress-label"]').innerText(),/not known/);
+  await page.locator('[data-key="file-details"] > summary').click();
   assert.equal(await page.locator('[data-key="known-files"]').innerText(),"83");
   assert.equal(await page.locator('[data-key="searchable"]').innerText(),"17");
   assert.match(await page.locator(".pipeline-device-measurements").innerText(),/Device utilization not reported/);
