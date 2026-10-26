@@ -117,6 +117,7 @@ function showAcceleratorOptions() {
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
   $("gpu-jobs-control").hidden=npu||$("accelerator").value==="metal";
+  $("resource-profile").disabled = npu || $("accelerator").value === "metal";
   $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
   renderGPUDevices();
 }

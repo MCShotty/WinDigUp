@@ -83,9 +83,9 @@
         <button id="refresh-gpus" type="button">Refresh devices</button>
         <p id="gpu-discovery" class="note" role="status"></p>
       </div>
-      <label for="resource-profile">Background resource use</label>
+      <label for="resource-profile">Background GPU resource use</label>
       <select id="resource-profile" class="field" aria-describedby="resource-profile-note"><option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="faster">Faster</option></select>
-      <p id="resource-profile-note" class="note">Balanced preserves your GPU-job choice. Quiet uses one background model owner. Faster permits your configured upper limit when memory is available. Search keeps priority; Intel NPU uses one owner.</p>
+      <p id="resource-profile-note" class="note">Quiet uses one background GPU model owner. Balanced and Faster currently preserve the same GPU-job ceiling, subject to available memory. This GPU-only choice is kept when using NPU or Metal. Search keeps priority; it does not cap device power or clocks.</p>
       <div id="gpu-jobs-control" class="gpu-jobs-control">
         <label for="gpu-jobs">Concurrent GPU jobs</label>
         <select id="gpu-jobs" class="field"><option value="0">Automatic, up to 3</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
