@@ -53,4 +53,31 @@ struct StreamingServiceTests {
         #expect(gate.sawOverlap)
         #expect(try store.counts().vectors==65)
     }
+    @Test func slowCodeDiscoveryCannotBlockReadyFileInference() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:code,withIntermediateDirectories:true)
+        try "A useful railway document.".write(to:files.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
+        try "def railway():\n    return departure\n".write(to:code.appendingPathComponent("schedule.py"),atomically:false,encoding:.utf8)
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory)
+        let codeStore=try IndexStore(directory:directory,file:IndexStore.codeFile)
+        var options=IndexOptions();options.code=true
+        let gate=Gate()
+        let shared=SharedEmbedder{Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        let codeIndexer=try Indexer(store:codeStore,options:options,makeEmbedder:{try shared.embedder()})
+        let service=IndexService(main:.init(store:store,indexer:indexer,roots:[files],keepOnly:nil),
+            code:.init(store:codeStore,indexer:codeIndexer,roots:[code],keepOnly:nil),
+            folder:directory,model:shared,modelReady:{true},backfill:true,newFilesLimit:50,linger:0,
+            output:{if $0["event"] as? String=="file" && $0["code"] as? Bool==false {gate.indexedFile()}},
+            beforeScanFolder:{if $0.lastPathComponent=="code"{gate.waitForIndex()}})
+        #expect(service.serve(commandInput:false)==0)
+        #expect(gate.sawOverlap)
+        #expect(try store.counts().vectors==1)
+        #expect(try codeStore.counts().vectors==1)
+    }
+
 }

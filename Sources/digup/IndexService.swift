@@ -50,6 +50,9 @@ final class IndexService: @unchecked Sendable {
     private let lock = NSLock()
     private var syncRequested = true       // the first thing it does
     private var codeSyncRequested = true
+    private var changedPaths: [Bool:Set<String>] = [:]
+    private var preferredFolders: [Bool:String] = [:]
+    private var priorityRevision=0
     private var stopRequested = false
     private var inferenceFailure = false
     private var backfillAllowed: Bool
@@ -121,15 +124,15 @@ final class IndexService: @unchecked Sendable {
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var exitStatus: Int32 = 0
         while true {
-            let requests = lock.withLock { () -> (Bool,Bool) in
-                defer { syncRequested=false;codeSyncRequested=false }
-                return (syncRequested,codeSyncRequested)
+            let requests = lock.withLock { () -> (Bool,Bool,[Bool:Set<String>]) in
+                defer { syncRequested=false;codeSyncRequested=false;changedPaths.removeAll() }
+                return (syncRequested,codeSyncRequested,changedPaths)
             }
             var scans: [Part] = []
             if requests.0 { scans.append(main) }
             if requests.1, let code { scans.append(code) }
             if !scans.isEmpty {
-                let queued = scan(scans)
+                let queued = scan(scans,changed:requests.2)
                 newFiles.formUnion(queued[false] ?? [])
                 newCode.formUnion(queued[true] ?? [])
             }
@@ -210,6 +213,22 @@ final class IndexService: @unchecked Sendable {
         return available
     }
 
+    private func priorityProvider(_ active: [Part]) -> () -> (Int,String)? {
+        var revision = -1
+        var pending: [(Int,String)] = []
+        return { [self] in
+            lock.withLock {
+                if revision != priorityRevision {
+                    revision=priorityRevision
+                    pending=active.indices.compactMap {source in
+                        preferredFolders[active[source].code].map {(source,$0)}
+                    }
+                }
+                return pending.isEmpty ? nil : pending.removeFirst()
+            }
+        }
+    }
+
     private final class ScanWork {
         let part: Part
         let session: IndexScanSession
@@ -221,7 +240,29 @@ final class IndexService: @unchecked Sendable {
         }
     }
 
-    private func scan(_ requested: [Part]) -> [Bool:Set<Int64>] {
+    private func rootsForChanges(_ paths: Set<String>, part: Part, available: [URL]) -> [URL] {
+        var selected=Set<String>()
+        for path in paths {
+            let url=URL(fileURLWithPath:path).standardizedFileURL
+            guard let root=available.filter({url.path==$0.path || FolderSelection.isInside(url.path,$0.path)})
+                .max(by:{$0.path.count<$1.path.count}) else {continue}
+            if url.lastPathComponent==".gitignore" || url.path.contains("/.git/") ||
+                Rules.projectMarkerChanged(url.lastPathComponent) {
+                selected.insert(root.path);continue
+            }
+            var parent=url.deletingLastPathComponent()
+            if url.path==root.path {parent=root}
+            while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
+            if parent.path.count<root.path.count {parent=root}
+            let canonical=parent.resolvingSymlinksInPath().standardizedFileURL.path
+            if !canonical.utf8.elementsEqual(parent.path.utf8) {selected.insert(root.path)}
+            else {selected.insert(parent.path)}
+        }
+        return selected.filter {path in !selected.contains {other in path != other && FolderSelection.isInside(path,other)}}
+            .sorted().map {URL(fileURLWithPath:$0,isDirectory:true)}
+    }
+
+    private func scan(_ requested: [Part], changed: [Bool:Set<String>] = [:]) -> [Bool:Set<Int64>] {
         let started=Date()
         var work: [ScanWork] = []
         defer {
@@ -233,9 +274,10 @@ final class IndexService: @unchecked Sendable {
         do {
             let gate=NSLock()
             for part in requested {
-                let roots=availableRoots(part)
+                let available=availableRoots(part)
+                let roots=changed[part.code].map {rootsForChanges($0,part:part,available:available)} ?? available
                 let session=try part.indexer.beginScan(roots)
-                let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,
+                let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,selectedRoots:part.roots,
                     beforeFolder:beforeScanFolder,scanGate:gate)
                 work.append(ScanWork(part:part,session:session,stream:stream))
                 emit(["event":"scanning","code":part.code,"discoveryActive":true])
@@ -279,14 +321,14 @@ final class IndexService: @unchecked Sendable {
             }
             let mayEmbed=modelReady() && lock.withLock { backfillAllowed }
             if mayEmbed {
-                // Ready sources start together; subsequent admissions follow normal source fairness.
-                while !work.allSatisfy({$0.finished || $0.session.eligibleCount>0})
+                while !work.contains(where:{$0.session.eligibleCount>0}) && !work.allSatisfy(\.finished)
                     && !lock.withLock({stopRequested}) {
                     try drain()
                     Thread.sleep(forTimeInterval:0.005)
                 }
                 emit(["event":"phase","stage":"discovering_and_indexing",
-                    "message":"Discovering files and indexing ready content…","discoveryActive":true])
+                    "message":"Discovering files and indexing ready content…","discoveryActive":true,
+                    "code":requested.allSatisfy(\.code)])
                 do {
                     _ = try Indexer.runScheduled(work.map { .init(indexer:$0.part.indexer,includePending:false) },
                         shouldStop:{ [self] in lock.withLock { stopRequested || !backfillAllowed } },
@@ -314,9 +356,11 @@ final class IndexService: @unchecked Sendable {
                         },admit:{
                             try drain()
                             return try work.map { try $0.session.takeEligibleIDs() }
-                        },inputComplete:{work.allSatisfy(\.finished)})
+                        },inputComplete:{work.allSatisfy(\.finished)},priority:priorityProvider(work.map(\.part)))
                 } catch {
                     inferenceFailure=true
+                    lock.withLock {stopRequested=true}
+                    for item in work {item.stream.cancel()}
                     emit(["event":"error","message":"Indexing failed: \(error)","fatal":true])
                 }
             }
@@ -379,7 +423,7 @@ final class IndexService: @unchecked Sendable {
                 fields["event"] = "inference_verified"
                 fields["inference_verified"] = true
                 emit(fields)
-            })
+            },priority:priorityProvider(active))
             for source in active.indices where !states[source].isEmpty {
                 emit(["event": "summary", "states": states[source], "code": active[source].code,
                       "ms": Int((ProcessInfo.processInfo.systemUptime - started) * 1000)])
@@ -443,10 +487,45 @@ final class IndexService: @unchecked Sendable {
     }
 
     func accept(_ line: String) {
+        if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
+           let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+           request["command"] as? String=="prioritize",
+           let path=request["path"] as? String {
+            let isCode=request["code"] as? Bool ?? false
+            if let part=parts.first(where:{$0.code==isCode}),
+               part.roots.contains(where:{$0.path==path || FolderSelection.isInside(path,$0.path)}) {
+                lock.withLock {preferredFolders[isCode]=path;priorityRevision+=1}
+                wake.signal()
+            }
+            return
+        }
+        if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
+           let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+           request["command"] as? String=="changes" {
+            let isCode=request["code"] as? Bool ?? false
+            guard let part=parts.first(where:{$0.code==isCode}) else {return}
+            let paths=request["paths"] as? [String] ?? []
+            let dirty=request["dirtyRoots"] as? [String] ?? []
+            let valid=Set(paths.filter {path in
+                part.roots.contains {root in path==root.path || FolderSelection.isInside(path,root.path)}
+            })
+            lock.withLock {
+                let alreadyRequested=isCode ? codeSyncRequested : syncRequested
+                if !dirty.isEmpty || paths.count>1024 || valid.count != Set(paths).count {
+                    changedPaths[isCode]=nil
+                } else if !alreadyRequested || changedPaths[isCode] != nil {
+                    changedPaths[isCode,default:[]].formUnion(valid)
+                    if (changedPaths[isCode]?.count ?? 0)>1024 {changedPaths[isCode]=nil}
+                }
+                if isCode {codeSyncRequested=true}else{syncRequested=true}
+            }
+            wake.signal()
+            return
+        }
         lock.withLock {
             switch line.trimmingCharacters(in: .whitespaces) {
-            case "sync": syncRequested = true
-            case "sync code": codeSyncRequested = true
+            case "sync": syncRequested = true; changedPaths[false]=nil
+            case "sync code": codeSyncRequested = true; changedPaths[true]=nil
             case "stop": stopRequested = true
             case "backfill on": backfillAllowed = true
             case "backfill off": backfillAllowed = false

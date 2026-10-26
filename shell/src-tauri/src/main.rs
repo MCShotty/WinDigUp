@@ -53,6 +53,8 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use watcher::FolderWatcher;
+mod watch_changes;
+use watch_changes::ChangeBatch;
 use application_commands::{search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps};
 
 const PANEL_WIDTH: f64 = panel_geometry::WIDTH;
@@ -650,7 +652,7 @@ fn choose_folders(app: AppHandle) {
 
 #[tauri::command]
 async fn index_now(app: AppHandle) {
-    let _ = tauri::async_runtime::spawn_blocking(move || run_index(&app)).await;
+    let _ = tauri::async_runtime::spawn_blocking(move |batch| changed_paths(&app, batch, false)).await;
 }
 
 #[tauri::command]
@@ -736,7 +738,7 @@ fn main() {
             ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
             panel_area, panel_config, panel_ready, appearance, set_appearance, set_panel_material, settings_info, set_open_at_login, set_center_panel, debug_query, debug_report, window_info,
             app_state, activity_snapshot, record_search_timing, search_session, application_commands::cancel_app_search, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
-            remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
+            remove_folder, index_folder_first, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
             enrichment_commands::set_app_enrichment_options, enrichment_commands::refresh_app_descriptions,
@@ -1026,7 +1028,7 @@ fn watch_folders(app: &AppHandle) {
     *shell.code_watcher.lock().unwrap() = (!code_folders.is_empty()).then(|| {
         let app = app.clone();
         FolderWatcher::start(&code_folders, code_skipped, index, Duration::from_secs(60), Duration::from_secs(600),
-                             move || sync_code(&app))
+                             move |batch| changed_paths(&app, batch, true))
     });
     if !folders.is_empty() || !code_folders.is_empty() {
         run_index(app);
@@ -1061,6 +1063,25 @@ fn run_index(app: &AppHandle) {
     shell.diagnostics.record("scheduler", json!({"event":"run_index","helper":launch.program,"args":launch.args}));
     if let Err(error) = shell.index.run(&launch) {
         index_event(app, json!({"event":"error","message":format!("Indexing couldn't start: {error}"),"fatal":true}));
+    }
+}
+
+#[tauri::command]
+fn index_folder_first(app: AppHandle, path: String, code: bool) -> Result<Value,String> {
+    let shell=app.state::<Arc<Shell>>();
+    let roots=if code {shell.code_folders()} else {shell.folders()};
+    if !roots.contains(&path) {return Err("Choose a folder that is selected for indexing.".into());}
+    shell.index.prioritize(path,code)?;
+    let active=may_index(&shell);
+    if active {run_index(&app);}
+    Ok(json!({"queued":true,"active":active}))
+}
+
+fn changed_paths(app: &AppHandle, batch: ChangeBatch, code: bool) {
+    let shell = app.state::<Arc<Shell>>();
+    if !may_index(&shell) { return; }
+    if let Err(error) = shell.index.changes(&shell.index_launch(), batch, code) {
+        index_event(app,json!({"event":"error","message":format!("Indexing changes couldn't start: {error}"),"fatal":true}));
     }
 }
 

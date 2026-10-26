@@ -17,14 +17,14 @@ public final class CrawlStream: @unchecked Sendable {
     public private(set) var peakQueuedBatches = 0
     public let capacity: Int
 
-    public init(roots: [URL], options: IndexOptions, capacity: Int = 4,
+    public init(roots: [URL], options: IndexOptions, selectedRoots: [URL]? = nil, capacity: Int = 4,
                 beforeFolder: (@Sendable (URL) -> Void)? = nil, scanGate: NSLock? = nil) {
         self.capacity = max(1, min(16, capacity))
         worker.enter()
         DispatchQueue(label: "DigUp.scan", qos: .utility).async { [self] in
             defer { worker.leave() }
             do {
-                let report = try Crawler.scan(roots, options: options,
+                let report = try Crawler.scan(roots, options: options, selectedRoots: selectedRoots,
                     shouldStop: { self.isCancelled },
                     beforeFolder: beforeFolder, scanGate: scanGate,
                     onProgress: { self.send(.progress($0)) },
@@ -86,7 +86,7 @@ public final class CrawlStream: @unchecked Sendable {
 
 extension Crawler {
     /// A directory is classified before its media can enter inference.
-    public static func scan(_ roots: [URL], options: IndexOptions,
+    public static func scan(_ roots: [URL], options: IndexOptions, selectedRoots: [URL]? = nil,
         shouldStop: () -> Bool = { false },
         beforeFolder: (@Sendable (URL) -> Void)? = nil, scanGate: NSLock? = nil,
         onProgress: (CrawlProgress) -> Void = { _ in },
@@ -99,7 +99,8 @@ extension Crawler {
             CREATE TEMP TABLE candidates(id INTEGER PRIMARY KEY,path TEXT NOT NULL,kind TEXT NOT NULL,
                 size INTEGER NOT NULL,mtime REAL NOT NULL,inode INTEGER NOT NULL,device INTEGER NOT NULL);
             """)
-        let rootPaths = Set(roots.map { $0.standardizedFileURL.path })
+        let selections=selectedRoots ?? roots
+        let rootPaths = Set(selections.map { $0.standardizedFileURL.path })
         let home = fm.homeDirectoryForCurrentUser.path
         var report = CrawlReport()
         var repos = GitRepos()
@@ -121,7 +122,7 @@ extension Crawler {
             if options.code { repos.enterRoot(root.path) }
             var inheritedProject = false
             if !options.code {
-                for selected in roots.map({ $0.standardizedFileURL.path })
+                for selected in selections.map({ $0.standardizedFileURL.path })
                     where FolderSelection.isInside(root.path, selected) {
                     var ancestor = (root.path as NSString).deletingLastPathComponent
                     while ancestor.count >= selected.count {

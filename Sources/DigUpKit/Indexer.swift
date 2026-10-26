@@ -180,7 +180,8 @@ public final class Indexer {
         onRemaining: (Int, Set<Int64>) -> Void = { _, _ in },
         onVerified: (WorkerInfo) -> Void = { _ in },
         admit: @escaping () throws -> [[Int64]] = { [] },
-        inputComplete: @escaping () -> Bool = { true }) throws -> [[String: Int]] {
+        inputComplete: @escaping () -> Bool = { true },
+        priority: @escaping () -> (Int,String)? = { nil }) throws -> [[String: Int]] {
         guard !sources.isEmpty else { return [] }
         guard Set(sources.map { $0.indexer.store.file.standardizedFileURL.path }).count == sources.count else {
             throw Database.Failure(message: "Each scheduled index must have one database owner.")
@@ -193,9 +194,11 @@ public final class Indexer {
                 includePending: source.includePending, limit: source.limit))
         }
         var lastSource = sources.count - 1
+        var consecutive = 0
         var states = Array(repeating: [String: Int](), count: sources.count)
         var done = Array(repeating: 0, count: sources.count)
         func nextJob() throws -> Job? {
+            if let (source,path)=priority(),queues.indices.contains(source) {queues[source].prioritize(path)}
             let updates = try admit()
             for index in queues.indices where index < updates.count { try queues[index].append(updates[index]) }
             var priorities: [Int: Int] = [:]
@@ -204,8 +207,10 @@ public final class Indexer {
             }
             guard let best = priorities.values.min() else { return nil }
             let order = (1...sources.count).map { (lastSource + $0) % sources.count }
-            guard let selected = order.first(where: { priorities[$0] == best }),
-                  let batch = try queues[selected].takeBatch() else { return nil }
+            let preferred = order.first(where: { priorities[$0] == best })
+            let fair = consecutive>=8 ? order.first(where:{$0 != lastSource && priorities[$0] != nil}) : nil
+            guard let selected=fair ?? preferred,let batch=try queues[selected].takeBatch() else {return nil}
+            consecutive = selected==lastSource ? consecutive+1 : 1
             lastSource = selected
             return Job(files: batch.files, source: selected, priority: batch.priority,
                        options: sources[selected].indexer.options)

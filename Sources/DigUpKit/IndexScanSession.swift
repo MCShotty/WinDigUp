@@ -155,7 +155,12 @@ public final class IndexScanSession {
                         matches.append(($0.int(0),$0.text(1) ?? ""))
                     }
                     let usable = matches.filter { !protected($0.1) }
-                    if usable.count == 1, let match=usable.first {
+                    var destinations=0
+                    try store.db.query("SELECT COUNT(*) FROM \(deferred) WHERE device=? AND inode=?",
+                        [.int(Int64(bitPattern:candidate.device)),.int(Int64(bitPattern:candidate.inode))]) {
+                        destinations=Int($0.int(0))
+                    }
+                    if usable.count == 1 && destinations == 1, let match=usable.first {
                         try store.move(match.0,to:candidate.path)
                         moved += 1
                         try enqueue(match.0)

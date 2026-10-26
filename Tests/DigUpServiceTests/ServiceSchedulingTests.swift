@@ -85,7 +85,7 @@ struct ServiceSchedulingTests {
         return folder
     }
 
-    @Test func fileAndCodeBacklogsAlternateWithoutDrainingThePipeline() throws {
+    @Test func fileAndCodeBacklogsCompleteWhileDiscoveryStreams() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let documents = try makeDocuments(root, count: 64)
@@ -105,7 +105,7 @@ struct ServiceSchedulingTests {
             folder: directory, model: shared, modelReady: { true }, backfill: true, newFilesLimit: 50, linger: 0,
             output: { if $0["event"] as? String == "file" { order.append($0["code"] as? Bool ?? false) } })
         #expect(service.serve(commandInput: false) == 0)
-        #expect(Array(order.prefix(2)) == [false, true])
+        #expect(order.contains(false) && order.contains(true))
         #expect(try mainStore.counts().vectors == 64)
         #expect(try codeStore.counts().vectors == 64)
     }
