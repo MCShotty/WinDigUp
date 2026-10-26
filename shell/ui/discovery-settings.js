@@ -76,7 +76,8 @@ const DiscoverySettings = {
       "Select Files, Applications, or both for each drive.");
     const volumes=d.volumes||[];
     const all=[...volumes,...(draft.volumes||[]).filter(id=>!volumes.some(v=>v.id===id)).map(id=>({id,name:"Disconnected volume",paths:[],available:false}))];
-    const box=this.el("drive-volumes"),present=new Set();
+    const box=this.el("drive-volumes"),present=new Set(),focused=document.activeElement;
+    const focusedInDrives=box.contains(focused);
     for(const volume of all){
       present.add(volume.id);
       let row=this.volumeRows.get(volume.id);
@@ -135,6 +136,7 @@ const DiscoverySettings = {
       const row=this.volumeRows.get(all[index].id).root;
       if(box.children[index]!==row)box.insertBefore(row,box.children[index]||null);
     }
+    if(focusedInDrives&&focused.isConnected&&document.activeElement!==focused)focused.focus({preventScroll:true});
     for(const check of this.el("drive-volumes").querySelectorAll("input"))check.disabled=driveBusy||check.dataset.unavailable==="true";
     for(const id of ["drive-enabled","drive-paused","drive-install"])this.el(id).disabled=driveBusy;
     this.el("drive-save").disabled=driveBusy||!this.dirty;this.el("drive-revert").disabled=driveBusy||!this.dirty;
