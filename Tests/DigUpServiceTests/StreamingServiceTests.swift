@@ -210,4 +210,36 @@ struct StreamingServiceTests {
         #expect(try store.counts().vectors==2)
     }
 
+    @Test func prioritizedSourceYieldsToOtherReadySourcesAfterEightBatches() throws {
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files"),code=root.appendingPathComponent("code")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:code,withIntermediateDirectories:true)
+        for index in 0..<24 {
+            try "A useful railway document.".write(to:files.appendingPathComponent("note-\(index).txt"),atomically:false,encoding:.utf8)
+        }
+        for index in 0..<4 {
+            try "def railway():\n    return departure\n".write(to:code.appendingPathComponent("schedule-\(index).py"),atomically:false,encoding:.utf8)
+        }
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory),codeStore=try IndexStore(directory:directory,file:IndexStore.codeFile)
+        var options=IndexOptions();options.code=true
+        let first=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{Model()})
+        let second=try Indexer(store:codeStore,options:options,makeEmbedder:{Model()})
+        _=try first.sync([files]);_=try second.sync([code])
+        var order:[Int]=[]
+        var prioritySent=false
+        _=try Indexer.runScheduled([.init(indexer:first),.init(indexer:second)],onEvent:{source,_,_ in order.append(source)},
+            priority:{
+                if prioritySent{return nil}
+                prioritySent=true
+                return (0,files.path)
+            })
+        #expect(Array(order.prefix(8))==[Int](repeating:0,count:8))
+        #expect(order.dropFirst(8).first==1)
+        #expect(try store.counts().vectors==24)
+        #expect(try codeStore.counts().vectors==4)
+    }
+
 }
