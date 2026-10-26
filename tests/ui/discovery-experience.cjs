@@ -45,7 +45,7 @@ let browser;
         if(command==="set_windows_settings_options"){Object.assign(windowsCatalog,args.options);return structuredClone(windowsCatalog);}
         if(command==="set_personalization"){personalization.enabled=args.enabled;return structuredClone(personalization);}
         if(command==="clear_personalization"){personalization.entries=0;return structuredClone(personalization);}
-        if(command==="index_folder_first")return {queued:true,active:false};
+        if(command==="index_folder_first")return new Promise(resolve=>{window.priorityResolve=()=>resolve({queued:true,active:false});});
         return {};
       }
       return old(command,args);
@@ -129,8 +129,15 @@ let browser;
   const general=page.getByRole("tab",{name:"General",exact:true});await general.focus();await page.keyboard.press("ArrowRight");
   assert.equal(await page.locator("#folders").isVisible(),true);
   assert.equal(await page.locator('#tabs [role="tab"][aria-selected="true"]').evaluate(node=>node===document.activeElement),true);
+  await page.evaluate(()=>{window.originalPriority=document.querySelector("#folder-rows .folder-priority");});
   await page.locator("#folder-rows .folder-priority").first().click();
+  await page.waitForFunction(()=>typeof priorityResolve==="function");
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await page.waitForFunction(()=>window.originalPriority!==document.querySelector("#folder-rows .folder-priority"));
+  assert.equal(await page.locator("#folder-rows .folder-priority").first().isDisabled(),true);
+  await page.evaluate(()=>priorityResolve());
   await page.waitForFunction(()=>document.querySelector("#folder-priority-status").textContent.includes("Pause and schedule"));
+  assert.equal(await page.locator("#folder-rows .folder-priority").first().isEnabled(),true,"A refreshed priority button stayed disabled");
   assert.deepEqual(await page.evaluate(()=>calls.find(call=>call.command==="index_folder_first").args),{path:"C:"+String.fromCharCode(92),code:false});
   assert.equal(await page.locator("#toggle-preview").count(),0);
   await page.evaluate(()=>{const label=document.createElement("p");label.className="note";label.textContent="Synthetic UI fixture. No hardware measurements.";
