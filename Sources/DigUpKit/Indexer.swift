@@ -138,6 +138,12 @@ public final class Indexer {
         return summary
     }
 
+    public var scanOptions: IndexOptions { options }
+
+    public func beginScan(_ roots: [URL]) throws -> IndexScanSession {
+        try IndexScanSession(store:store,roots:roots)
+    }
+
     // MARK: Run
 
     /// Processes pending files, screenshots first, newest first (`only`: just these files). Long PDFs and documents get
@@ -172,7 +178,9 @@ public final class Indexer {
         onEvent: (Int, Bool, Event) -> Void = { _, _, _ in },
         onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
         onRemaining: (Int, Set<Int64>) -> Void = { _, _ in },
-        onVerified: (WorkerInfo) -> Void = { _ in }) throws -> [[String: Int]] {
+        onVerified: (WorkerInfo) -> Void = { _ in },
+        admit: @escaping () throws -> [[Int64]] = { [] },
+        inputComplete: @escaping () -> Bool = { true }) throws -> [[String: Int]] {
         guard !sources.isEmpty else { return [] }
         guard Set(sources.map { $0.indexer.store.file.standardizedFileURL.path }).count == sources.count else {
             throw Database.Failure(message: "Each scheduled index must have one database owner.")
@@ -188,6 +196,8 @@ public final class Indexer {
         var states = Array(repeating: [String: Int](), count: sources.count)
         var done = Array(repeating: 0, count: sources.count)
         func nextJob() throws -> Job? {
+            let updates = try admit()
+            for index in queues.indices where index < updates.count { try queues[index].append(updates[index]) }
             var priorities: [Int: Int] = [:]
             for index in queues.indices {
                 if let first = try queues[index].peek() { priorities[index] = first.priority }
@@ -200,7 +210,7 @@ public final class Indexer {
             return Job(files: batch.files, source: selected, priority: batch.priority,
                        options: sources[selected].indexer.options)
         }
-        try processOwned(sources.map(\.indexer), nextJob: nextJob, shouldStop: shouldStop,
+        try processOwned(sources.map(\.indexer), nextJob: nextJob, inputComplete: inputComplete, shouldStop: shouldStop,
             decorate: { snapshot in for queue in queues { queue.decorate(&snapshot) } },
             onSnapshot: onSnapshot, onVerified: onVerified, committed: { _, job, results, seconds in
                 let source = job.source
@@ -282,7 +292,7 @@ public final class Indexer {
     }
 
     private static func processOwned(_ indexers: [Indexer], nextJob: @escaping () throws -> Job?,
-        shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
+        inputComplete: @escaping () -> Bool = { true }, shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
         onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
         onVerified: (WorkerInfo) -> Void = { _ in },
         committed: (Int, Job, [(String, String?)], Double) -> Void,
@@ -290,7 +300,7 @@ public final class Indexer {
         let folders = indexers.map { $0.scratch.appendingPathComponent(UUID().uuidString) }
         let options = indexers.map(\.options)
         // Concrete type references avoid Swift 6.4's dynamic-Self closure-specialization crash.
-        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob,
+        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob, inputComplete: inputComplete,
             source: { String($0.source) }, sizes: { $0.footprint },
             prepare: { index, job in
                 autoreleasepool {

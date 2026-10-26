@@ -12,6 +12,7 @@ public struct Candidate: Sendable {
 
 public struct CrawlReport: Sendable {
     public var candidates: [Candidate] = []
+    public var candidateCount = 0
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
@@ -214,6 +215,7 @@ public enum Crawler {
             }
         }
         report.candidates = kept
+        report.candidateCount = kept.count
         onProgress(CrawlProgress(stage: "complete", root: "", path: "", visited: report.visited, candidates: kept.count))
         return report
     }

@@ -67,6 +67,7 @@ final class IndexPipeline<Input: Sendable, Prepared: Sendable, Output: Sendable>
 
     private let fixedInputs: [Input]?
     private let nextInput: (() throws -> Input?)?
+    private let inputComplete: () -> Bool
     private let prepare: @Sendable (Int, Input) -> Prepared
     private let cleanup: @Sendable (Prepared) -> Void
     private let source: @Sendable (Input) -> String
@@ -94,6 +95,7 @@ final class IndexPipeline<Input: Sendable, Prepared: Sendable, Output: Sendable>
          cleanup: @escaping @Sendable (Prepared) -> Void) {
         fixedInputs = inputs
         nextInput = nil
+        inputComplete = { true }
         self.prepare = prepare
         self.cleanup = cleanup
         source = { _ in "0" }
@@ -102,13 +104,14 @@ final class IndexPipeline<Input: Sendable, Prepared: Sendable, Output: Sendable>
     }
 
     /// Only next/nextPrepared call the source, on the database owner's thread.
-    init(nextInput: @escaping () throws -> Input?, preparationWorkers: Int = 2,
+    init(nextInput: @escaping () throws -> Input?, inputComplete: @escaping () -> Bool = { true }, preparationWorkers: Int = 2,
          source: @escaping @Sendable (Input) -> String,
          sizes: @escaping @Sendable (Prepared) -> (memory: Int, scratch: Int),
          prepare: @escaping @Sendable (Int, Input) -> Prepared,
          cleanup: @escaping @Sendable (Prepared) -> Void) {
         fixedInputs = nil
         self.nextInput = nextInput
+        self.inputComplete = inputComplete
         self.source = source
         self.sizes = sizes
         self.prepare = prepare
@@ -139,6 +142,7 @@ final class IndexPipeline<Input: Sendable, Prepared: Sendable, Output: Sendable>
                 condition.lock()
                 guard !stopping else { condition.unlock(); return }
                 guard let input else {
+                    guard inputComplete() else { condition.unlock(); return }
                     sourceEnded = true
                     condition.broadcast()
                     condition.unlock()

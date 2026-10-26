@@ -70,6 +70,20 @@ final class PendingFileQueue {
             """
     }
 
+    func append(_ ids: [Int64]) throws {
+        guard !closed, !ids.isEmpty else { return }
+        try store.db.transaction {
+            for id in ids {
+                try store.db.run("""
+                    INSERT OR IGNORE INTO \(table)(file,priority)
+                    SELECT id,1 FROM files WHERE id=? AND state=?\(scopeSQL)
+                    """,[.int(id),.text(state)] + scopeValues)
+                try store.db.query("SELECT changes()") { total += Int($0.int(0)) }
+            }
+        }
+        exhausted=false
+    }
+
     func peek() throws -> Entry? {
         guard !closed else { return nil }
         if offset == buffer.count {
