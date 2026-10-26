@@ -30,7 +30,7 @@ struct StreamingServiceTests {
             while !startedEmbedding && condition.wait(until:deadline) {}
             condition.unlock()
         }
-        func visit(_ folder:URL) {condition.lock();folders.append(folder.path);condition.unlock()}
+        func visit(_ folder:URL) {condition.lock();folders.append(FolderSelection.realPath(folder.path));condition.unlock()}
         func waitForIndex() {
             condition.lock()
             let deadline=Date().addingTimeInterval(5)
