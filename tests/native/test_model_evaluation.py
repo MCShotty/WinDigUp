@@ -141,6 +141,15 @@ class ModelEvaluationTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 contract.validate_receipt({**self.receipt(), **change}, backend, device)
 
+    def test_existing_npu_receipt_is_explicit_without_a_backend_field(self):
+        info = {**self.receipt(), "device": "NPU", "runtime": "openvino-npu-v1-fixture"}
+        info.pop("backend")
+        identity = contract.validate_receipt(info, "openvino-npu", "")
+        self.assertEqual(identity["backend"], "openvino-npu")
+        info["runtime"] = "unverified-runtime"
+        with self.assertRaisesRegex(ValueError, "backend"):
+            contract.validate_receipt(info, "openvino-npu", "")
+
     def test_metrics_distinguish_query_hit_from_document_recall(self):
         rows = [{"expected": ["a", "b"], "ranked": ["a"], "matches": ["a"]},
                 {"expected": [], "ranked": ["c"], "matches": []}]

@@ -61,7 +61,9 @@ def distribution(values):
 def validate_receipt(info, backend, device):
     if not isinstance(info, dict) or info.get("execution_policy") != "accelerator-only":
         raise ValueError("Missing accelerator-only worker receipt")
-    if backend not in BACKENDS or info.get("backend") != backend:
+    npu_receipt = (backend == "openvino-npu" and info.get("backend") is None
+                   and str(info.get("runtime", "")).startswith("openvino-npu-v1-"))
+    if backend not in BACKENDS or info.get("backend") != backend and not npu_receipt:
         raise ValueError("Worker backend differs from the explicit backend")
     for key in ("model", "revision", "runtime", "dtype"):
         if not isinstance(info.get(key), str) or not info[key]:
@@ -75,7 +77,9 @@ def validate_receipt(info, backend, device):
         raise ValueError("Worker did not verify the selected physical device")
     if backend == "nvidia-cuda" and (info.get("precision_profile") != "cuda-fp32-v1" or not info.get("build_identity")):
         raise ValueError("CUDA precision/build proof is missing")
-    return {key: info.get(key) for key in IDENTITY}
+    identity = {key: info.get(key) for key in IDENTITY}
+    identity["backend"] = backend
+    return identity
 
 
 def validate_vector(values, dimension):
