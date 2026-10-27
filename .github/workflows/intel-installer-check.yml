@@ -1,0 +1,134 @@
+name: Intel installer with verified native runtime
+on:
+  push:
+    branches: [codex/intel-installer-check]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify production source and unchanged native ABI inputs
+        shell: pwsh
+        run: |
+          git fetch --no-tags --depth=1 origin 30f9eb20b902b68cf9e0dd9938ada85737ac2be8 6fc826c43c0a65f69cd906049aea735bd8ef91dd f17a290204df226865280921fd831caa2d493b58
+          if($LASTEXITCODE){throw 'Missing source provenance'}
+          git diff --exit-code 30f9eb20b902b68cf9e0dd9938ada85737ac2be8 HEAD -- . ':!.github/workflows/intel-installer-check.yml'
+          if($LASTEXITCODE){throw 'Production sources differ from the PR'}
+          git diff --exit-code 6fc826c43c0a65f69cd906049aea735bd8ef91dd HEAD -- Package.swift Sources/CLlamaWindows Sources/CLlamaShared Sources/CPDFium Sources/CSQLite Sources/CStb Sources/CMiniz scripts/build-llama.sh scripts/fetch-vendor.sh scripts/build-ffmpeg.sh 'scripts/llama.cpp-*.patch' shell/src-tauri/Cargo.lock
+          if($LASTEXITCODE){throw 'Native ABI inputs changed; a fresh native build is required'}
+          git diff --exit-code f17a290204df226865280921fd831caa2d493b58 HEAD -- shell/src-tauri/windows scripts/package-copilot.ps1
+          if($LASTEXITCODE){throw 'Inherited identity payload sources changed'}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: 12713184605
+          run-id: 40458998738
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-baseline
+      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057
+        with:
+          swift-version: swift-6.4.0-release
+          swift-build: 6.4.0-RELEASE
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          vsversion: '2022'
+          toolset: '14.44'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+      - name: Extract exact verified native libraries and generate import libraries
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'native-baseline'
+          $cert=@(Get-ChildItem $root -Recurse -Filter TEST-ONLY-WinDigUp.cer)
+          $setup=@(Get-ChildItem $root -Recurse -Filter '*-setup.exe')
+          if($cert.Count -ne 1 -or $setup.Count -ne 1){throw 'Unexpected native artifact layout'}
+          scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath $cert[0].FullName
+          if($LASTEXITCODE){throw 'CI identity trust failed'}
+          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode){throw 'Native runtime extraction failed'}
+          $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
+          Copy-Item (Join-Path $installed 'helper') shell/src-tauri/helper -Recurse
+          Copy-Item (Join-Path $installed 'copilot') shell/src-tauri/copilot -Recurse
+          Remove-Item shell/src-tauri/copilot/registration.json -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $installed 'THIRD-PARTY-NOTICES.txt') shell/src-tauri/THIRD-PARTY-NOTICES.txt
+          New-Item -ItemType Directory -Force Vendor/llama/lib,Vendor/llama/include | Out-Null
+          $metadata=Get-Content -Raw shell/src-tauri/helper/native-runtime.json|ConvertFrom-Json
+          if($metadata.commit -ne '4d756bc72bf00a4aacf410ae15a2d315f3db400d' -or $metadata.policyVersion -ne 2 -or $metadata.flavor -ne 'vulkan-cuda' -or $metadata.cudaToolkit -ne '12.9.1' -or $metadata.cudaPrecision -ne 'cuda-fp32-v1'){throw 'Native baseline does not match the pinned policy'}
+          Copy-Item shell/src-tauri/helper/native-runtime.json Vendor/llama/native-runtime.json
+          $libraries=@(Get-ChildItem shell/src-tauri/helper -Filter '*.dll' | Where-Object {$_.Name -match '^(ggml.*|llama|mtmd)\.dll$'})
+          if($libraries.Count -lt 5){throw 'Native core libraries are incomplete'}
+          foreach($library in $libraries){
+            Copy-Item $library.FullName Vendor/llama/lib
+            $names=@(& dumpbin.exe /nologo /exports $library.FullName | ForEach-Object {if($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)'){$Matches[1]}})
+            if(!$names.Count){throw ('No exports for '+$library.Name)}
+            $definition=Join-Path $env:RUNNER_TEMP ($library.BaseName+'.def')
+            @('LIBRARY "'+$library.Name+'"','EXPORTS')+$names | Set-Content -Encoding ASCII $definition
+            & lib.exe /nologo "/def:$definition" /machine:x64 ("/out:"+[IO.Path]::GetFullPath("Vendor/llama/lib/"+$library.BaseName+".lib"))
+            if($LASTEXITCODE){throw 'Could not reconstruct the import library'}
+          }
+          @('#define LLAMA_BUILD_TAG "'+$metadata.tag+'"','#define LLAMA_BUILD_ID "'+$metadata.buildIdentity+'"','#define LLAMA_RUNTIME_FLAVOR "'+$metadata.flavor+'"')|Set-Content -Encoding ASCII Vendor/llama/include/llama-build.h
+          Write-Output ((Join-Path $installed 'helper')) >> $env:GITHUB_PATH
+      - name: Fetch pinned C headers and small native dependencies
+        shell: bash
+        run: |
+          git clone --quiet --depth 1 --branch b11461 https://github.com/ggml-org/llama.cpp Vendor/llama.cpp
+          test "$(git -C Vendor/llama.cpp rev-parse HEAD)" = 4d756bc72bf00a4aacf410ae15a2d315f3db400d
+          git -C Vendor/llama.cpp apply "$PWD/scripts/llama.cpp-no-logits.patch" "$PWD/scripts/llama.cpp-accelerator-only.patch" "$PWD/scripts/llama.cpp-cuda-policy.patch"
+          cp Vendor/llama.cpp/include/llama.h Vendor/llama.cpp/ggml/include/*.h Vendor/llama.cpp/tools/mtmd/mtmd.h Vendor/llama.cpp/tools/mtmd/mtmd-helper.h Vendor/llama/include/
+          scripts/fetch-vendor.sh
+      - name: Rebuild the current Swift engine and native execution guard
+        shell: bash
+        run: |
+          swift build -c release --product digup
+          cp .build/release/digup.exe shell/src-tauri/helper/digup.exe
+          swift_root=$(cd "$(dirname "$(command -v swift)")/../../../.." && pwd)
+          swift_runtime=$(ls -d "$swift_root"/Runtimes/*/usr/bin | tail -1)
+          cp "$swift_runtime"/*.dll shell/src-tauri/helper/
+          MSYS_NO_PATHCONV=1 cl.exe /nologo /EHsc /std:c++17 /I Vendor/llama/include tests/native/accelerator-only.cpp /Fe:Vendor/llama/lib/accelerator-guard.exe /link /LIBPATH:Vendor/llama/lib ggml.lib ggml-base.lib
+          Vendor/llama/lib/accelerator-guard.exe "$(cygpath -m "$PWD/Vendor/llama/lib")"
+      - name: Build private Intel runtime and package current application
+        shell: bash
+        run: |
+          python scripts/package-openvino-runtime.py
+          cp -r Vendor/openvino/python shell/src-tauri/helper/openvino/
+          cp worker/openvino/*.py worker/openvino/requirements.txt Vendor/openvino/runtime-manifest.json Vendor/openvino/THIRD-PARTY-NOTICES.txt shell/src-tauri/helper/openvino/
+          cat Vendor/openvino/THIRD-PARTY-NOTICES.txt >> shell/src-tauri/THIRD-PARTY-NOTICES.txt
+          tauri_runner="$PWD/scripts/tauri-cli.sh"
+          (cd shell/src-tauri && bash "$tauri_runner" build --bundles nsis --config '{"bundle":{"resources":{"helper/":"helper/","copilot/":"copilot/","THIRD-PARTY-NOTICES.txt":"THIRD-PARTY-NOTICES.txt"}}}')
+      - name: Install current application and verify Intel runtime
+        shell: pwsh
+        run: |
+          $setup=@(Get-ChildItem shell/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
+          if($setup.Count -ne 1){throw 'Current installer missing'}
+          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode){throw 'Current installer failed'}
+          scripts/check-windows-openvino.ps1
+          if($LASTEXITCODE){throw 'Installed Intel runtime failed'}
+      - name: Installed launch, Control Panel and Copilot regressions
+        shell: pwsh
+        run: |
+          scripts/check-windows-settings.ps1
+          if($LASTEXITCODE){throw 'Settings activation regressed'}
+          scripts/check-windows-control-panel.ps1
+          if($LASTEXITCODE){throw 'Control Panel activation regressed'}
+          scripts/check-windows-panel.ps1
+          if($LASTEXITCODE){throw 'Panel rendering regressed'}
+          scripts/check-windows-copilot.ps1
+          if($LASTEXITCODE){throw 'Registered launcher activation regressed'}
+          python scripts/check-app-protocol.py --helper "$env:LOCALAPPDATA\DigUp\helper\digup.exe"
+          if($LASTEXITCODE){throw 'Application protocol regressed'}
+          python scripts/check-windows-indexing.py --app "$env:LOCALAPPDATA\DigUp\DigUp.exe"
+          if($LASTEXITCODE){throw 'Installed indexing protocol regressed'}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: DigUp-Intel-OpenVINO-windows-x64-test-signed
+          path: |
+            shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+            shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer
+            Vendor/llama/native-runtime.json
+            Vendor/openvino/runtime-manifest.json
