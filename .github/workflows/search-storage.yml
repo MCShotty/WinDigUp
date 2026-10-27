@@ -9,6 +9,7 @@ on:
       - 'Sources/digup/SearchRetirement.swift'
       - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'
       - 'Tests/DigUpServiceTests/SearchNameRefreshTests.swift'
+      - 'Tests/DigUpServiceTests/SearchServiceFixture.swift'
       - 'scripts/benchmark-search-scale.py'
       - '.github/workflows/search-storage.yml'
   workflow_dispatch:
