@@ -1,5 +1,10 @@
 import Foundation
 import Testing
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
 
 @testable import DigUpKit
 #if canImport(CSearchMath)
@@ -55,6 +60,51 @@ import CSearchMath
         try writer.insert(Candidate(path: "/files/Firefox.txt", kind: .doc, size: 1, mtime: 1, inode: 2, device: 1))
         #expect(try search.exactNamePaths("Firefox") == nil)
     }
+    final class ConcurrentInsert {
+        let writer: IndexStore
+        let candidate: Candidate
+        var inserted = false
+        var error: (any Error)?
+        init(writer: IndexStore, candidate: Candidate) { self.writer = writer; self.candidate = candidate }
+        func beforeBegin() {
+            guard !inserted else { return }
+            inserted = true
+            do { _ = try writer.insert(candidate) } catch { self.error = error }
+        }
+    }
+
+    @Test func exactNamesAndKindsShareOneRevisionDuringConcurrentDiscovery() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = try IndexStore(directory: root)
+        try writer.insert(Candidate(path: "/files/existing.txt", kind: .doc, size: 1, mtime: 1, inode: 1, device: 1))
+        let reader = try IndexStore(directory: root, readOnly: true)
+        let candidate = Candidate(path: "/files/snapshotimage.png", kind: .image, size: 1, mtime: 1, inode: 2, device: 1)
+        let insertion = ConcurrentInsert(writer: writer, candidate: candidate)
+        let code = sqlite3_trace_v2(reader.db.handle, UInt32(SQLITE_TRACE_STMT), { _, context, statement, _ in
+            guard let context, let statement, let sql = sqlite3_sql(OpaquePointer(statement)),
+                  String(cString: sql).uppercased() == "BEGIN" else { return 0 }
+            // Another connection commits exactly at the boundary. Before the fix, the kind map had
+            // already been read; the name snapshot then observed the newer file and disagreed with it.
+            Unmanaged<ConcurrentInsert>.fromOpaque(context).takeUnretainedValue().beforeBegin()
+            return 0
+        }, Unmanaged.passUnretained(insertion).toOpaque())
+        #expect(code == SQLITE_OK)
+        defer {
+            sqlite3_trace_v2(reader.db.handle, 0, nil, nil)
+            withExtendedLifetime(insertion) {}
+        }
+        let search = try Searcher(store: reader, loadVectors: false, loadNames: true)
+        if let error = insertion.error { throw error }
+        #expect(insertion.inserted)
+        #expect(try search.exactNamePaths("snapshotimage") == [candidate.path])
+        #expect(try search.search("snapshotimage", queryVector: nil, kinds: [.image]).map(\.path) == [candidate.path])
+        #expect(try search.search("snapshotimage", queryVector: nil, kinds: [.doc]).isEmpty)
+        // The constructor releases its read transaction, so later discovery invalidates exact names.
+        try writer.insert(Candidate(path: "/files/later.txt", kind: .doc, size: 1, mtime: 1, inode: 3, device: 1))
+        #expect(try search.exactNamePaths("later") == nil)
+    }
+
     @Test func readersPinOneRevisionWithoutBlockingTheWriter() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

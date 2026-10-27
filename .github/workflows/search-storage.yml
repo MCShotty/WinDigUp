@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'Sources/digup/SearchService.swift'
+      - 'Sources/DigUpKit/Searcher.swift'
+      - 'Tests/DigUpKitTests/SearchReadersTests.swift'
       - 'Sources/digup/FileAvailability.swift'
       - 'Sources/digup/SearchRetirement.swift'
       - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'

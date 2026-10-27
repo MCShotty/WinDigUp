@@ -55,10 +55,12 @@ public final class Searcher {
     /// uses that to stay small while idle: 20k vectors are ~30 MB.
     public init(store: IndexStore, loadVectors: Bool = true, loadNames: Bool = false) throws {
         self.store = store
-        if loadVectors { try reload() } else { try reloadFiles() }
         if loadNames {
+            // Kind filters and exact names must describe one revision while discovery keeps committing.
+            // Callers with an outer vector transaction use loadNames: false and retain its ownership.
             try store.db.execute("BEGIN")
             defer { try? store.db.execute("ROLLBACK") }
+            if loadVectors { try reload() } else { try reloadFiles() }
             var version: Int64 = 0
             try store.db.query("PRAGMA data_version") { version=$0.int(0) }
             try store.db.query("SELECT path FROM files") { row in
@@ -69,6 +71,8 @@ public final class Searcher {
                 if stem != name { exactNames[Self.nameKey(stem),default:[]].append(path) }
             }
             namesVersion=version
+        } else {
+            if loadVectors { try reload() } else { try reloadFiles() }
         }
     }
     private static func nameKey(_ value:String) -> String {
