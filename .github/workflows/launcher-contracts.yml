@@ -36,6 +36,29 @@ jobs:
             if($LASTEXITCODE){throw 'Windows rejected the signed package manifest'}
             $registered=Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher'
             if(!$registered){throw 'Signed package was not registered'}
+            $original=$registered.PackageFullName
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root
+            if($LASTEXITCODE){throw 'Repeat registration was not idempotent'}
+            $moved=Join-Path $env:RUNNER_TEMP ('identity-upgrade-'+[Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory $moved | Out-Null
+            Copy-Item (Join-Path $root 'copilot') (Join-Path $moved 'copilot') -Recurse
+            try {
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved
+              if($LASTEXITCODE -eq 0){throw 'A moved installation reused an old identity version'}
+              if((Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher').PackageFullName -ne $original){throw 'Failed registration discarded the previous identity'}
+              $env:DIGUP_MSIX_VERSION='0.7.0.1'
+              scripts/package-copilot.ps1 -Destination (Join-Path $moved 'copilot')
+              scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath (Join-Path $moved 'copilot/TEST-ONLY-WinDigUp.cer')
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved
+              if($LASTEXITCODE -or (Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher').Version -ne [Version]'0.7.0.1'){throw 'Higher-version identity upgrade failed'}
+              $meta=Get-Content -Raw (Join-Path $moved 'copilot/identity.json')|ConvertFrom-Json
+              $meta.enabled=$false;$meta|ConvertTo-Json|Set-Content -Encoding UTF8 (Join-Path $moved 'copilot/identity.json')
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved
+              if($LASTEXITCODE -or (Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher')){throw 'A build without identity retained a broken registration'}
+            } finally {
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved -Uninstall
+              Remove-Item $moved -Recurse -Force -ErrorAction SilentlyContinue
+            }
           } finally {
             & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root -Uninstall
           }

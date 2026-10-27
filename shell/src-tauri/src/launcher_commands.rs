@@ -5,8 +5,10 @@ use serde_json::{json,Value};
 #[tauri::command]
 pub fn launcher_apps(shell:State<'_,Arc<Shell>>)->Value{
     let options=shell.settings.lock().unwrap().launcher.clone();
-    let visible=shell.applications.search("",false).into_iter().map(|h|(h.id.clone(),h)).collect::<HashMap<_,_>>();
-    let ids=launcher::visible_ids(&options,shell.launcher_history.ids(),&visible.keys().cloned().collect());
+    let recent=shell.launcher_history.ids();
+    let requested=options.pinned.iter().chain(recent.iter()).cloned().collect();
+    let visible=shell.applications.selected_hits(&requested).into_iter().map(|h|(h.id.clone(),h)).collect::<HashMap<_,_>>();
+    let ids=launcher::visible_ids(&options,recent,&visible.keys().cloned().collect());
     let hits=ids.iter().filter_map(|id|visible.get(id))
         .map(|h|{let mut v=serde_json::to_value(h).unwrap();v["pinned"]=json!(options.pinned.contains(&h.id));v}).collect::<Vec<_>>();
     json!({"hits":hits,"pinned":options.pinned,"showRecent":options.show_recent})
@@ -18,7 +20,7 @@ pub fn pin_launcher_app(app:AppHandle,shell:State<'_,Arc<Shell>>,app_id:String,p
     next.launcher.pinned.retain(|id|id!=&app_id);
     if pinned{
         if next.launcher.pinned.len()>=6{return Err("Unpin an app before adding another. The launcher holds six pins.".into())}
-        if !shell.applications.search("",false).iter().any(|h|h.id==app_id){return Err("This application is unavailable.".into())}
+        if shell.applications.selected_hits(&[app_id.clone()].into_iter().collect()).is_empty(){return Err("This application is unavailable.".into())}
         next.launcher.pinned.push(app_id);
     }
     next.save(&shell.settings_path).map_err(|e|e.to_string())?;*settings=next;drop(settings);

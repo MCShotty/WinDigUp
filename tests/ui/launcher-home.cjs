@@ -44,7 +44,7 @@ const {setup}=require("./application-fixtures.cjs");
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     const png=await page.locator("#panel").screenshot();
     if(process.env.DIGUP_ACTIVITY_SCREENSHOTS){const dir=process.env.DIGUP_ACTIVITY_SCREENSHOTS;fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,"launcher-home-"+theme+"-"+width+".png"),png);}
-    if(width===720)console.log("LAUNCHER_SCREENSHOT_BASE64 "+theme+" "+png.toString("base64"));
+    console.log("LAUNCHER_SCREENSHOT_BASE64 "+theme+(width===720?"":"-"+width)+" "+png.toString("base64"));
    }
   }
   assert.deepEqual(errors,[]);console.log("PASS: pinned/recent home, keyboard launch, empty/results transition, themes and narrow layout");

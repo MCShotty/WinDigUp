@@ -38,7 +38,7 @@ try {
 </assembly>
 "@
  $manifest | Set-Content -Encoding UTF8 (Join-Path $work 'provider.manifest')
- & cl.exe /nologo /EHsc /std:c++17 /MT "$PSScriptRoot/../shell/src-tauri/windows/copilot-key-provider.cpp" "/Fe:$Destination/DigUp.Copilot.exe" "/Fo:$work/provider.obj" /link /SUBSYSTEM:WINDOWS shell32.lib
+ & cl.exe /nologo /EHsc /std:c++17 /MT "$PSScriptRoot/../shell/src-tauri/windows/copilot-key-provider.cpp" "/Fe:$Destination/DigUp.Copilot.exe" "/Fo:$work/provider.obj" /link /SUBSYSTEM:WINDOWS shell32.lib ole32.lib user32.lib
  if($LASTEXITCODE){throw 'Copilot provider compilation failed.'}
  & mt.exe -nologo -manifest (Join-Path $work 'provider.manifest') "-outputresource:$Destination/DigUp.Copilot.exe;#1"
  if($LASTEXITCODE){throw 'Provider identity embedding failed.'}

@@ -1260,7 +1260,11 @@ fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
     panel.on_window_event(move |event| {
         // Like Spotlight: it steps away when you click elsewhere.
         match event {
-            WindowEvent::Focused(false) if !app.state::<Arc<Shell>>().options.debug_show => hide_panel(app.clone()),
+            WindowEvent::Focused(false) if !app.state::<Arc<Shell>>().options.debug_show => later(&app, |app| {
+                if let Some(panel)=panel_window(app) {
+                    if panel.is_visible().unwrap_or(false) && !panel_native::owns_foreground(&panel) {hide_panel(app.clone());}
+                }
+            }),
             WindowEvent::Resized(_) => {
                 if let Some(panel) = panel_window(&app) { panel_native::shape(&panel); }
             }

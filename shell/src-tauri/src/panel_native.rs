@@ -42,6 +42,17 @@ pub fn apply(window: &WebviewWindow, appearance: &Appearance, preference: &Panel
     status
 }
 
+/// A queued focus-loss notification must not dismiss a panel that already regained foreground ownership.
+pub fn owns_foreground(window: &WebviewWindow) -> bool {
+    #[cfg(windows)] {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow,GetAncestor,GA_ROOTOWNER};
+        let Ok(hwnd)=window.hwnd() else{return false};
+        let foreground=unsafe{GetForegroundWindow()};
+        return foreground==hwnd.0 || (!foreground.is_null() && unsafe{GetAncestor(foreground,GA_ROOTOWNER)}==hwnd.0);
+    }
+    #[cfg(not(windows))] window.is_focused().unwrap_or(false)
+}
+
 pub fn shape(window: &WebviewWindow) {
     #[cfg(windows)]
     { windows::shape(window, false); }

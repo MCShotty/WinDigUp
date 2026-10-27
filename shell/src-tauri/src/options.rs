@@ -144,13 +144,21 @@ impl Options {
 /// or where the Linux packages put it (lib/DigUp/helper beside their bin folder), else beside this program.
 fn default_helper() -> PathBuf {
     let name = if cfg!(windows) { "digup.exe" } else { "digup" };
-    let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else {
-        return PathBuf::from(name);
-    };
+    std::env::current_exe().ok().map(|program| helper_beside(&program))
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+fn helper_beside(program: &std::path::Path) -> PathBuf {
+    let name = if cfg!(windows) { "digup.exe" } else { "digup" };
+    let folder = program.parent().unwrap_or_else(|| std::path::Path::new("."));
     [folder.join("helper").join(name), folder.join("../lib/DigUp/helper").join(name)]
         .into_iter()
         .find(|helper| helper.is_file())
-        .unwrap_or_else(|| if cfg!(windows) { folder.join("helper").join(name) } else { folder.join(name) })
+        .unwrap_or_else(|| {
+            // Windows treats DigUp.exe and digup.exe as the same path. A missing installed helper must not launch the shell as its own worker.
+            let same_name = program.file_name().is_some_and(|file| file.to_string_lossy().eq_ignore_ascii_case(name));
+            if cfg!(windows) && same_name { folder.join("helper").join(name) } else { folder.join(name) }
+        })
 }
 
 fn settings_index(settings:&std::path::Path)->PathBuf{
@@ -161,6 +169,16 @@ fn settings_index(settings:&std::path::Path)->PathBuf{
 }
 #[cfg(test)]mod isolation_tests{
     use super::*;
+    #[cfg(windows)]
+    #[test]fn missing_installed_helper_never_resolves_to_the_shell(){
+        let root=std::env::temp_dir().join(format!("digup-helper-resolution-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(helper_beside(&root.join("DigUp.exe")),root.join("helper/digup.exe"));
+        assert_eq!(helper_beside(&root.join("digup-shell.exe")),root.join("digup.exe"));
+        std::fs::create_dir(root.join("helper")).unwrap();std::fs::write(root.join("helper/digup.exe"),[]).unwrap();
+        assert_eq!(helper_beside(&root.join("DigUp.exe")),root.join("helper/digup.exe"));
+        let _=std::fs::remove_dir_all(root);
+    }
     #[test]fn custom_settings_have_stable_distinct_adjacent_indexes(){
         let root=std::env::temp_dir();let a=root.join("digup-settings-a.json");let b=root.join("digup-settings-b.json");
         assert_ne!(settings_index(&a),settings_index(&b));assert_eq!(settings_index(&a),settings_index(&a));

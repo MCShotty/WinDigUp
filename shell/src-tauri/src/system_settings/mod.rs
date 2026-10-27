@@ -62,7 +62,7 @@ impl Catalog {
             sources:Arc::new(RwLock::new(BTreeMap::new())),refreshing:Arc::new(AtomicBool::new(false)),watch_started:Arc::new(AtomicBool::new(false)),
             cache:Arc::new(Mutex::new(None)),last_refresh:Arc::new(Mutex::new(None)),changed:Arc::new(|_|{})}
     }
-    pub fn configure(&self,options:Options){let enabled=options.enabled;*self.options.write().unwrap()=options;if enabled{self.refresh_if_stale();}}
+    pub fn configure(&self,options:Options){let enabled=options.enabled;let was_enabled={let mut current=self.options.write().unwrap();let was=current.enabled;*current=options;was};if enabled{if was_enabled{self.refresh_if_stale();}else{self.refresh();}}}
     pub fn attach(&mut self,path:PathBuf,changed:impl Fn(Value)+Send+Sync+'static) {
         self.changed=Arc::new(changed);
         if let Ok(bytes)=std::fs::read(&path) {
@@ -290,6 +290,18 @@ impl Catalog {
         c.publish("control_panel",Err("Temporary Shell failure".into()));assert_eq!(c.search("classic Sound").len(),1);
         assert!(c.info()["controlPanel"]["control_panel"]["stale"].as_bool().unwrap());
         c.publish("control_panel",Ok(vec![]));assert_eq!(c.search("Sound").iter().filter(|h|h.name=="Sound").count(),1);
+    }
+    #[test]fn native_cache_recovers_and_is_scoped_to_build_and_display_language(){
+        let root=std::env::temp_dir().join(format!("digup-control-cache-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);let path=root.join("catalog.json");
+        let mut c=catalog();c.attach(path.clone(),|_|{});c.publish("control_panel",Ok(vec![entry("::{cached}","Cached Control")]));
+        let id=c.search("Cached Control")[0].id.clone();
+        let mut restored=catalog();restored.attach(path.clone(),|_|{});assert_eq!(restored.search("Cached Control")[0].id,id);
+        let mut translated=Catalog::with_platform(Options{enabled:true,..Options::default()},Platform{locale:"fr-FR".into(),..c.platform.clone()});
+        translated.attach(path.clone(),|_|{});assert!(translated.search("Cached Control").is_empty());
+        std::fs::write(&path,b"damaged disposable cache").unwrap();let mut recovered=catalog();recovered.attach(path,|_|{});
+        assert!(recovered.search("Cached Control").is_empty());assert!(!recovered.search("Bluetooth").is_empty());
+        let _=std::fs::remove_dir_all(root);
     }
     #[test]fn fallback_task_links_require_the_registered_parent(){
         let c=catalog();assert!(c.fallback_tasks().is_empty());

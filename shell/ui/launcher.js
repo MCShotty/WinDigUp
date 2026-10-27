@@ -45,14 +45,15 @@ const Launcher = {
   renderSettings(){
     const input=document.getElementById("launcher-recents");if(!input)return;
     input.checked=this.state.showRecent!==false;
-    const host=document.getElementById("launcher-pins");host.replaceChildren();
+    const host=document.getElementById("launcher-pins");const focused=document.activeElement?.dataset?.pinnedId;host.replaceChildren();
     for(const id of this.state.pinned||[]){
       const hit=(this.state.hits||[]).find(h=>h.id===id);
       const row=element("div","launcher-pin");row.append(element("span","",hit?.name||"Unavailable pinned application"));
       const remove=element("button","","Unpin");remove.type="button";
-      remove.setAttribute("aria-label","Unpin "+(hit?.name||"unavailable application"));
+      remove.dataset.pinnedId=id;remove.setAttribute("aria-label","Unpin "+(hit?.name||"unavailable application"));
       remove.onclick=()=>this.pin({id},false).catch(e=>document.getElementById("launcher-note").textContent=e?.message||String(e));row.append(remove);host.append(row);
     }
+    if(focused)(host.querySelector('[data-pinned-id="'+CSS.escape(focused)+'"]')||input)?.focus();
   }
 };
 tauri.event.listen("launcher-changed",()=>Launcher.refresh());
