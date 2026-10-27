@@ -6,9 +6,8 @@ use serde_json::{json,Value};
 pub fn launcher_apps(shell:State<'_,Arc<Shell>>)->Value{
     let options=shell.settings.lock().unwrap().launcher.clone();
     let visible=shell.applications.search("",false).into_iter().map(|h|(h.id.clone(),h)).collect::<HashMap<_,_>>();
-    let mut ids=options.pinned.clone();if options.show_recent{ids.extend(shell.launcher_history.ids());}
-    let mut used=std::collections::HashSet::new();
-    let hits=ids.into_iter().filter(|id|used.insert(id.clone())).filter_map(|id|visible.get(&id)).take(6)
+    let ids=launcher::visible_ids(&options,shell.launcher_history.ids(),&visible.keys().cloned().collect());
+    let hits=ids.iter().filter_map(|id|visible.get(id))
         .map(|h|{let mut v=serde_json::to_value(h).unwrap();v["pinned"]=json!(options.pinned.contains(&h.id));v}).collect::<Vec<_>>();
     json!({"hits":hits,"pinned":options.pinned,"showRecent":options.show_recent})
 }

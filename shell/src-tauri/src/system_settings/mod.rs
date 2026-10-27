@@ -229,12 +229,15 @@ impl Catalog {
     use windows::{core::PCWSTR,Win32::{System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED},UI::{Shell::{ShellExecuteExW,SHELLEXECUTEINFOW,SEE_MASK_NOASYNC,SEE_MASK_FLAG_NO_UI},WindowsAndMessaging::SW_SHOWNORMAL}}};
     #[repr(C)]struct Version {size:u32,major:u32,minor:u32,build:u32,platform:u32,service_pack:[u16;128]}
     #[link(name="ntdll")]unsafe extern "system" {fn RtlGetVersion(v:*mut Version)->i32;}
-    #[link(name="kernel32")]unsafe extern "system" {fn GetUserDefaultUILanguage()->u16;}
+    #[link(name="kernel32")]unsafe extern "system" {fn GetUserDefaultUILanguage()->u16;fn LCIDToLocaleName(locale:u32,name:*mut u16,size:i32,flags:u32)->i32;}
     pub fn platform()->Platform {
         let mut v=Version{size:std::mem::size_of::<Version>()as u32,major:0,minor:0,build:0,platform:0,service_pack:[0;128]};
         let ok=unsafe{RtlGetVersion(&mut v)}>=0;
-        let language=unsafe{GetUserDefaultUILanguage()}&0x3ff;
-        Platform{supported:ok&&v.major>=10,build:v.build,locale:if language==1{"ar"}else{"en"}.into(),wifi:None,bluetooth:None}
+        let language=unsafe{GetUserDefaultUILanguage()};
+        let mut buffer=[0u16;85];
+        let count=unsafe{LCIDToLocaleName(language as u32,buffer.as_mut_ptr(),buffer.len()as i32,0)};
+        let locale=if count>1{String::from_utf16_lossy(&buffer[..count as usize-1])}else{format!("ui-{language:04x}")};
+        Platform{supported:ok&&v.major>=10,build:v.build,locale,wifi:None,bluetooth:None}
     }
     pub fn open(uri:&str)->Result<(),String> {
         // Only built-in catalog entries reach this function.

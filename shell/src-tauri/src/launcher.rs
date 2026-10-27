@@ -10,6 +10,11 @@ pub struct History{entries:Arc<Mutex<Vec<Recent>>>,writer:mpsc::SyncSender<Optio
 fn now()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()}
 pub fn valid_id(id:&str)->bool{id.starts_with("app:")&&id.len()<=128&&!id.contains('\0')}
 fn prune(entries:&mut Vec<Recent>){let time=now();entries.retain(|e|valid_id(&e.id)&&e.at<=time&&time-e.at<=90*86400);entries.truncate(64);}
+pub fn visible_ids(options:&Options,recent:Vec<String>,visible:&std::collections::HashSet<String>)->Vec<String>{
+    let mut ids=options.pinned.clone();if options.show_recent{ids.extend(recent);}
+    let mut used=std::collections::HashSet::new();
+    ids.into_iter().filter(|id|visible.contains(id)&&used.insert(id.clone())).take(6).collect()
+}
 impl History{
     pub fn new(path:PathBuf)->Self{
         let mut entries=std::fs::read(&path).ok().filter(|b|b.len()<=32000)
@@ -45,6 +50,22 @@ impl History{
 }
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn pins_precede_recents_and_unavailable_entries_are_filtered(){
+        let options=Options{pinned:vec!["app:missing".into(),"app:second".into()],show_recent:true};
+        let visible=["app:first","app:second","app:third"].into_iter().map(String::from).collect();
+        assert_eq!(visible_ids(&options,vec!["app:first".into(),"app:second".into(),"app:third".into()],&visible),
+            ["app:second","app:first","app:third"]);
+        assert_eq!(visible_ids(&Options{show_recent:false,..options},vec!["app:first".into()],&visible),["app:second"]);
+        let many=(0..20).map(|i|format!("app:{i}")).collect::<Vec<_>>();
+        assert_eq!(visible_ids(&Options::default(),many.clone(),&many.into_iter().collect()).len(),6);
+    }
+    #[test]fn corrupt_or_incompatible_history_recovers_without_query_data(){
+        let path=std::env::temp_dir().join(format!("digup-recents-corrupt-{}-{}.json",std::process::id(),now()));
+        for bytes in [b"corrupt".as_slice(),br#"{"version":2,"entries":[{"id":"app:old","at":0}]}"#.as_slice()]{
+            std::fs::write(&path,bytes).unwrap();let h=History::new(path.clone());assert!(h.ids().is_empty());h.clear().unwrap();
+        }
+        let _=std::fs::remove_file(path);
+    }
     #[test]fn recents_deduplicate_and_clear_without_query_text(){
         let path=std::env::temp_dir().join(format!("digup-recents-{}-{}.json",std::process::id(),now()));
         let h=History::new(path.clone());h.accepted("app:first");h.accepted("app:second");h.accepted("app:first");h.accepted("file:C:/secret.txt");

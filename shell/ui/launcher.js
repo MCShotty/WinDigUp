@@ -52,6 +52,8 @@ if(shortcuts)shortcuts.addEventListener("keydown",event=>{
     event.preventDefault();const index=event.key==="Home"?0:event.key==="End"?buttons.length-1:(at+(event.key==="ArrowRight"?1:-1)+buttons.length)%buttons.length;buttons[index]?.focus();
   }else if(event.key==="ArrowUp"){event.preventDefault();document.getElementById("query")?.focus();}
 });
+const preferences=document.getElementById("launcher-preferences");
+if(preferences)preferences.hidden=!/Win/.test(navigator.platform);
 const recent=document.getElementById("launcher-recents");
 if(recent){
   recent.onchange=async()=>{try{await invoke("set_launcher_recents",{enabled:recent.checked});await Launcher.refresh();}catch(e){document.getElementById("launcher-note").textContent=e?.message||String(e);await Launcher.refresh();}};

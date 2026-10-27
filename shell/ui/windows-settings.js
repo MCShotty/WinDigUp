@@ -32,7 +32,7 @@ class WindowsSettingsSearch {
     this.changed=changed;this.hits=[];this.total=0;this.epoch=0;this.semantic={state:"preparing"};this.catalog={};
     for(const name of ["windows-settings","windows-settings-progress"])tauri.event.listen(name,({payload})=>{
       if(name==="windows-settings"){WindowsSettings.configure(payload);this.catalog=payload;
-        if(this.requestedActive){this.begin(this.text,true,this.mode);this.changed();}else this.changed(true);return;}
+        if(this.requestedActive){this.begin(this.text,true,this.mode,true);this.changed();}else this.changed(true);return;}
       const changed=this.semantic.embedded!==payload.embedded||this.semantic.revision!==payload.revision;
       this.semantic=payload;this.changed(true);
       if(changed&&this.active&&this.text&&!this.refreshTimer&&!document.hidden)
@@ -40,11 +40,11 @@ class WindowsSettingsSearch {
     });
     tauri.event.listen("model",({payload})=>{if(payload.state==="ready"&&this.active&&this.text)this.request(true,true);});
   }
-  begin(text,active,mode="all"){
-    this.epoch++;this.requestedActive=active;this.text=text;this.mode=mode;this.hits=[];this.total=0;this.error=null;this.finalEpoch=-1;this.settledEpoch=-1;
+  begin(text,active,mode="all",preserve=false){
+    this.epoch++;this.requestedActive=active;this.text=text;this.mode=mode;if(!preserve){this.hits=[];this.total=0;}this.error=null;this.finalEpoch=-1;this.settledEpoch=-1;
     clearTimeout(this.timer);clearTimeout(this.refreshTimer);cancelAnimationFrame(this.frame);
     this.active=active&&WindowsSettings.supported&&WindowsSettings.enabled&&(mode==="settings"||WindowsSettings.ordinarySearches);
-    if(!this.active)return;
+    if(!this.active){this.hits=[];this.total=0;return;}
     this.frame=requestAnimationFrame(()=>this.request(false));
     if(text)this.timer=setTimeout(()=>this.request(true),120);
   }

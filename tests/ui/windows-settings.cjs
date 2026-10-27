@@ -69,6 +69,16 @@ let browser;
   assert.equal(await page.evaluate(()=>window.savedSide===document.querySelector("#side").firstChild),true);
   await page.press("#query","Control+9");await page.waitForSelector(".windows-settings-group");
   assert.equal(await page.locator(".cell").count(),0);
+  await page.fill("#query","settings: display");
+  await page.waitForSelector('[data-result-key="setting:display"]');
+  await page.locator('[data-result-key="setting:display"]').click();
+  await page.evaluate(()=>{
+    window.retainedSettingsRow=document.querySelector('[data-result-key="setting:display"]');
+    window.emit("windows-settings",{enabled:true,supported:true,semanticEnabled:false,ordinarySearches:true,revision:"refreshed"});
+  });
+  assert.equal(await page.locator('[data-result-key="setting:display"]').count(),1,"Catalog progress cleared a selected current-query row");
+  await page.press("#query","Enter");
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_windows_setting").at(-1).args.settingId),"setting:display");
   await page.fill("#query","settings: warm screen");
   await page.waitForSelector('[data-result-key="setting:night-light"]');
   assert.match(await page.locator(".windows-settings-group").textContent(),/Purpose match/);

@@ -20,15 +20,17 @@ try {
  @"
 <?xml version="1.0" encoding="utf-8"?>
 <applications xmlns="http://schemas.microsoft.com/windows/cpltasks/v1" xmlns:sh="http://schemas.microsoft.com/windows/tasks/v1">
-<application id="$guid"><sh:task id="$taskGuid"><sh:name>$taskName</sh:name><sh:keywords>windigup fixture task</sh:keywords><sh:command>$taskCommand</sh:command></sh:task></application>
+<application id="$guid"><sh:task id="$taskGuid"><sh:name>$taskName</sh:name><sh:keywords>windigup fixture task</sh:keywords><sh:command>$taskCommand</sh:command></sh:task><category id="0"><sh:task idref="$taskGuid"/></category></application>
 </applications>
 "@ | Set-Content -Encoding UTF8 $tasks
  New-Item -Force $class,$namespace,($class+'\shell\open\command'),($class+'\DefaultIcon') | Out-Null
  Set-Item $class -Value $name;Set-Item $namespace -Value $name
+ New-ItemProperty $class -Name 'LocalizedString' -Value $name -PropertyType String -Force | Out-Null
+ New-ItemProperty $class -Name 'InfoTip' -Value 'Disposable WinDigUp Control Panel integration fixture' -PropertyType String -Force | Out-Null
  Set-Item ($class+'\shell\open\command') -Value $command
  Set-Item ($class+'\DefaultIcon') -Value ($fixture+',0')
  New-ItemProperty $class -Name 'System.ApplicationName' -Value ('WinDigUp.Fixture.'+$guid.Trim('{}')) -PropertyType String -Force | Out-Null
- New-ItemProperty $class -Name 'System.ControlPanel.Category' -Value 0 -PropertyType DWord -Force | Out-Null
+ New-ItemProperty $class -Name 'System.ControlPanel.Category' -Value '0' -PropertyType String -Force | Out-Null
  New-ItemProperty $class -Name 'System.Software.TasksFileUrl' -Value $tasks -PropertyType String -Force | Out-Null
  Add-Type @'
 using System;
