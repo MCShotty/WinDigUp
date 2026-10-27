@@ -67,11 +67,17 @@ jobs:
             $names=@(& dumpbin.exe /nologo /exports $library.FullName | ForEach-Object {if($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)'){$Matches[1]}})
             if(!$names.Count){throw ('No exports for '+$library.Name)}
             $definition=Join-Path $env:RUNNER_TEMP ($library.BaseName+'.def')
-            @('LIBRARY "'+$library.Name+'"','EXPORTS')+$names | Set-Content -Encoding ASCII $definition
+            $definitionLines=@(('LIBRARY "'+$library.Name+'"'),'EXPORTS')
+            $definitionLines += $names
+            $definitionLines | Set-Content -Encoding ASCII $definition
             & lib.exe /nologo "/def:$definition" /machine:x64 ("/out:"+[IO.Path]::GetFullPath("Vendor/llama/lib/"+$library.BaseName+".lib"))
             if($LASTEXITCODE){throw 'Could not reconstruct the import library'}
           }
-          @('#define LLAMA_BUILD_TAG "'+$metadata.tag+'"','#define LLAMA_BUILD_ID "'+$metadata.buildIdentity+'"','#define LLAMA_RUNTIME_FLAVOR "'+$metadata.flavor+'"')|Set-Content -Encoding ASCII Vendor/llama/include/llama-build.h
+          $header=@()
+          $header += '#define LLAMA_BUILD_TAG "'+$metadata.tag+'"'
+          $header += '#define LLAMA_BUILD_ID "'+$metadata.buildIdentity+'"'
+          $header += '#define LLAMA_RUNTIME_FLAVOR "'+$metadata.flavor+'"'
+          $header | Set-Content -Encoding ASCII Vendor/llama/include/llama-build.h
           Write-Output ((Join-Path $installed 'helper')) >> $env:GITHUB_PATH
       - name: Fetch pinned C headers and small native dependencies
         shell: bash
