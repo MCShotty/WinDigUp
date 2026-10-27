@@ -211,6 +211,7 @@ struct StreamingServiceTests {
             output:{event in
                 if event["event"] as? String=="sync" {completed=true}
                 if event["event"] as? String=="scan_batch" && (event["files"] as? Int)==128 && !completed {
+                    #expect(event["namesChanged"] as? Bool==true)
                     publishedBeforeCompletion=true
                     gate.indexedFile()
                 }
@@ -221,6 +222,51 @@ struct StreamingServiceTests {
         #expect(modelStarts==0)
         #expect(try store.pendingCount()==128)
         #expect(try store.counts().vectors==0)
+    }
+
+    @Test(arguments:[false,true])
+    func rescanMetadataFlagsDistinguishUnchangedRowsFromNewAndKindChangedFiles(changed:Bool) throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files"),blocked=files.appendingPathComponent("blocked")
+        try FileManager.default.createDirectory(at:blocked,withIntermediateDirectories:true)
+        for ordinal in 0..<64 {
+            try "A searchable railway document.".write(to:files.appendingPathComponent("note-\(ordinal).txt"),
+                atomically:false,encoding:.utf8)
+        }
+        let directory=root.appendingPathComponent("index")
+        let store=try IndexStore(directory:directory)
+        var modelStarts=0
+        let shared=SharedEmbedder{modelStarts+=1;return Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        let seed=IndexService(main:.init(store:store,indexer:indexer,roots:[files],keepOnly:nil),
+            code:nil,folder:directory,model:shared,modelReady:{false},backfill:true,newFilesLimit:50,linger:0,output:{_ in})
+        #expect(seed.serve(commandInput:false)==0)
+        let original=try #require(try store.files(under:[files.path]).first{URL(fileURLWithPath:$0.path).lastPathComponent=="note-0.txt"})
+        if changed {
+            // A cached classification can change when current admission rules are applied.
+            try store.db.run("UPDATE files SET kind='image' WHERE id=?",[.int(original.id)])
+            try "A newly discovered railway document.".write(to:files.appendingPathComponent("new.txt"),atomically:false,encoding:.utf8)
+        }
+        let gate=Gate()
+        let expected=changed ? 65 : 64
+        var flags:[Bool]=[]
+        let service=IndexService(main:.init(store:store,indexer:indexer,roots:[files],keepOnly:nil),
+            code:nil,folder:directory,model:shared,modelReady:{false},backfill:true,newFilesLimit:50,linger:0,
+            output:{event in
+                if event["event"] as? String=="scan_batch",let flag=event["namesChanged"] as? Bool {
+                    flags.append(flag)
+                    if (event["files"] as? Int)==expected {gate.indexedFile()}
+                }
+            },beforeScanFolder:{if $0.lastPathComponent=="blocked" {gate.waitForIndex()}})
+        #expect(service.serve(commandInput:false)==0)
+        #expect(gate.sawOverlap)
+        #expect(!flags.isEmpty)
+        #expect(flags.contains(true)==changed)
+        #expect(try store.files(under:[files.path]).first{$0.id==original.id}?.kind == .doc)
+        #expect(try store.pendingCount()==expected)
+        #expect(try store.counts().vectors==0)
+        #expect(modelStarts==0)
     }
 
     @Test func folderPriorityUsesNativePathSpellingAndSortsDiscoveryRoots() throws {

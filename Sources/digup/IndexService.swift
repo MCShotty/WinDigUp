@@ -482,6 +482,7 @@ final class IndexService: @unchecked Sendable {
             }
             var lastCounts=0.0
             var dirtyCounts=Set<Bool>()
+            var dirtyNames=Set<Bool>()
             func drain() throws {
                 for _ in 0..<8 {
                 for item in work where !item.finished {
@@ -492,8 +493,9 @@ final class IndexService: @unchecked Sendable {
                               "visited":progress.visited,"candidates":progress.candidates,"code":item.part.code,
                               "discoveryActive":true])
                     case .batch(let candidates):
-                        _ = try item.session.admit(candidates)
+                        let progress=try item.session.admit(candidates)
                         dirtyCounts.insert(item.part.code)
+                        if !progress.queuedIDs.isEmpty {dirtyNames.insert(item.part.code)}
                     case .finished(let report):
                         item.summary=try item.session.finish(report)
                         let completed=item.session.rootPrefixes
@@ -503,6 +505,7 @@ final class IndexService: @unchecked Sendable {
                         item.part.store.pendingExcludedPaths=Array(Set(previous+item.session.incompletePrefixes)).sorted()
                         item.finished=true
                         dirtyCounts.remove(item.part.code)
+                        dirtyNames.remove(item.part.code)
                         if let summary=item.summary {
                             emitCounts("sync",[
                                 "code":item.part.code,"new":item.session.queuedCount<=newFilesLimit ? item.session.queuedCount : 0,
@@ -517,6 +520,7 @@ final class IndexService: @unchecked Sendable {
                         item.part.store.pendingExcludedPaths=Array(Set(item.part.store.pendingExcludedPaths+item.session.rootPrefixes)).sorted()
                         item.finished=true
                         dirtyCounts.remove(item.part.code)
+                        dirtyNames.remove(item.part.code)
                         emit(["event":"error","message":"sync failed: \(message)","code":item.part.code,
                             "discoveryActive":false])
                     }
@@ -526,9 +530,10 @@ final class IndexService: @unchecked Sendable {
                 if !dirtyCounts.isEmpty && now-lastCounts>=0.5 {
                     for item in work where !item.finished && dirtyCounts.contains(item.part.code) {
                         emitCounts("scan_batch",["code":item.part.code,"discoveryActive":true,
-                            "candidates":item.session.eligibleCount])
+                            "candidates":item.session.eligibleCount,"namesChanged":dirtyNames.contains(item.part.code)])
                     }
                     dirtyCounts.removeAll()
+                    dirtyNames.removeAll()
                     lastCounts=now
                 }
             }
