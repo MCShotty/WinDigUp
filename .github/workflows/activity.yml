@@ -104,7 +104,7 @@ jobs:
           New-Item -ItemType Directory -Force $root | Out-Null
           Copy-Item shell/src-tauri/target/debug/digup-shell.exe (Join-Path $root 'DigUp.exe')
           $headers=& dumpbin.exe /headers (Join-Path $root 'DigUp.exe')
-          if(!($headers -match '2 subsystem \\(Windows GUI\\)')){throw 'Activation checks require the production Windows GUI subsystem'}
+          if(!($headers | Select-String -SimpleMatch '(Windows GUI)')){throw 'Activation checks require the production Windows GUI subsystem'}
           scripts/package-copilot.ps1 -Destination (Join-Path $root 'copilot')
           scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath (Join-Path $root 'copilot/TEST-ONLY-WinDigUp.cer')
           try {
