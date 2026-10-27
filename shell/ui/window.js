@@ -788,7 +788,7 @@ function brandMark() {
 }
 
 function chooseFolders(code = false) {
-  const button = element("button", "button primary", code?"Choose Code Folders…":"Choose Folders…");
+  const button = element("button", "button primary", code?"Choose folders for code search":"Choose Folders…");
   button.setAttribute("aria-label",code?"Choose folders for code search":"Choose folders for file search");
   button.dataset.scopeSetup=code?"code":"files";
   button.onclick = () => invoke(code?"choose_code_folders":"choose_folders").catch(failed);

@@ -599,7 +599,7 @@ function renderFooter() {
   }
   $summary.textContent = summary;
   $fileSetup.hidden=state.fileScopeEmpty!==true||state.isApps||state.isSettings||!$big.hidden;
-  $fileSetup.textContent=state.isCode?"Choose code folders":"Choose folders for files";
+  $fileSetup.textContent=state.isCode?"Choose folders for code search":"Choose folders for file search";
   $fileSetup.setAttribute("aria-label",state.isCode?"Choose folders for code search":"Choose folders for file search");
   const hit = selectedHit();
   $primary.hidden = !hit; $details.hidden = !hit;

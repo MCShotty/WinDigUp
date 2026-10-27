@@ -107,6 +107,11 @@ let browser;
     assert.equal(await page.locator(fileRows).count(),0);
     await page.waitForFunction(()=>state.finalGeneration===state.generation);
     await page.getByRole("button",{name:"Choose folders for file search",exact:true}).waitFor({state:"visible"});
+    if(view==="index.html"){
+      await page.setViewportSize({width:360,height:700});
+      const box=await page.locator("#file-setup").boundingBox();
+      assert.ok(box&&box.x>=0&&box.x+box.width<=360,"The empty-scope action overflowed the narrow panel");
+    }
     await page.evaluate(()=>{window.selectedFolders=["C:/docs"];window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
     await page.waitForSelector(fileRows);
     assert.equal(await page.getByRole("button",{name:"Choose folders for file search",exact:true}).isVisible(),false,"A nonempty native reply did not clear the hint");
