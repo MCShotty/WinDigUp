@@ -81,6 +81,13 @@ struct IndexPipelineBenchmarkTests {
             "os": ProcessInfo.processInfo.operatingSystemVersionString, "trials": trials
         ]
         let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
-        print("INDEX_PIPELINE_BENCHMARK: " + String(decoding: data, as: UTF8.self))
+        let record = "INDEX_PIPELINE_BENCHMARK: " + String(decoding: data, as: UTF8.self) + "\n"
+        if let destination = ProcessInfo.processInfo.environment["DIGUP_PIPELINE_REPORT"] {
+            // swift test may multiplex child stdout with its own progress output.
+            // Keep the measured report outside those shared streams.
+            try record.write(to: URL(fileURLWithPath: destination), atomically: true, encoding: .utf8)
+        } else {
+            print(record, terminator: "")
+        }
     }
 }

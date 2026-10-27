@@ -159,8 +159,12 @@ jobs:
           capture() {
             local variant=$1 status=0
             shift
-            "$@" > "$RUNNER_TEMP/indexing-$variant.stdout" 2> "$RUNNER_TEMP/indexing-$variant.stderr" || status=$?
-            cat "$RUNNER_TEMP/indexing-$variant.stdout" "$RUNNER_TEMP/indexing-$variant.stderr" | tee "indexing-$variant.txt"
+            local report="$RUNNER_TEMP/indexing-$variant.report.txt"
+            DIGUP_PIPELINE_REPORT="$report" "$@" > "$RUNNER_TEMP/indexing-$variant.stdout" 2> "$RUNNER_TEMP/indexing-$variant.stderr" || status=$?
+            cat "$RUNNER_TEMP/indexing-$variant.stdout" "$RUNNER_TEMP/indexing-$variant.stderr" | tee "indexing-$variant-output.txt"
+            # An atomic report file avoids swift test's internal child-output multiplexing too.
+            cp "$report" "indexing-$variant.txt"
+            cat "indexing-$variant.txt"
             return "$status"
           }
           capture before swift test --package-path "$base" --filter IndexPipelineBenchmarkTests
@@ -174,6 +178,8 @@ jobs:
           path: |
             indexing-before.txt
             indexing-after.txt
+            indexing-before-output.txt
+            indexing-after-output.txt
             indexing-comparison.json
             service-before.txt
             service-after.txt
