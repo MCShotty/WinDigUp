@@ -64,6 +64,7 @@ if(document.getElementById("copilot-option")&&/Win/.test(navigator.platform)){
   document.getElementById("configure-copilot").onclick=()=>invoke("configure_copilot_key").catch(e=>document.getElementById("copilot-status").textContent=e?.message||String(e));
   invoke("copilot_status").then(status=>{
     const note=document.getElementById("copilot-status");
+    if(status.supported===false){note.textContent=status.message||"Copilot-key customization is unavailable on this Windows version.";document.getElementById("configure-copilot").disabled=true;return;}
     note.textContent=status.managed?"Your organization manages the Copilot key.":status.assigned?"The Copilot key opens WinDigUp.":
       status.registered?"WinDigUp is registered. Select it in Windows' Copilot-key app picker.":"Copilot-key registration needs the signed Windows identity package. The regular shortcut remains available.";
     if(status.message)note.textContent+=" "+status.message;

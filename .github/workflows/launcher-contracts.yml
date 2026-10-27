@@ -1,0 +1,32 @@
+name: Launcher identity package
+on:
+  pull_request:
+    paths:
+      - 'shell/src-tauri/windows/**'
+      - 'scripts/*copilot*'
+      - '.github/workflows/launcher-contracts.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Parse PowerShell sources and build test-signed package
+        shell: pwsh
+        env:
+          DIGUP_MSIX_TEST_SIGN: "1"
+        run: |
+          foreach($file in @('scripts/package-copilot.ps1','scripts/check-windows-copilot.ps1','shell/src-tauri/windows/register-copilot.ps1')){
+            $tokens=$null;$errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file),[ref]$tokens,[ref]$errors) | Out-Null
+            if($errors){$errors | Format-List;throw "PowerShell parse failed: $file"}
+          }
+          scripts/package-copilot.ps1
+          if(!(Test-Path shell/src-tauri/copilot/WinDigUp.Identity.msix)){throw 'Signed identity package absent'}
+          $manifest=[xml](Get-Content -Raw shell/src-tauri/copilot/AppxManifest.xml)
+          if($manifest.Package.Identity.Name -ne 'MCShotty.WinDigUp.Launcher'){throw 'Unexpected package identity'}
+          if($manifest.Package.Applications.Application.Extensions.Extension.AppExtension.Name -ne 'com.microsoft.windows.copilotkeyprovider'){throw 'Provider registration missing'}
+          Write-Output 'PASS: native activation shim, valid manifest and signed identity package; no physical picker claim.'

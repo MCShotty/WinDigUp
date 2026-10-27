@@ -23,9 +23,9 @@ impl History{
             let Some(entries)=weak.upgrade()else{break};
             let result=(||{
                 // Keep clear and persistence ordered, including already queued launch updates.
-                let mut guard=entries.lock().unwrap();prune(&mut guard);
+                let snapshot={let mut guard=entries.lock().unwrap();prune(&mut guard);guard.clone()};
                 if let Some(parent)=path.parent(){std::fs::create_dir_all(parent).map_err(|e|e.to_string())?}
-                let bytes=serde_json::to_vec(&Saved{version:1,entries:guard.clone()}).map_err(|e|e.to_string())?;
+                let bytes=serde_json::to_vec(&Saved{version:1,entries:snapshot}).map_err(|e|e.to_string())?;
                 let tmp=path.with_extension("json.new");std::fs::write(&tmp,bytes).map_err(|e|e.to_string())?;
                 std::fs::rename(tmp,&path).map_err(|e|e.to_string())
             })();for reply in replies{let _=reply.send(result.clone());}
