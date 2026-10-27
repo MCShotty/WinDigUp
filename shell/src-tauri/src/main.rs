@@ -1611,6 +1611,7 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             "executable":std::env::current_exe().ok(),"settingsPath":shell.settings_path,"index":shell.index_folder(),
             "folders":shell.folders(),"codeFolders":shell.code_folders(),
             "acceleration":shell.settings.lock().unwrap().acceleration.clone(),
+            "intelSetup":shell.intel_setup.snapshot(),
             "blockedBy":indexing_blocker(&shell),"measuring":shell.measuring.load(Ordering::SeqCst),
             "estimating":shell.estimating.load(Ordering::SeqCst),"state":shell.snapshot(),
             "indexHelper":shell.index.snapshot(),"searchHelper":shell.search.snapshot(),
@@ -1621,7 +1622,7 @@ async fn indexing_diagnostics(app: AppHandle, shell: State<'_, Arc<Shell>>) -> R
             "searchTimings":shell.diagnostics.search_timings(),
             "recent":shell.diagnostics.recent()});
         let mut text = serde_json::to_string_pretty(&report).unwrap_or_default();
-        for name in ["indexing.jsonl", "index.log", "search.log", "model.log", "speed.log"] {
+        for name in ["indexing.jsonl", "index.log", "search.log", "model.log", "speed.log", "openvino-setup.log"] {
             text.push_str(&format!("\n\n--- {name} ---\n{}", diagnostics::tail(&shell.logs.join(name), 24_576)));
         }
         if let Some(index) = shell.index_folder() {

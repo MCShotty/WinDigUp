@@ -593,7 +593,7 @@ func modelSpeed(_ args: Arguments) throws {
         "load": load, "total": Date().timeIntervalSince(started), "measured": true, "device": model.info.device ?? key,
         "execution_policy": "accelerator-only", "tries": measured.tries, "others": measured.others,
         "waited": quiet.waited, "settled": quiet.settled, "doubtful": speed.doubtful ?? false, "checks": checks + 1]
-    for (name, value) in model.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"].contains(name) { fields[name] = value }
+    for (name, value) in model.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity", "device_name", "driver_description", "runtime_description"].contains(name) { fields[name] = value }
     if json { emit(fields) } else { print("Accelerator: \(model.info.device ?? key); CPU inference disabled. \(measured.times.fields)") }
 }
 

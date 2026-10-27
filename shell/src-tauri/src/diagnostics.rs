@@ -81,15 +81,24 @@ impl Diagnostics {
                 important=event["state"]=="unavailable";
                 runtime["searchIndex"]=event.clone();
             }
+            let intel_fixture = source == "model" && event["event"] == "done" && event["inference_verified"] == true
+                && event["verification_scope"] == "index-profile-reference-fixtures" && event["dim"] == 768
+                && match event["backend"].as_str() {
+                    Some("openvino-gpu") => event["device"].as_str().is_some_and(|device| device == "GPU"
+                        || device.strip_prefix("GPU.").is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))),
+                    Some("openvino-npu") => event["device"].as_str().is_some_and(|device| device == "NPU"
+                        || device.strip_prefix("NPU.").is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))),
+                    _ => false,
+                };
             let verified = event["execution_policy"] == "accelerator-only"
                 && event["device"].as_str().is_some_and(|device| !device.is_empty())
                 && event.get("error").is_none()
-                && ((source == "speed" && event["measured"] == true)
+                && (intel_fixture || (source == "speed" && event["measured"] == true)
                     || (source == "search" && event["event"] == "encoder" && event["state"] == "ready" && event["inference_verified"] == true)
                     || (source == "index" && event["event"] == "inference_verified" && event["inference_verified"] == true));
             if verified {
                 runtime["verified"] = json!({"device":event["device"],"executionPolicy":"accelerator-only","at":time,"source":source});
-                for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity", "model", "revision", "runtime", "dtype", "dim", "device_name", "driver_description", "runtime_description"] {
+                for key in ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity", "model", "revision", "runtime", "dtype", "dim", "device_name", "driver_description", "runtime_description", "verification_scope"] {
                     if let Some(value) = event.get(key) { runtime["verified"][key] = value.clone(); }
                 }
             }
@@ -171,6 +180,22 @@ pub fn tail(path: &Path, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn intel_fixture_verification_requires_execution_proof_and_the_matching_backend() {
+        let dir=std::env::temp_dir().join(format!("digup-intel-proof-{}",std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let diagnostics=Diagnostics::new(&dir);
+        diagnostics.record("model",json!({"event":"done","backend":"openvino-gpu","device":"GPU.0"}));
+        assert!(diagnostics.runtime()["verified"].is_null());
+        let receipt=json!({"event":"done","backend":"openvino-gpu","device":"GPU.0","device_name":"Intel fixture",
+            "execution_policy":"accelerator-only","inference_verified":true,"verification_scope":"index-profile-reference-fixtures","dim":768});
+        let mut wrong=receipt.clone();wrong["device"]=json!("CPU");
+        diagnostics.record("model",wrong);assert!(diagnostics.runtime()["verified"].is_null());
+        diagnostics.record("model",receipt);assert_eq!(diagnostics.runtime()["verified"]["device_name"],"Intel fixture");
+        assert_eq!(diagnostics.runtime()["verified"]["source"],"model");
+        let _=std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn availability_duration_is_retained_without_turning_probe_counts_into_timings() {
         let directory = std::env::temp_dir().join("digup-availability-timing-contract");
