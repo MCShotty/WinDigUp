@@ -62,7 +62,7 @@ impl Catalog {
             sources:Arc::new(RwLock::new(BTreeMap::new())),refreshing:Arc::new(AtomicBool::new(false)),watch_started:Arc::new(AtomicBool::new(false)),
             cache:Arc::new(Mutex::new(None)),last_refresh:Arc::new(Mutex::new(None)),changed:Arc::new(|_|{})}
     }
-    pub fn configure(&self,options:Options){*self.options.write().unwrap()=options;if self.options.read().unwrap().enabled{self.refresh_if_stale();}}
+    pub fn configure(&self,options:Options){let enabled=options.enabled;*self.options.write().unwrap()=options;if enabled{self.refresh_if_stale();}}
     pub fn attach(&mut self,path:PathBuf,changed:impl Fn(Value)+Send+Sync+'static) {
         self.changed=Arc::new(changed);
         if let Ok(bytes)=std::fs::read(&path) {
@@ -106,7 +106,7 @@ impl Catalog {
     fn fallback_tasks(&self)->Vec<Entry>{
         let parents=self.sources.read().unwrap().get("control_panel").map(|s|s.entries.clone()).unwrap_or_default();
         [("Microsoft.PowerOptions","pagePlanSettings","Edit power plan"),("Microsoft.PowerOptions","pageGlobalSettings","Power button settings"),
-         ("Microsoft.Mouse","1","Mouse pointers"),("Microsoft.Mouse","2","Pointer options"),("Microsoft.InternetOptions","6","Advanced Internet options")]
+         ("Microsoft.PowerOptions","pageCreateNewPlan","Create power plan")]
         .into_iter().filter(|(name,_,_)|parents.iter().any(|e|e.canonical==*name)).map(|(name,page,title)|Entry{
             key:format!("control-panel-{}",digest(&format!("{name}:{page}"))),name:title.into(),description:format!("Open {title} in Control Panel."),
             uri:String::new(),hardware:String::new(),aliases:vec![format!("control panel {title}")],min_build:19041,max_build:None,translations:Default::default(),
@@ -290,6 +290,14 @@ impl Catalog {
         c.publish("control_panel",Err("Temporary Shell failure".into()));assert_eq!(c.search("classic Sound").len(),1);
         assert!(c.info()["controlPanel"]["control_panel"]["stale"].as_bool().unwrap());
         c.publish("control_panel",Ok(vec![]));assert_eq!(c.search("Sound").iter().filter(|h|h.name=="Sound").count(),1);
+    }
+    #[test]fn fallback_task_links_require_the_registered_parent(){
+        let c=catalog();assert!(c.fallback_tasks().is_empty());
+        let mut parent=entry("::{power}","Power Options");parent.canonical="Microsoft.PowerOptions".into();
+        c.publish("control_panel",Ok(vec![parent]));
+        assert_eq!(c.fallback_tasks().len(),3);
+        c.publish("control_panel",Err("Refresh failed".into()));assert_eq!(c.fallback_tasks().len(),3);
+        c.publish("control_panel",Ok(vec![]));assert!(c.fallback_tasks().is_empty());
     }
     #[test]fn duplicate_shell_identity_is_merged_without_losing_distinct_tasks(){
         let c=catalog();c.publish("control_panel",Ok(vec![entry("::{one}","Sound")]));

@@ -150,7 +150,7 @@ fn default_helper() -> PathBuf {
     [folder.join("helper").join(name), folder.join("../lib/DigUp/helper").join(name)]
         .into_iter()
         .find(|helper| helper.is_file())
-        .unwrap_or_else(|| folder.join(name))
+        .unwrap_or_else(|| if cfg!(windows) { folder.join("helper").join(name) } else { folder.join(name) })
 }
 
 fn settings_index(settings:&std::path::Path)->PathBuf{

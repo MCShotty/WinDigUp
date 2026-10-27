@@ -10,9 +10,9 @@ unsafe fn property(item:&IShellItem2,name:&str)->String {
     unsafe {
         if PropertiesSystem::PSGetPropertyKeyFromName(PCWSTR(name.as_ptr()),&mut key).is_ok(){
             if let Ok(value)=item.GetString(&key){return owned(value)}
-            if let Ok(mut value)=item.GetProperty(&key){
+            if let Ok(value)=item.GetProperty(&key){
                 let text=windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc(&value).map(|p|owned(p)).unwrap_or_default();
-                let _=windows::Win32::System::Com::StructuredStorage::PropVariantClear(&mut value);return text;
+                return text;
             }
         }
     }
@@ -24,7 +24,9 @@ pub fn discover(source:&str)->Result<Vec<Entry>,String>{
         let folder:IShellItem=if source=="control_panel" {
             SHGetKnownFolderItem(&FOLDERID_ControlPanelFolder,KF_FLAG_DEFAULT,None).map_err(|e|e.to_string())?
         } else {
-            SHCreateItemFromParsingName(w!("::{ED7BA470-8E54-465E-825C-99712043E01C}"),None).map_err(|e|format!("Task links are unavailable: {e}"))?
+            SHCreateItemFromParsingName(w!("::{ED7BA470-8E54-465E-825C-99712043E01C}"),None)
+                .or_else(|_|SHCreateItemFromParsingName(w!("shell:::{ED7BA470-8E54-465E-825C-99712043E01C}"),None))
+                .map_err(|e|format!("Task links are unavailable: {e}"))?
         };
         let enumerator:IEnumShellItems=folder.BindToHandler(None,&BHID_EnumItems).map_err(|e|e.to_string())?;
         let mut entries=Vec::new();
@@ -69,7 +71,7 @@ pub fn open(target:&NativeTarget)->Result<(),String>{
             },
             NativeTarget::Canonical{name,page}=>{
                 let allowed=[("Microsoft.PowerOptions","pagePlanSettings"),("Microsoft.PowerOptions","pageGlobalSettings"),
-                    ("Microsoft.Mouse","1"),("Microsoft.Mouse","2"),("Microsoft.InternetOptions","6")];
+                    ("Microsoft.PowerOptions","pageCreateNewPlan")];
                 if !allowed.contains(&(name.as_str(),page.as_str())){return Err("This Control Panel task is not registered.".into())}
                 #[link(name="kernel32")]unsafe extern "system"{fn GetSystemDirectoryW(buffer:*mut u16,size:u32)->u32;}
                 let mut directory=[0u16;32768];let len=GetSystemDirectoryW(directory.as_mut_ptr(),directory.len()as u32)as usize;

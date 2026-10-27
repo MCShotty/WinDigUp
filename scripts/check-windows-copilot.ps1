@@ -22,7 +22,25 @@ if($signature.Status -ne 'Valid'){throw ('Provider signature invalid: '+$signatu
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
+[ComImport, Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+class DigUpActivationManager {}
+[ComImport, Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IDigUpActivationManager {
+ [PreserveSig]int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)]string id,[MarshalAs(UnmanagedType.LPWStr)]string args,uint options,out uint pid);
+ [PreserveSig]int ActivateForFile([MarshalAs(UnmanagedType.LPWStr)]string id,IntPtr items,[MarshalAs(UnmanagedType.LPWStr)]string verb,out uint pid);
+ [PreserveSig]int ActivateForProtocol([MarshalAs(UnmanagedType.LPWStr)]string id,IntPtr items,out uint pid);
+}
 public static class DigUpCopilotProbe {
+ [DllImport("ole32.dll")]static extern int CoAllowSetForegroundWindow([MarshalAs(UnmanagedType.IUnknown)]object server,IntPtr reserved);
+ public static uint Activate(string id){
+  object manager=new DigUpActivationManager();
+  try{CoAllowSetForegroundWindow(manager,IntPtr.Zero);uint pid;Marshal.ThrowExceptionForHR(((IDigUpActivationManager)manager).ActivateApplication(id,null,2,out pid));return pid;}
+  finally{Marshal.ReleaseComObject(manager);}
+ }
+ public static string Describe(uint process){
+  string result="";
+  EnumWindows((h,d)=>{uint pid;Rect r;GetWindowThreadProcessId(h,out pid);if(pid==process&&GetWindowRect(h,out r))result+="visible="+IsWindowVisible(h)+" rect="+r.left+","+r.top+","+r.right+","+r.bottom+" dpi="+GetDpiForWindow(h)+"; ";return true;},IntPtr.Zero);return result;
+ }
  delegate bool EnumProc(IntPtr h,IntPtr data);
  [StructLayout(LayoutKind.Sequential)] public struct Rect{public int left,top,right,bottom;}
  [DllImport("user32.dll")]static extern bool EnumWindows(EnumProc callback,IntPtr data);
@@ -46,12 +64,15 @@ function OwnedProcesses { @(Get-Process -ErrorAction SilentlyContinue | Where-Ob
 OwnedProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
 try {
  $aumid=$package.PackageFamilyName+'!Launcher'
- Start-Process ('shell:AppsFolder\'+$aumid)
+ Write-Output ('Provider activation process: '+[DigUpCopilotProbe]::Activate($aumid))
  $deadline=[DateTime]::UtcNow.AddSeconds(45)
  do {$owners=@(OwnedProcesses);$visible=@($owners|Where-Object{[DigUpCopilotProbe]::HasLauncher([uint32]$_.Id)});if($visible.Count){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
- if($owners.Count -ne 1 -or !$visible.Count){throw 'Registered cold activation did not open one compact launcher.'}
+ if($owners.Count -ne 1 -or !$visible.Count){
+  $details=@($owners|ForEach-Object{@{pid=$_.Id;windows=[DigUpCopilotProbe]::Describe([uint32]$_.Id)}})|ConvertTo-Json -Compress
+  throw ('Registered cold activation did not open one compact launcher. Owners: '+$details)
+ }
  $first=$owners[0].Id
- Start-Process ('shell:AppsFolder\'+$aumid)
+ Write-Output ('Provider activation process: '+[DigUpCopilotProbe]::Activate($aumid))
  Start-Sleep -Seconds 2
  $owners=@(OwnedProcesses)
  if($owners.Count -ne 1 -or $owners[0].Id -ne $first -or ![DigUpCopilotProbe]::HasLauncher([uint32]$first)){

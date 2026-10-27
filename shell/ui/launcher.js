@@ -1,6 +1,6 @@
 "use strict";
 const Launcher = {
-  state:{hits:[],pinned:[],showRecent:true},generation:0,
+  state:{hits:[],pinned:[],showRecent:true},generation:0,error:null,
   async refresh(){
     const generation=++this.generation;
     try{const value=await invoke("launcher_apps");if(generation!==this.generation)return;
@@ -10,24 +10,37 @@ const Launcher = {
   async pin(hit,pinned){
     await invoke("pin_launcher_app",{appId:hit.id,pinned});await this.refresh();
   },
+  async launch(hit){
+    try{await Apps.launch(hit);this.error=null;}
+    catch(error){this.error={hit,message:error?.message||String(error)};this.render();
+      document.querySelector("#launcher-shortcuts .launcher-retry")?.focus();}
+  },
   render(){
     const host=document.getElementById("launcher-shortcuts");if(!host)return;
     const focused=document.activeElement?.dataset?.launcherId;
     const children=[];
+    if(this.error){
+      const note=element("span","launcher-error",this.error.message);note.setAttribute("role","alert");
+      const retry=element("button","launcher-browse launcher-retry","Retry");retry.type="button";
+      retry.setAttribute("aria-label","Retry launching "+this.error.hit.name);
+      retry.onclick=async()=>{retry.disabled=true;try{await this.launch(this.error.hit);}finally{retry.disabled=false;}};
+      const back=element("button","launcher-browse","Dismiss");back.type="button";
+      back.onclick=()=>{const id=this.error.hit.id;this.error=null;this.render();(host.querySelector('[data-launcher-id="'+CSS.escape(id)+'"]')||document.getElementById("query"))?.focus();};
+      host.replaceChildren(note,retry,back);return;
+    }
     for(const hit of this.state.hits||[]){
       const button=element("button","launcher-shortcut");button.type="button";button.dataset.launcherId=hit.id;
       const label=hit.name+(hit.pinned?" · Pinned":" · Recent");
       button.setAttribute("aria-label","Launch "+label);button.title=label;button.append(Apps.icon(hit,64));
-      button.onclick=async()=>{button.disabled=true;try{await Apps.launch(hit);}catch(error){const note=document.getElementById("launcher-message");if(note)note.textContent=error?.message||String(error);}finally{button.disabled=false;}};
+      button.onclick=async()=>{button.disabled=true;try{await this.launch(hit);}finally{button.disabled=false;}};
       children.push(button);
     }
     const browse=element("button","launcher-browse",(children.length?"All apps":"Browse apps"));
     browse.type="button";browse.setAttribute("aria-label","Browse all applications");
     browse.onclick=()=>invoke("open_window",{query:"apps:",kind:"apps",selected:null}).catch(()=>{});
     children.push(browse);
-    const message=element("span","sr-only");message.id="launcher-message";message.setAttribute("role","status");children.push(message);
     host.replaceChildren(...children);
-    if(focused)host.querySelector('[data-launcher-id="'+CSS.escape(focused)+'"]')?.focus();
+    if(focused)(host.querySelector('[data-launcher-id="'+CSS.escape(focused)+'"]')||document.getElementById("query"))?.focus();
   },
   renderSettings(){
     const input=document.getElementById("launcher-recents");if(!input)return;

@@ -261,6 +261,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           DIGUP_MSIX_TEST_SIGN: "1"
+          DIGUP_MSIX_VERSION: "0.7.${{ github.run_number }}.${{ github.run_attempt }}"
       - name: Native CPU rejection
         shell: bash
         run: |

@@ -1502,8 +1502,8 @@ function report() {
   debugPending = false;
   if (state.info.debugLaunch) {
     const hit = selectedHit();
-    if (!isLauncher(hit)) { invoke("debug_report", {report:{launchAccepted:false,error:"No matching catalog application"}}); return; }
-    Apps.launch(hit).then(() => invoke("debug_report", {report:{launchAccepted:true,applicationId:hit.id,name:hit.name}}),
+    if (!isLauncher(hit)) { invoke("debug_report", {report:{launchAccepted:false,error:"No matching catalog application",settingsCatalog:settingsSearch.catalog}}); return; }
+    Apps.launch(hit).then(() => invoke("debug_report", {report:{launchAccepted:true,applicationId:hit.id,name:hit.name,settingsCatalog:settingsSearch.catalog}}),
       error => invoke("debug_report", {report:{launchAccepted:false,error:String(error)}}));
     return;
   }

@@ -12,7 +12,7 @@ const {setup}=require("./application-fixtures.cjs");
     {id:"app:photos",name:"Photos",resultType:"application",publisher:"Fixture",description:"View photos",pinned:false}]};
    window.__TAURI__.core.invoke=async(command,args={})=>{
     if(command==="launcher_apps")return window.launcherFixture;
-    if(command==="launch_app"){window.calls.push({command,args});return {accepted:true};}
+    if(command==="launch_app"){window.calls.push({command,args});if(window.failShortcut)throw {message:"Application is unavailable"};return {accepted:true};}
     if(command==="app_icon")return "app-generic.svg";
     if(command==="panel_config")return {maxHeight:640,nativeSized:false};
     return old(command,args);
@@ -26,10 +26,19 @@ const {setup}=require("./application-fixtures.cjs");
   assert.equal(await page.evaluate(()=>document.activeElement.dataset.launcherId),"app:editor");
   await page.keyboard.press("ArrowRight");assert.equal(await page.evaluate(()=>document.activeElement.dataset.launcherId),"app:photos");
   await page.keyboard.press("Enter");assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="launch_app").at(-1).args.appId),"app:photos");
+  await page.evaluate(()=>window.failShortcut=true);
+  await page.locator('[data-launcher-id="app:editor"]').click();
+  await page.waitForSelector(".launcher-error");
+  assert.match(await page.locator(".launcher-error").textContent(),/Application is unavailable/);
+  assert.equal(await page.locator(".launcher-retry").getAttribute("aria-label"),"Retry launching Editor");
+  await page.getByRole("button",{name:"Dismiss",exact:true}).click();
+  assert.equal(await page.evaluate(()=>document.activeElement.dataset.launcherId),"app:editor");
+  await page.evaluate(()=>window.failShortcut=false);
   await page.fill("#query","apps:");await page.waitForFunction(()=>document.getElementById("launcher-shortcuts").hidden);
   await page.fill("#query","");await page.waitForFunction(()=>!document.getElementById("launcher-shortcuts").hidden);
   for(const theme of ["dark","light"]){
    await page.evaluate(t=>AppearanceUI.apply(t),theme);
+   assert.equal(await page.locator(".launcher-shortcut .app-generic").first().evaluate(e=>getComputedStyle(e).filter),theme==="dark"?"invert(0.85)":"none");
    for(const width of [360,720]){
     await page.setViewportSize({width,height:700});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

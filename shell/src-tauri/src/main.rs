@@ -1024,10 +1024,10 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     } else {
         changed(&handle);
     }
-    if !shell.is_set_up() {
+    let options = &shell.options;
+    if !shell.is_set_up() && !options.show_panel && !options.toggle {
         show_setup(&handle)?;
     }
-    let options = &shell.options;
     if options.show_panel || options.toggle || options.debug_show && options.debug_window.is_none() {
         // Started by the shortcut (DigUp wasn't running): the panel comes up as it would have.
         show_panel(&handle);

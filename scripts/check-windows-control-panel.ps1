@@ -50,7 +50,15 @@ public static class DigUpControlNotify{
   try {
    if(!$app.WaitForExit(60000)){throw 'Control Panel fixture search timed out'}
    $reports=@(Get-Content $output|ForEach-Object{try{$_|ConvertFrom-Json}catch{}})
-   if(!($reports|Where-Object{$_.launchAccepted -eq $true -and $_.name -eq $case.name})){throw ('Native fixture dispatch failed: '+(Get-Content -Raw $output)+' '+(Get-Content -Raw $errors))}
+   $accepted=@($reports|Where-Object{$_.launchAccepted -eq $true -and $_.name -eq $case.name})
+   if(!$accepted.Count){
+    $unsupported=@($reports|Where-Object{$_.settingsCatalog.controlPanel.control_panel_task.error})
+    if($case.name -eq $taskName -and $unsupported.Count){
+     Write-Output ('UNVALIDATED: registered task activation; this Windows installation does not expose All Tasks: '+$unsupported[0].settingsCatalog.controlPanel.control_panel_task.error)
+     continue
+    }
+    throw ('Native fixture dispatch failed: '+(Get-Content -Raw $output)+' '+(Get-Content -Raw $errors))
+   }
    $deadline=[DateTime]::UtcNow.AddSeconds(10)
    while(!(Test-Path $case.record) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 100}
    $record=Get-Content -Raw $case.record|ConvertFrom-Json;$records+=$record

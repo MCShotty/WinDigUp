@@ -77,7 +77,8 @@ jobs:
       - name: Pinned Tauri CLI without npm PATH shims
         shell: bash
         run: bash scripts/tauri-cli.sh --version
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: shell-build-cache
         with:
           path: |
             ~/.cargo/registry
@@ -87,6 +88,13 @@ jobs:
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
       - name: Build the real native shell without model libraries
         run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.shell-build-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            shell/src-tauri/target
+          key: floating-shell-${{ runner.os }}-${{ hashFiles('shell/src-tauri/Cargo.lock') }}
       - name: Build and register the test-signed Copilot identity
         shell: pwsh
         env:

@@ -16,7 +16,8 @@ New-Item -ItemType Directory $work | Out-Null
 $certificate=$null
 try {
  $version=if($env:DIGUP_MSIX_VERSION){$env:DIGUP_MSIX_VERSION}else{'0.7.0.0'}
- if($version -notmatch '^\d+\.\d+\.\d+\.\d+$'){throw 'DIGUP_MSIX_VERSION must contain four numeric components.'}
+ if($version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or @($version.Split('.') | Where-Object {[int64]$_ -gt 65535}).Count){throw 'DIGUP_MSIX_VERSION must contain four numeric components from 0 through 65535.'}
+ if($env:DIGUP_MSIX_TEST_SIGN -ne '1' -and !$env:DIGUP_MSIX_VERSION){throw 'Production signing requires a monotonic DIGUP_MSIX_VERSION.'}
  $pfx=Join-Path $work 'signing.pfx'
  $password=$env:DIGUP_MSIX_PFX_PASSWORD
  if($env:DIGUP_MSIX_TEST_SIGN -eq '1'){

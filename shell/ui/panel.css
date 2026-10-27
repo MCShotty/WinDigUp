@@ -263,3 +263,6 @@ html, body { margin:0; height:100%; background:transparent; overflow:hidden; use
   :root[data-theme="system"] .panel { --surface:#2d393e; --text:#f1f4f3; --secondary:#c1cacc; --line:rgba(255,255,255,.12); }
 }
 @media (forced-colors:active) { :root[data-theme] .panel { --surface:Canvas; --text:CanvasText; --secondary:CanvasText; } }
+
+.launcher-error { flex:1; min-width:0; max-height:52px; overflow:auto; color:var(--text); font-size:12px; overflow-wrap:anywhere; }
+.launcher-error ~ .launcher-browse { margin-left:0; }
