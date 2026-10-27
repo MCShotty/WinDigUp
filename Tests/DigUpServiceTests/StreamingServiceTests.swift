@@ -482,8 +482,9 @@ struct StreamingServiceTests {
         let chosen=URL(fileURLWithPath:onDisk).standardizedFileURL
         let resolved=try #require(IndexService.resolvedPrunePath(chosen.path))
         #expect(!chosen.path.utf8.elementsEqual(resolved.utf8))
-        #expect(chosen.lastPathComponent==URL(fileURLWithPath:resolved).lastPathComponent)
-        #expect(!chosen.lastPathComponent.utf8.elementsEqual(URL(fileURLWithPath:resolved).lastPathComponent.utf8))
+        let resolvedName=String(try #require(resolved.split(separator:"/").last))
+        #expect(chosen.lastPathComponent==resolvedName)
+        #expect(!chosen.lastPathComponent.utf8.elementsEqual(resolvedName.utf8))
         try "A retained multilingual railway document.".write(to:chosen.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
         let index=root.appendingPathComponent("index")
         let before=try runFolders([chosen],index:index)
@@ -506,6 +507,42 @@ struct StreamingServiceTests {
         #expect(try store.counts().vectors==1)
     }
     #endif
+
+    @Test func successfulUnicodeSiblingCannotClearAnUnrelatedFailedRootHold() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let composed="/fixture/Caf\u{e9}",decomposed="/fixture/Cafe\u{301}"
+        #expect(composed==decomposed)
+        #expect(!IndexStore.literalPathIsUnder(decomposed,composed))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        store.setLiteralScope([composed,decomposed])
+        for (index,path) in [composed,decomposed].enumerated() {
+            _=try store.insert(Candidate(path:path+"/note.txt",kind:.doc,size:10,mtime:1,inode:UInt64(index+1),device:1))
+        }
+        let held=IndexService.reconcilePendingHolds([decomposed],completed:[composed],incomplete:[],
+            verifiedRoots:[(chosen:composed,resolved:composed)])
+        #expect(held.count==1)
+        #expect(held.first?.utf8.elementsEqual(decomposed.utf8)==true)
+        store.pendingExcludedPaths=held
+        #expect(try store.pendingCount()==1)
+        #expect(try store.pending(limit:nil).first?.path.utf8.elementsEqual((composed+"/note.txt").utf8)==true)
+        store.pendingExcludedPaths=IndexService.reconcilePendingHolds(held,completed:[decomposed],incomplete:[],
+            verifiedRoots:[(chosen:decomposed,resolved:decomposed)])
+        #expect(store.pendingExcludedPaths.isEmpty)
+        #expect(try store.pendingCount()==2)
+    }
+
+    @Test func onlyVerifiedAliasesClearOrRestoreBothPendingHoldNamespaces() throws {
+        let raw="/selection/chosen",resolved="/disk/Café",failed=resolved+"/blocked"
+        let rawHold=raw+"/blocked"
+        let unmapped=IndexService.reconcilePendingHolds([rawHold,failed],completed:[resolved],incomplete:[],verifiedRoots:[])
+        #expect(unmapped==[rawHold])
+        let mapping=[(chosen:raw,resolved:resolved)]
+        let recovered=IndexService.reconcilePendingHolds([rawHold,failed],completed:[resolved],incomplete:[],verifiedRoots:mapping)
+        #expect(recovered.isEmpty)
+        let partial=IndexService.reconcilePendingHolds([rawHold,failed],completed:[resolved],incomplete:[failed],verifiedRoots:mapping)
+        #expect(Set(partial.map {Data($0.utf8)})==Set([Data(rawHold.utf8),Data(failed.utf8)]))
+    }
 
     @Test(arguments:["disappeared","retargeted","captured"])
     func pruningUsesOneValidatedNamespaceSnapshotWithoutFollowingChangedRoots(change:String) throws {
