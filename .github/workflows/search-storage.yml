@@ -9,6 +9,8 @@ on:
       - 'Sources/digup/SearchRetirement.swift'
       - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'
       - 'Tests/DigUpServiceTests/SearchNameRefreshTests.swift'
+      - 'Tests/DigUpServiceTests/SearchServiceFixture.swift'
+      - 'Tests/DigUpServiceTests/SearchDiscoveryIntegrationTests.swift'
       - 'scripts/benchmark-search-scale.py'
       - '.github/workflows/search-storage.yml'
   workflow_dispatch:
@@ -38,9 +40,9 @@ jobs:
       - name: Build native dependency
         run: bash scripts/build-llama.sh
       - name: Delayed availability evidence without model inference
-        run: swift test --filter 'SearchAvailabilityTests|SearchNameRefreshTests'
+        run: swift test --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchDiscoveryIntegrationTests'
       - name: Optimized availability and search contracts
-        run: swift test -c release --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchReadersTests|MixedSearchRankingTests'
+        run: swift test -c release --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchDiscoveryIntegrationTests|SearchReadersTests|MixedSearchRankingTests'
 
   scale:
     runs-on: ubuntu-24.04
