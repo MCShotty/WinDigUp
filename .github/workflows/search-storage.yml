@@ -6,6 +6,7 @@ on:
       - 'Sources/DigUpKit/Searcher.swift'
       - 'Tests/DigUpKitTests/SearchReadersTests.swift'
       - 'Sources/digup/FileAvailability.swift'
+      - 'Sources/digup/SearchWorkQueue.swift'
       - 'Sources/digup/SearchRetirement.swift'
       - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'
       - 'Tests/DigUpServiceTests/SearchNameRefreshTests.swift'
@@ -38,10 +39,46 @@ jobs:
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Build native dependency
         run: bash scripts/build-llama.sh
+      - name: Build search test fixtures
+        run: swift build --build-tests
+      - name: Characterize blocking fixture waits on the same runner
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, platform, subprocess
+          report = {"diagnosticOnly": True, "activeProcessors": os.cpu_count(), "platform": platform.platform(),
+                    "build": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
+          fixture = pathlib.Path("Tests/DigUpServiceTests/SearchDiscoveryIntegrationTests.swift")
+          if fixture.exists():
+              command = ["swift", "test", "--skip-build", "--filter", "SearchAvailabilityTests|SearchNameRefreshTests|SearchDiscoveryIntegrationTests"]
+              environment = dict(os.environ, DIGUP_TEST_BLOCKING_WAITS="1")
+              completed = subprocess.run(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+              pathlib.Path("search-fixture-blocking.log").write_text(completed.stdout)
+              report.update(performed=True, blockingExitCode=completed.returncode,
+                            zeroProbeStarts="probes=0 " in completed.stdout,
+                            timeoutRecorded="timedOut" in completed.stdout,
+                            executorEvidence=[line for line in completed.stdout.splitlines() if "FIXTURE_EXECUTOR:" in line])
+          else:
+              report.update(performed=False, reason="The cross-stage discovery suite exists only in cumulative integration.")
+          pathlib.Path("search-fixture-executor.json").write_text(json.dumps(report, indent=2)+"\n")
+          print(json.dumps(report))
+          print("Diagnostic exit codes are evidence; the following async test steps must pass independently.")
+          PY
       - name: Delayed availability evidence without model inference
+        env:
+          DIGUP_TEST_BLOCKING_WAITS: "0"
         run: swift test --filter 'SearchAvailabilityTests|SearchNameRefreshTests'
       - name: Optimized availability and search contracts
+        env:
+          DIGUP_TEST_BLOCKING_WAITS: "0"
         run: swift test -c release --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchReadersTests|MixedSearchRankingTests'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: search-fixture-executor
+          path: |
+            search-fixture-executor.json
+            search-fixture-blocking.log
+          if-no-files-found: ignore
 
   scale:
     runs-on: ubuntu-24.04

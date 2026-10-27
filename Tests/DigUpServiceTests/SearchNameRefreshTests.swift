@@ -27,7 +27,7 @@ struct SearchNameRefreshTests {
         var recorded: String? { lock.lock(); defer { lock.unlock() }; return queue }
     }
 
-    @Test func snapshotContentsAreDestroyedByRetirementWhileLexicalJobKeepsTheContainer() throws {
+    @Test func snapshotContentsAreDestroyedByRetirementWhileLexicalJobKeepsTheContainer() async throws {
         let marker = QueueMarker(), disposal = Disposal()
         let lexical = DispatchQueue(label: "digup.test.lexical")
         let retirement = DispatchQueue(label: "digup.test.retirement")
@@ -47,11 +47,11 @@ struct SearchNameRefreshTests {
             withExtendedLifetime(retired) {}
             finished.signal()
         }
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+        try await Fixture.signal(finished, timeout: 5)
         #expect(disposal.recorded == "retirement")
     }
 
-    @Test func coalescedMetadataRefreshDoesNotReplaceLoadedVectorsOrWakeAnEncoder() throws {
+    @Test func coalescedMetadataRefreshDoesNotReplaceLoadedVectorsOrWakeAnEncoder() async throws {
         let root = try Fixture.temporary()
         defer { try? FileManager.default.removeItem(at: root) }
         let writer = try IndexStore(directory: root.appendingPathComponent("index"))
@@ -68,22 +68,22 @@ struct SearchNameRefreshTests {
             fileExists: { _ in true }, onReply: { mailbox.receive($0) })
         defer { search.stop() }
         search.requestRefresh(vectors: true) // Cached vectors load independently of the neural encoder.
-        _ = try mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "ready" }
-        _ = try Fixture.idle(search, mailbox)
+        _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "ready" }
+        _ = try await Fixture.idle(search, mailbox)
         let next = root.appendingPathComponent("Sound.txt").path
         try writer.insert(Candidate(path: next, kind: .doc, size: 10, mtime: 1, inode: 3001, device: 1))
         for id in 1...100 { search.admit(SearchMessage(["op": "refresh_names", "id": id])) }
-        for id in 1...100 { _ = try mailbox.reply(id) }
-        #expect(try Fixture.idle(search, mailbox)["encoder"] as? String == "stopped")
+        for id in 1...100 { _ = try await mailbox.reply(id) }
+        #expect(try await Fixture.idle(search, mailbox)["encoder"] as? String == "stopped")
         search.admit(SearchMessage(["op": "search", "id": 101, "q": "Sound", "meaning": false, "kinds": ["doc"]]))
-        let reply = try mailbox.reply(101)
+        let reply = try await mailbox.reply(101)
         #expect((reply["hits"] as? [[String: Any]])?.first?["path"] as? String == next)
         #expect(reply["exact_filename"] as? Bool == true)
         #expect(mailbox.events("ready") == 1)
         #expect(mailbox.encoderEvents == 0)
     }
 
-    @Test func heldAvailabilityProbesAndConcurrentHelpersCannotStarveMetadataHandoffs() throws {
+    @Test func heldAvailabilityProbesAndConcurrentHelpersCannotStarveMetadataHandoffs() async throws {
         let root = try Fixture.temporary()
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = DispatchSemaphore(value: 0)
@@ -109,9 +109,9 @@ struct SearchNameRefreshTests {
             writers.append(writer); services.append(service); mailboxes.append(mailbox)
         }
         services[0].admit(SearchMessage(["op": "search", "id": 1, "q": "note", "meaning": false]))
-        #expect((try mailboxes[0].reply(1)["hits"] as? [[String: Any]])?.count == 2)
+        #expect((try await mailboxes[0].reply(1)["hits"] as? [[String: Any]])?.count == 2)
         let deadline = Date().addingTimeInterval(3)
-        while started.value < 2 && Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+        while started.value < 2 && Date() < deadline { try await Fixture.delay(0.005) }
         #expect(started.value == 2)
         for number in 0..<services.count {
             try writers[number].insert(Candidate(path: root.appendingPathComponent("fresh-\(number).txt").path,
@@ -119,11 +119,11 @@ struct SearchNameRefreshTests {
             for id in 2...20 { services[number].admit(SearchMessage(["op": "refresh_names", "id": id])) }
         }
         for number in 0..<services.count {
-            for id in 2...20 { #expect(try mailboxes[number].reply(id)["ok"] as? Bool == true) }
-            _ = try Fixture.idle(services[number], mailboxes[number])
+            for id in 2...20 { #expect(try await mailboxes[number].reply(id)["ok"] as? Bool == true) }
+            _ = try await Fixture.idle(services[number], mailboxes[number])
             services[number].admit(SearchMessage(["op": "search", "id": 21,
                 "q": "fresh-\(number)", "meaning": false, "kinds": ["doc"]]))
-            let reply = try mailboxes[number].reply(21)
+            let reply = try await mailboxes[number].reply(21)
             #expect((reply["hits"] as? [[String: Any]])?.count == 1)
             #expect(reply["exact_filename"] as? Bool == true)
             #expect(mailboxes[number].encoderEvents == 0)
@@ -133,7 +133,7 @@ struct SearchNameRefreshTests {
         print("REFRESH_HANDOFF_EVIDENCE: helpers=4 heldProbes=2 allControlAndSearchRepliesCompleted=true encoderStarts=0")
     }
 
-    @Test func shutdownCancelsQueuedRepliesWithoutWaitingForAPublicationOwner() throws {
+    @Test func shutdownCancelsQueuedRepliesWithoutWaitingForAPublicationOwner() async throws {
         let root = try Fixture.temporary()
         defer { try? FileManager.default.removeItem(at: root) }
         let writer = try IndexStore(directory: root.appendingPathComponent("index"))
@@ -150,18 +150,139 @@ struct SearchNameRefreshTests {
             _ = release.wait(timeout: .now() + 5)
             returned.signal()
         }
-        #expect(entered.wait(timeout: .now() + 3) == .success)
+        try await Fixture.signal(entered)
         service.requestRefresh(vectors: true)
         service.admit(SearchMessage(["op": "search", "id": 70, "q": "closing", "meaning": false,
             "session": "closing-view", "generation": 1]))
         service.stop()
-        let reply = try mailbox.reply(70)
+        let reply = try await mailbox.reply(70)
         #expect(reply["status"] as? String == "superseded")
         #expect((reply["hits"] as? [[String: Any]])?.isEmpty == true)
         // Cancellation completed while the owner was still deliberately held.
+        #expect(returned.wait(timeout: .now()) == .timedOut)
         release.signal()
-        #expect(returned.wait(timeout: .now() + 3) == .success)
+        try await Fixture.signal(returned)
         #expect(mailbox.events("ready") == 0)
+        #expect(mailbox.encoderEvents == 0)
+    }
+
+    @Test func idleInvalidationRejectsDelayedVectorsAndRetainsLaterForegroundIntent() async throws {
+        let root = try Fixture.temporary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = try IndexStore(directory: root.appendingPathComponent("index"))
+        try writer.insert(Candidate(path: root.appendingPathComponent("initial.txt").path,
+            kind: .doc, size: 10, mtime: 1, inode: 1, device: 1))
+        try Fixture.seedVector(writer)
+        let mailbox = Mailbox(), entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let returned = DispatchSemaphore(value: 0)
+        let service = try SearchService(index: writer.directory, baseIndex: writer.directory, roots: [root.path],
+            skipped: [], types: [], codeRoots: [], codeSkipped: [], idleSeconds: 300,
+            fileExists: { _ in true }, onReply: { mailbox.receive($0) })
+        defer { service.stop(); release.signal() }
+        service.retrieval.submit(key: "held-vector-owner") {
+            entered.signal(); _ = release.wait(timeout: .now() + 5); returned.signal()
+        }
+        try await Fixture.signal(entered)
+        service.requestRefresh(vectors: true)
+        _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "words_ready" }
+        try await Fixture.waitUntil { service.retrieval.pendingCount > 0 }
+        let idleEpoch = service.cancelIdleVectors()
+        service.releaseVectors(olderThan: idleEpoch)
+        try writer.insert(Candidate(path: root.appendingPathComponent("fresh.txt").path,
+            kind: .doc, size: 10, mtime: 1, inode: 2, device: 1))
+        service.admit(SearchMessage(["op": "refresh_names", "id": 80]))
+        _ = try await mailbox.reply(80)
+        service.admit(SearchMessage(["op": "search", "id": 81, "q": "initial", "meaning": false]))
+        #expect((try await mailbox.reply(81)["hits"] as? [[String: Any]])?.count == 1)
+        #expect(returned.wait(timeout: .now()) == .timedOut)
+        release.signal()
+        try await Fixture.signal(returned)
+        _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "words_ready" }
+        let idle = try await Fixture.idle(service, mailbox)
+        #expect(idle["vector_snapshot_loaded"] as? Bool == false)
+        #expect(mailbox.events("ready") == 0)
+        service.admit(SearchMessage(["op": "search", "id": 82, "q": "fresh", "meaning": false, "kinds": ["doc"]]))
+        #expect((try await mailbox.reply(82)["hits"] as? [[String: Any]])?.count == 1)
+
+        // Delay the old idle release until a new explicit vector request has already published.
+        let olderIdle = service.cancelIdleVectors()
+        service.requestRefresh(vectors: true)
+        _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "ready" }
+        service.releaseVectors(olderThan: olderIdle)
+        let released = DispatchSemaphore(value: 0)
+        service.retrieval.submit(key: "after-delayed-idle", foreground: false) { released.signal() }
+        try await Fixture.signal(released)
+        let fresh = try await Fixture.idle(service, mailbox)
+        #expect(fresh["vector_snapshot_loaded"] as? Bool == true)
+        #expect(fresh["snapshot_revision"] as? UInt64 == 1)
+        let finalIdle = service.cancelIdleVectors()
+        service.admit(SearchMessage(["op": "folders", "id": 83, "code_roots": [root.appendingPathComponent("code").path]]))
+        _ = try await mailbox.reply(83)
+        _ = try await Fixture.idle(service, mailbox)
+        #expect(mailbox.events("ready") == 1)
+        service.releaseVectors(olderThan: finalIdle)
+        let drained = DispatchSemaphore(value: 0)
+        service.retrieval.submit(key: "after-final-idle", foreground: false) { drained.signal() }
+        try await Fixture.signal(drained)
+        #expect(try await Fixture.idle(service, mailbox)["vector_snapshot_loaded"] as? Bool == false)
+        #expect(mailbox.encoderEvents == 0)
+    }
+
+    @Test func disablingCodeRejectsBothDelayedMetadataAndVectorReaders() async throws {
+        let root = try Fixture.temporary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("index"), codeRoot = root.appendingPathComponent("code")
+        let writer = try IndexStore(directory: directory)
+        let code = try IndexStore(directory: directory, file: IndexStore.codeFile)
+        try writer.insert(Candidate(path: root.appendingPathComponent("main.txt").path,
+            kind: .doc, size: 10, mtime: 1, inode: 1, device: 1))
+        try code.insert(Candidate(path: codeRoot.appendingPathComponent("source.py").path,
+            kind: .doc, size: 10, mtime: 1, inode: 2, device: 1))
+        try Fixture.seedVector(writer); try Fixture.seedVector(code)
+        let mailbox = Mailbox()
+        let service = try SearchService(index: directory, baseIndex: directory, roots: [root.path],
+            skipped: [], types: [], codeRoots: [codeRoot.path], codeSkipped: [], idleSeconds: 300,
+            fileExists: { _ in true }, onReply: { mailbox.receive($0) })
+        let wordsEntered = DispatchSemaphore(value: 0), wordsRelease = DispatchSemaphore(value: 0)
+        let vectorsEntered = DispatchSemaphore(value: 0), vectorsRelease = DispatchSemaphore(value: 0)
+        defer { service.stop(); wordsRelease.signal(); vectorsRelease.signal() }
+        service.lexical.submit(key: "held-code-metadata-owner") {
+            wordsEntered.signal(); _ = wordsRelease.wait(timeout: .now() + 5)
+        }
+        try await Fixture.signal(wordsEntered)
+        service.requestRefresh(vectors: true)
+        try await Fixture.waitUntil { service.lexical.pendingCount > 0 }
+        service.admit(SearchMessage(["op": "folders", "id": 90, "code_roots": []]))
+        wordsRelease.signal()
+        _ = try await mailbox.reply(90)
+        _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "ready" }
+        let closedMetadata = try await Fixture.idle(service, mailbox)
+        #expect(closedMetadata["code_reader_open"] as? Bool == false)
+        #expect(closedMetadata["code_snapshot_loaded"] as? Bool == false)
+        #expect(mailbox.values(event: "search_index", state: "words_ready").allSatisfy {
+            $0["code_reader_open"] as? Bool == false
+        })
+
+        service.retrieval.submit(key: "held-code-vector-owner") {
+            vectorsEntered.signal(); _ = vectorsRelease.wait(timeout: .now() + 5)
+        }
+        try await Fixture.signal(vectorsEntered)
+        service.admit(SearchMessage(["op": "folders", "id": 91, "code_roots": [codeRoot.path]]))
+        _ = try await mailbox.reply(91)
+        try await Fixture.waitUntil { service.retrieval.pendingCount > 0 }
+        service.admit(SearchMessage(["op": "folders", "id": 92, "code_roots": []]))
+        _ = try await mailbox.reply(92)
+        vectorsRelease.signal()
+        _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "ready" }
+        let closedVectors = try await Fixture.idle(service, mailbox)
+        #expect(closedVectors["code_reader_open"] as? Bool == false)
+        #expect(closedVectors["code_snapshot_loaded"] as? Bool == false)
+        #expect(mailbox.values(event: "search_index", state: "ready").allSatisfy {
+            ($0["code_vectors"] as? Int ?? -1) == 0
+        })
+        var retainedVectors: Int64 = 0
+        try code.db.query("SELECT count(*) FROM segments WHERE vec IS NOT NULL") { retainedVectors = $0.int(0) }
+        #expect(retainedVectors == 1)
         #expect(mailbox.encoderEvents == 0)
     }
 }
