@@ -39,6 +39,8 @@ final class SearchWorkQueue: @unchecked Sendable {
         if !accepted { cancel() }
         start()
     }
+    var pendingCount: Int { lock.withLock { jobs.count } }
+
     func cancelPending() {
         let cancelled = lock.withLock {
             let old = jobs

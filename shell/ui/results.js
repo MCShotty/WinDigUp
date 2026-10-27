@@ -330,7 +330,8 @@ function appendUsefulResult(container, hit, fail) {
 
 // A refreshed name index can advance while the compatible vector snapshot is unchanged.
 function mergeFileSearchReplies(semantic, lexical, text) {
-  if (!semantic?.meaning) return {...semantic, ...lexical, meaning:false,
+  if(lexical.scope_empty===true)return {...semantic,...lexical,hits:[],strong:0,facets:{},meaning:false,scope_empty:true};
+  if (!semantic?.meaning) return {...semantic, ...lexical, meaning:false,scope_empty:false,
     ...(semantic?.semantic_error ? {semantic_error:semantic.semantic_error} : {})};
   const split = (reply,keep=()=>true) => {
     const hits=reply.hits || [], strong=Math.max(0,Math.min(reply.strong ?? hits.length,hits.length));
@@ -364,7 +365,7 @@ function mergeFileSearchReplies(semantic, lexical, text) {
   }
   const facets={};
   for(const hit of ranked)facets[hit.kind]=(facets[hit.kind] || 0)+1;
-  return {...semantic, hits:[...ranked,...weaker], strong:ranked.length, facets, count_scope:"displayed_matches",
+  return {...semantic, hits:[...ranked,...weaker], strong:ranked.length, facets, count_scope:"displayed_matches",scope_empty:false,
     exact_filename_known:lexical.exact_filename_known,exact_filename:lexical.exact_filename,
     category_query:lexical.category_query};
 }
