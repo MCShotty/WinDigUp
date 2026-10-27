@@ -16,10 +16,11 @@ struct SearchServiceFixture {
         while !predicate() && Date() < deadline { try await delay(0.005) }
         guard predicate() else { throw Failure.timedOut }
     }
+    static func isSignaled(_ value: DispatchSemaphore) -> Bool { value.wait(timeout: .now()) == .success }
     static func signal(_ value: DispatchSemaphore, timeout: Double = 3) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if value.wait(timeout: .now()) == .success { return }
+            if isSignaled(value) { return }
             try await delay(0.005)
         }
         throw Failure.timedOut
