@@ -42,9 +42,19 @@ let browser;
     if(view==="index.html"){await page.locator("#details-action").click();await page.locator("#result-preview").waitFor({state:"visible"});}
     await page.waitForTimeout(170);
     assert.ok(await page.evaluate(()=>window.delayedFiles.length>0));
+    await page.evaluate(()=>window.releaseOldFiles());
+    await page.waitForFunction(()=>state.finalGeneration===state.generation);
+    await page.evaluate(()=>window.emit("helper",{from:"search",event:{event:"search_index",state:"ready"}}));
+    await page.waitForFunction(()=>window.delayedFiles.length>0);
     const selected=await page.evaluate(()=>state.selection);
     const namesBefore=await page.evaluate(()=>window.calls.filter(c=>c.command==="search_apps").length);
-    await page.evaluate(()=>{window.selectedFolders=[];window.emit("search-scope",{folders:[],hasCode:true});});
+    await page.evaluate(()=>{window.selectedFolders=[];window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
+    await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
+    assert.equal(await page.evaluate(()=>state.selection),selected,"An authoritative empty receipt moved native selection");
+    assert.ok(await page.locator('[data-result-key^="app:"]').count()>0);
+    assert.ok(await page.locator('[data-result-key^="setting:"]').count()>0);
+    if(view==="index.html")assert.equal(await page.locator("#result-preview").isVisible(),true,"An empty scope receipt closed app details");
+    await page.evaluate(()=>window.emit("search-scope",{folders:[],hasCode:true}));
     await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
     assert.equal(await page.evaluate(()=>state.selection),selected,"Scope change moved the selected application");
     if(view==="index.html")assert.equal(await page.locator("#result-preview").isVisible(),true,"File scope change closed app details");
@@ -53,13 +63,29 @@ let browser;
     assert.equal(await page.locator(fileRows).count(),0,"A delayed old-index reply restored removed files");
     assert.ok(await page.locator('[data-result-key^="app:"]').count()>0);
     assert.ok(await page.locator('[data-result-key^="setting:"]').count()>0);
+    if(view==="index.html"){
+      assert.equal(await page.evaluate(()=>state.fileScopeEmpty),true);
+      await page.locator(".preview-back").click();
+      const choose=page.getByRole("button",{name:"Choose folders for file search",exact:true});
+      await choose.waitFor({state:"visible"});await choose.focus();await choose.press("Enter");
+      assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_settings").at(-1).args.tab),"folders");
+      assert.deepEqual(await page.evaluate(()=>window.selectedFolders),[],"Opening Settings changed selected folders");
+      assert.equal(await page.evaluate(()=>state.selection),selected);
+    }
     await page.press("#query","Enter");
     assert.ok(await page.evaluate(()=>window.calls.some(c=>c.command==="launch_app")),"No-folder scope disabled app launching");
     await page.fill("#query","code: scope");await page.waitForSelector(".row");
     assert.match(await page.locator(".row").first().textContent(),/main\.py/,"Regular folder scope disabled separate code roots");
+    if(view==="index.html")assert.equal(await page.locator("#file-setup").isVisible(),false,"A nonempty code reply retained the folder hint");
     await page.evaluate(()=>{window.codeSelected=false;window.emit("search-scope",{folders:[],hasCode:false});window.releaseOldFiles();});
     await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
+    if(view==="index.html"){
+      const choose=page.getByRole("button",{name:"Choose folders for code search",exact:true});
+      await choose.waitFor({state:"visible"});await choose.click();
+      assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_settings").at(-1).args.tab),"code");
+    }
     await page.fill("#query","apps:");await page.waitForSelector('[data-result-key^="app:"]');
+    if(view==="index.html")assert.equal(await page.locator("#file-setup").isVisible(),false);
     await page.fill("#query","settings:");await page.waitForSelector('[data-result-key^="setting:"]');
     const searches=await page.evaluate(()=>window.calls.filter(c=>c.command==="ask"&&c.args.request.op==="search").length);
     await page.fill("#query","");await page.waitForTimeout(180);
@@ -68,9 +94,19 @@ let browser;
     await page.emulateMedia({colorScheme:"dark"});await page.setViewportSize({width:700,height:700});
     await page.fill("#query","scope");await page.waitForSelector('[data-result-key^="app:"]');
     assert.equal(await page.locator(fileRows).count(),0);
+    if(view==="index.html"){
+      await page.waitForFunction(()=>state.finalGeneration===state.generation);
+      await page.getByRole("button",{name:"Choose folders for file search",exact:true}).waitFor({state:"visible"});
+      await page.evaluate(()=>{window.selectedFolders=["C:/docs"];window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
+      await page.waitForSelector(".row");
+      assert.equal(await page.locator("#file-setup").isVisible(),false,"A nonempty native reply did not clear the hint");
+      assert.equal(await page.evaluate(()=>state.fileScopeEmpty),false);
+      await page.setViewportSize({width:360,height:700});
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    }
     assert.deepEqual(errors,[]);
     await page.close();
   }
   await browser.close();
-  console.log("PASS: explicit empty file scope, in-flight removal, retained native providers/selection/launch, separate code roots, empty prefixes, both views and dark/narrow rendering");
+  console.log("PASS: explicit empty file scope, in-flight removal, retained native providers/selection/launch, separate code roots, accessible scope actions, receipt-before-event clearing, empty prefixes, both views and dark/narrow rendering");
 })().catch(async error=>{console.error(error);if(browser)await browser.close();process.exit(1);});

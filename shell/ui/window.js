@@ -188,8 +188,10 @@ function run(filesOnly = false) {
       if(meaning)meaningPublished=request;else lexicalPublished=request;
       if(meaning){
         state.finalGeneration=generation;state.fileMeaning=shown;
+        if(shown.scope_empty===true){state.fileWords=[];state.fileWordsReply=null;state.fileWordsRefresh=false;state.lexicalReady=true;state.exactFilenameKnown=true;state.exactFilename=false;}
         if(state.fileWordsRefresh&&state.fileWordsReply)shown=mergeFileSearchReplies(shown,state.fileWordsReply,text);
       } else {
+        if(shown.scope_empty===true)state.fileMeaning=null;
         state.lexicalReady=true;state.fileWords=shown.hits||[];state.fileWordsReply=shown;state.fileWordsRefresh ||= passive;
         state.categoryQuery=shown.category_query===true;
         state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;
