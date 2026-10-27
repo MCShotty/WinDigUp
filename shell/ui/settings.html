@@ -67,6 +67,16 @@
         </select>
         <p id="panel-material-note" class="note"></p>
       </div>
+      <h3>Quick launcher</h3>
+      <label class="option"><input id="launcher-recents" type="checkbox"><span>Show recently launched apps after pinned apps</span></label>
+      <button id="clear-launcher-recents" type="button">Clear recent apps</button>
+      <div id="launcher-pins" aria-label="Pinned applications"></div>
+      <p id="launcher-note" class="note" role="status"></p>
+      <div id="copilot-option" hidden>
+        <h3>Copilot key</h3>
+        <p id="copilot-status" class="note" role="status"></p>
+        <button id="configure-copilot" type="button">Choose app for Copilot key in Windows</button>
+      </div>
       <h3>Model acceleration</h3>
       <label for="accelerator">Inference device</label>
       <select class="field" id="accelerator">
@@ -271,7 +281,7 @@
           <label class="option"><input id="win-settings-enabled" type="checkbox"><span>Include Windows settings</span></label>
           <label class="option"><input id="win-settings-purpose" type="checkbox"><span>Match settings by purpose on the selected accelerator</span></label>
           <label class="option"><input id="win-settings-ordinary" type="checkbox"><span>Show settings in ordinary searches</span></label>
-          <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-prepare">Prepare settings purpose matching</button>
+          <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-refresh" type="button">Refresh Control Panel</button><button id="win-settings-prepare">Prepare settings purpose matching</button>
           <p id="source-message-windows" class="source-message" role="status"></p>
         </div>
       <button id="win-settings-activity" class="link" type="button">Activity and diagnostics</button>
@@ -304,5 +314,6 @@
   <script src="applications-settings.js"></script>
   <script src="discovery-settings.js"></script>
   <script src="settings.js"></script>
+  <script src="launcher.js"></script>
 </body>
 </html>

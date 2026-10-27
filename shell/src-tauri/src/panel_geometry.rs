@@ -1,8 +1,9 @@
 //! Shared logical panel dimensions and monitor-work-area placement.
 use serde::Serialize;
 
-pub const WIDTH: f64 = 640.0;
+pub const WIDTH: f64 = 720.0;
 pub const FIELD_HEIGHT: f64 = 64.0;
+pub const HOME_HEIGHT:f64=120.0;
 pub const MAX_HEIGHT: f64 = 640.0;
 const MARGIN: f64 = 16.0;
 
@@ -70,6 +71,6 @@ mod tests {
     fn dimensions_are_logical_at_every_scale() {
         let work = WorkArea { x: 0.0, y: 0.0, width: 3840.0, height: 2160.0 };
         let result = frame(work, 2.0, FIELD_HEIGHT);
-        assert_eq!((result.width, result.height), (640.0, 64.0));
+        assert_eq!((result.width, result.height), (720.0, 64.0));
     }
 }

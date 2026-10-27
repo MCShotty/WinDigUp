@@ -980,3 +980,8 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(windows)]
+pub(crate) fn shell_icon(parsing:&str,size:u32,path:&std::path::Path)->Result<(),String>{
+    windows::icon(&Target::Shell{parsing_name:parsing.into()},size,path)
+}

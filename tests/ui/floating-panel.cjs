@@ -96,7 +96,7 @@ let browser;
   const page = await fixture();
   await page.waitForFunction(() => document.documentElement.dataset.theme === "system");
   if (!baseline) {
-    assert.equal(await page.locator("#panel").evaluate(node => Math.round(node.getBoundingClientRect().height)),64);
+    assert.equal(await page.locator("#panel").evaluate(node => Math.round(node.getBoundingClientRect().height)),120);
     assert.equal(await page.locator("#query").getAttribute("role"),"combobox");
     assert.equal(await page.locator("#query").getAttribute("aria-expanded"),"false");
     assert.equal(await page.getByRole("button",{name:"Open full search",exact:true}).count(),1);

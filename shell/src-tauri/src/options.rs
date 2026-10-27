@@ -48,6 +48,7 @@ pub struct Options {
     /// A desktop shortcut's command (hotkey.rs): show or hide the panel of the DigUp already running, or start DigUp
     /// with the panel up.
     pub toggle: bool,
+    pub show_panel: bool,
     /// Started at login (the autostart entry says so): DigUp waits in the tray. Opened by hand, it shows its window.
     pub at_login: bool,
     /// Debug runs: check for updates at once (in a dev run too), once.
@@ -77,6 +78,7 @@ impl Options {
             debug_copy: false,
             debug_launch: false,
             toggle: false,
+            show_panel: false,
             at_login: false,
             debug_update_check: false,
             debug_update_install: false,
@@ -104,6 +106,7 @@ impl Options {
                 "--debug-copy" => options.debug_copy = true,
                 "--debug-launch" => options.debug_launch = true,
                 "--toggle" => options.toggle = true,
+                "--show-panel" => options.show_panel = true,
                 "--at-login" => options.at_login = true,
                 "--debug-update-check" => options.debug_update_check = true,
                 "--debug-update-install" => options.debug_update_install = true,

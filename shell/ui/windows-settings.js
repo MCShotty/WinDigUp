@@ -4,13 +4,15 @@ const WindowsSettings = {
   configure(info){if(!info)return;if(typeof info.enabled==="boolean")this.enabled=info.enabled;
     if(typeof info.supported==="boolean")this.supported=info.supported;
     if(typeof info.ordinarySearches==="boolean")this.ordinarySearches=info.ordinarySearches;},
-  icon(){const holder=element("span","app-icon");holder.setAttribute("aria-hidden","true");
-    const image=element("img");image.src="settings-generic.svg";image.alt="";holder.append(image);return holder;},
+  icon(hit){const holder=element("span","app-icon");holder.setAttribute("aria-hidden","true");
+    const image=element("img");image.src="settings-generic.svg";image.alt="";holder.append(image);
+    if(hit?.source==="control_panel")invoke("windows_setting_icon",{settingId:hit.id,size:64}).then(fileURL).then(src=>{if(holder.isConnected)image.src=src;}).catch(()=>{});
+    return holder;},
   async open(hit){if(Apps.launching.has(hit.id))return;Apps.launching.add(hit.id);
     try{return await invoke("open_windows_setting",{settingId:hit.id});}
     finally{Apps.launching.delete(hit.id);}},
   details(hit,fail){const box=element("div","app-details");
-    box.append(this.icon(),element("div","app-name",hit.name),element("p","app-description","Windows settings"),
+    box.append(this.icon(hit),element("div","app-name",hit.name),element("p","app-description",hit.source==="control_panel"?"Control Panel":"Windows Settings"),
       element("p","",hit.description||"Open this Windows settings page."));
     if(hit.availability==="unknown")box.append(element("p","note","Availability depends on this PC's hardware and Windows configuration."));
     const button=element("button","primary","Open settings");button.onclick=async()=>{button.disabled=true;

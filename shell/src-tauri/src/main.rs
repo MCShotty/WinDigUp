@@ -24,6 +24,9 @@ mod code;
 mod editors;
 mod helper;
 mod hotkey;
+mod launcher;
+mod launcher_commands;
+mod copilot;
 mod hours;
 mod moments;
 mod options;
@@ -72,6 +75,7 @@ const WINDOW: &str = "main";
 /// What the commands and events share.
 struct Shell {
     personalization: Arc<personalization::Personalization>,
+    launcher_history: Arc<launcher::History>,
     applications: Arc<applications::Catalog>,
     discovery: Arc<discovery_manager::Manager>,
     enrichment: Arc<enrichment_manager::Manager>,
@@ -581,7 +585,7 @@ fn apply_panel_frame(panel: &tauri::WebviewWindow, frame: panel_geometry::Frame)
 #[tauri::command]
 fn panel_config(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
     let panel = panel_window(&app).ok_or("The search panel is unavailable")?;
-    let frame = panel_frame(&panel, None, FIELD_HEIGHT)?;
+    let frame = panel_frame(&panel, None, panel_geometry::HOME_HEIGHT)?;
     Ok(json!({"schemaVersion":1,"width":frame.width,"fieldHeight":FIELD_HEIGHT,
         "maxHeight":frame.max_height,"nativeSized":true,"material":*shell.panel_material.lock().unwrap()}))
 }
@@ -760,7 +764,9 @@ fn main() {
         // desktop shortcut's `--toggle` shows or hides the panel. The window is made once the second launch's message
         // has been answered: on Windows it comes as a message the other process waits on.
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
-            if args.iter().any(|arg| arg == "--toggle") {
+            if args.iter().any(|arg| arg == "--show-panel") {
+                later(app,show_panel);
+            } else if args.iter().any(|arg| arg == "--toggle") {
                 toggle_panel(app)
             } else {
                 show_window_or_setup(app);
@@ -797,6 +803,10 @@ fn main() {
             discovery_commands::install_discovery_component,
             system_setting_commands::search_windows_settings, system_setting_commands::open_windows_setting,
             system_setting_commands::set_windows_settings_options, system_setting_commands::windows_settings_status,
+            system_setting_commands::refresh_windows_settings,system_setting_commands::windows_setting_icon,
+            launcher_commands::launcher_apps, launcher_commands::pin_launcher_app,
+            launcher_commands::set_launcher_recents, launcher_commands::clear_launcher_recents,
+            copilot::copilot_status, copilot::configure_copilot_key,
             system_setting_commands::cancel_windows_settings_search, system_setting_commands::prepare_windows_settings,
             search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps, indexing_diagnostics
         ])
@@ -896,12 +906,18 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
             drop(last);let _=app.emit("app-enrichment",state);
         }
     });
+    let mut windows_settings=system_settings::Catalog::new(settings.windows_settings.clone());
+    windows_settings.attach(base_index.join("windows-settings").join("catalog.json"),{
+        let app=handle.clone();move|info|{let _=app.emit("windows-settings",info);}
+    });
+    let launcher_history=Arc::new(launcher::History::new(base_index.join("launcher-recent.json")));
     let shell = Arc::new(Shell {
         personalization,
+        launcher_history,
         applications,
         discovery,
         enrichment,
-        windows_settings: system_settings::Catalog::new(settings.windows_settings.clone()),
+        windows_settings,
         settings_sync: tokio::sync::Mutex::new(None),
         settings_semantic: Mutex::new(json!({"state":"preparing","encoder":"stopped"})),
         app_sync: tokio::sync::Mutex::new(None),
@@ -1012,7 +1028,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         show_setup(&handle)?;
     }
     let options = &shell.options;
-    if options.toggle || options.debug_show && options.debug_window.is_none() {
+    if options.show_panel || options.toggle || options.debug_show && options.debug_window.is_none() {
         // Started by the shortcut (DigUp wasn't running): the panel comes up as it would have.
         show_panel(&handle);
     } else if options.debug_window.is_some() || shell.is_set_up() && !options.at_login && options.debug_query.is_none() {
@@ -1218,7 +1234,7 @@ fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
     let panel = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title("DigUp")
         .theme(native_theme(app))
-        .inner_size(PANEL_WIDTH, FIELD_HEIGHT)
+        .inner_size(PANEL_WIDTH, panel_geometry::HOME_HEIGHT)
         .decorations(false)
         .transparent(true)
         .background_color(tauri::window::Color(0, 0, 0, 0))
@@ -1287,16 +1303,13 @@ fn show_panel(app: &AppHandle) {
     let started = Instant::now();
     let shell = app.state::<Arc<Shell>>();
     shell.applications.refresh_if_stale();
-    if !shell.is_set_up() {
-        later(app, |app| { let _ = show_setup(app); });
-        return;
-    }
+    shell.windows_settings.refresh_if_stale();
     let Some(panel) = panel_window(app) else { return };
     if panel.label() == CENTERED_PANEL {
         let _ = panel.maximize();
     } else {
         let monitor = app.cursor_position().ok().and_then(|point| app.monitor_from_point(point.x, point.y).ok().flatten());
-        let height = panel.inner_size().ok().and_then(|size| panel.scale_factor().ok().map(|scale| size.height as f64 / scale)).unwrap_or(FIELD_HEIGHT);
+        let height = panel.inner_size().ok().and_then(|size| panel.scale_factor().ok().map(|scale| size.height as f64 / scale)).unwrap_or(panel_geometry::HOME_HEIGHT);
         if let Ok(frame) = panel_frame(&panel, monitor, height) { let _ = apply_panel_frame(&panel, frame); }
     }
     refresh_panel_appearance(app);

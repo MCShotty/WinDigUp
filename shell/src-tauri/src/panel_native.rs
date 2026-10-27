@@ -113,7 +113,7 @@ mod windows {
             if !force && state.applied == Some(key) { return true; }
             state.applying = true;
         }
-        let radius = if size.height as f64 / scale <= crate::panel_geometry::FIELD_HEIGHT + 1.0 { 32.0 } else { 22.0 };
+        let radius=12.0;
         let diameter = (radius * 2.0 * scale).round() as i32;
         let applied = unsafe {
             let region = CreateRoundRectRgn(left, top, left + size.width as i32 + 1, top + size.height as i32 + 1, diameter, diameter);

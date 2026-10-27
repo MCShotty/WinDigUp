@@ -20,6 +20,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub personalization: crate::personalization::Options,
     pub panel_material: PanelMaterial,
+    pub launcher: crate::launcher::Options,
     pub applications: crate::applications::Options,
     pub windows_settings: crate::system_settings::Options,
     pub discovery: crate::discovery::Options,

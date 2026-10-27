@@ -56,6 +56,7 @@ jobs:
           node tests/ui/lexical-refresh.cjs
           node --check shell/ui/windows-settings.js
           node tests/ui/windows-settings.cjs
+          node tests/ui/launcher-home.cjs
           node --check shell/ui/mixed-results.js
           node --check shell/ui/discovery-settings.js
           node tests/ui/discovery-settings.cjs
