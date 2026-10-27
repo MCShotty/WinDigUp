@@ -15,6 +15,9 @@ pub struct Setup {
 
 impl Setup {
     pub fn new(base: PathBuf, helper: &Path, log: PathBuf) -> Arc<Self> {
+        let current=std::env::current_dir().unwrap_or_else(|_|PathBuf::from("."));
+        let base=if base.is_absolute(){base}else{current.join(base)};
+        let helper=if helper.is_absolute(){helper.to_path_buf()}else{current.join(helper)};
         Arc::new(Self { root: base.join("openvino-models"),
             worker: helper.parent().unwrap_or(Path::new(".")).join("openvino"), log,
             state: Mutex::new(json!({"phase":"idle"})), busy: AtomicBool::new(false), cancel: AtomicBool::new(false), probe: Mutex::new(()) })
@@ -217,6 +220,14 @@ mod tests {
         assert_eq!(setup.snapshot()["phase"],"idle");
         assert!(Path::new(&setup.resolve(config).python).ends_with(Path::new("openvino/python/python.exe")));
     }
+    #[test]
+    fn relative_development_paths_resolve_inside_the_requested_scope() {
+        let base=PathBuf::from(format!("relative-intel-scope-{}",std::process::id()));
+        let setup=Setup::new(base.clone(),Path::new("helper/digup.exe"),PathBuf::from("setup.log"));
+        assert_eq!(setup.root,std::env::current_dir().unwrap().join(base).join("openvino-models"));
+        assert!(setup.worker.is_absolute());
+    }
+
     #[test]
     fn managed_bundle_pointer_cannot_escape_the_custom_index() {
         let root=std::env::temp_dir().join(format!("digup-ov-pointer-{}",std::process::id()));
