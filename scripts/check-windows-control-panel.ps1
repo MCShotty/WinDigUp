@@ -5,8 +5,8 @@ $work=Join-Path $env:RUNNER_TEMP ('control-panel-fixture-'+[Guid]::NewGuid().ToS
 New-Item -ItemType Directory $work | Out-Null
 $guid='{'+[Guid]::NewGuid().ToString().ToUpperInvariant()+'}'
 $taskGuid='{'+[Guid]::NewGuid().ToString().ToUpperInvariant()+'}'
-$class='HKLM:\\SOFTWARE\\Classes\\CLSID\\'+$guid
-$namespace='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ControlPanel\\NameSpace\\'+$guid
+$class='HKLM:\SOFTWARE\Classes\CLSID\'+$guid
+$namespace='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel\NameSpace\'+$guid
 $name='WinDigUp Control Fixture '+[Guid]::NewGuid().ToString('N')
 $taskName='WinDigUp Task Fixture '+[Guid]::NewGuid().ToString('N')
 $fixture=Join-Path $work 'Fixture العربية.exe'
@@ -23,10 +23,10 @@ try {
 <application id="$guid"><sh:task id="$taskGuid"><sh:name>$taskName</sh:name><sh:keywords>windigup fixture task</sh:keywords><sh:command>$taskCommand</sh:command></sh:task></application>
 </applications>
 "@ | Set-Content -Encoding UTF8 $tasks
- New-Item -Force $class,$namespace,($class+'\\shell\\open\\command'),($class+'\\DefaultIcon') | Out-Null
+ New-Item -Force $class,$namespace,($class+'\shell\open\command'),($class+'\DefaultIcon') | Out-Null
  Set-Item $class -Value $name;Set-Item $namespace -Value $name
- Set-Item ($class+'\\shell\\open\\command') -Value $command
- Set-Item ($class+'\\DefaultIcon') -Value ($fixture+',0')
+ Set-Item ($class+'\shell\open\command') -Value $command
+ Set-Item ($class+'\DefaultIcon') -Value ($fixture+',0')
  New-ItemProperty $class -Name 'System.ApplicationName' -Value ('WinDigUp.Fixture.'+$guid.Trim('{}')) -PropertyType String -Force | Out-Null
  New-ItemProperty $class -Name 'System.ControlPanel.Category' -Value 0 -PropertyType DWord -Force | Out-Null
  New-ItemProperty $class -Name 'System.Software.TasksFileUrl' -Value $tasks -PropertyType String -Force | Out-Null

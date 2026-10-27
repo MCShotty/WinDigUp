@@ -4,7 +4,7 @@ if($env:GITHUB_ACTIONS -ne 'true'){throw 'This test modifies certificate trust a
 $source=if($CertificatePath){$CertificatePath}else{Join-Path $PSScriptRoot '../shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer'}
 if($PrepareTrust){
  if(!(Test-Path $source)){throw 'Test signing certificate was not produced.'}
- $cert=Import-Certificate -FilePath $source -CertStoreLocation Cert:\CurrentUser\TrustedPeople
+ $cert=Import-Certificate -FilePath $source -CertStoreLocation Cert:\LocalMachine\TrustedPeople
  Write-Output ('Test-only certificate trusted in disposable runner: '+$cert.Thumbprint)
  exit 0
 }
