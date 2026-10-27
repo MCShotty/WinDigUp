@@ -31,4 +31,4 @@ Native hosted checks independently exercise real Control Panel enumeration and S
 
 ## Remaining Windows gates
 
-Real WebView2 geometry/pixel tests and registered Copilot cold/warm activation are separate from Chromium fixtures; their final result is tracked in [PR #22](https://github.com/MCShotty/WinDigUp/pull/22). Physical Windows 11 picker/key delivery, screen-reader behavior, bright/busy desktops, mixed-DPI monitors and accessibility scaling still require a Windows client device. No physical GPU/NPU execution is established by these UI checks.
+The activation fixture enables the Windows GUI subsystem used in production; a development console can otherwise take focus from a cold launcher. Real WebView2 geometry/pixel tests and registered Copilot cold/warm activation are separate from Chromium fixtures; their final result is tracked in [PR #22](https://github.com/MCShotty/WinDigUp/pull/22). Physical Windows 11 picker/key delivery, screen-reader behavior, bright/busy desktops, mixed-DPI monitors and accessibility scaling still require a Windows client device. No physical GPU/NPU execution is established by these UI checks.

@@ -87,7 +87,7 @@ jobs:
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
       - name: Build the real native shell without model libraries
-        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
+        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --features windows-gui --bins
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         if: steps.shell-build-cache.outputs.cache-hit != 'true'
         with:
@@ -103,6 +103,8 @@ jobs:
           $root=Join-Path $env:RUNNER_TEMP 'copilot-fixture'
           New-Item -ItemType Directory -Force $root | Out-Null
           Copy-Item shell/src-tauri/target/debug/digup-shell.exe (Join-Path $root 'DigUp.exe')
+          $headers=& dumpbin.exe /headers (Join-Path $root 'DigUp.exe')
+          if(!($headers -match '2 subsystem \\(Windows GUI\\)')){throw 'Activation checks require the production Windows GUI subsystem'}
           scripts/package-copilot.ps1 -Destination (Join-Path $root 'copilot')
           scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath (Join-Path $root 'copilot/TEST-ONLY-WinDigUp.cer')
           try {

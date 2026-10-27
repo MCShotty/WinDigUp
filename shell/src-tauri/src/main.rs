@@ -3,7 +3,7 @@
 // (helper.rs): `search-service` answers the panel and the window, `index-service` keeps the index current,
 // `download-model` fetches the model, `estimate` sizes up folders. The Mac app (Sources/DigUpApp) is the reference for
 // behavior.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(any(not(debug_assertions), feature = "windows-gui"), windows_subsystem = "windows")]
 
 mod acceleration;
 mod accelerator_probe;
