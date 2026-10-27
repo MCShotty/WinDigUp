@@ -78,3 +78,42 @@ pub fn open(target:&NativeTarget)->Result<(),String>{
         }
     }
 }
+
+const CHANGE:u32=WM_APP+119;
+unsafe extern "system" fn procedure(hwnd:windows::Win32::Foundation::HWND,message:u32,wp:windows::Win32::Foundation::WPARAM,lp:windows::Win32::Foundation::LPARAM)->windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    unsafe{
+        if message==WM_NCCREATE{let create=&*(lp.0 as *const CREATESTRUCTW);SetWindowLongPtrW(hwnd,GWLP_USERDATA,create.lpCreateParams as isize);}
+        let ptr=GetWindowLongPtrW(hwnd,GWLP_USERDATA)as *const super::Catalog;
+        if message==CHANGE{SetTimer(Some(hwnd),1,600,None);return LRESULT(0)}
+        if message==WM_TIMER&&!ptr.is_null(){
+            if wp.0==1{let _=KillTimer(Some(hwnd),1);(*ptr).refresh();}else{(*ptr).refresh_if_stale();}
+            return LRESULT(0)
+        }
+        DefWindowProcW(hwnd,message,wp,lp)
+    }
+}
+pub fn watch(catalog:super::Catalog){
+    std::thread::spawn(move||{
+        let Ok(_com)=Apartment::new()else{return};
+        unsafe{
+            use windows::Win32::{Foundation::{HINSTANCE,HWND},System::LibraryLoader::GetModuleHandleW,UI::Shell::Common::ITEMIDLIST};
+            let Ok(module)=GetModuleHandleW(None)else{return};let instance=HINSTANCE(module.0);
+            let class=w!("WinDigUpControlPanelWatcher");
+            let _=RegisterClassW(&WNDCLASSW{hInstance:instance,lpfnWndProc:Some(procedure),lpszClassName:class,..Default::default()});
+            let state=Box::new(catalog);
+            let Ok(hwnd)=CreateWindowExW(WINDOW_EX_STYLE::default(),class,w!(""),WINDOW_STYLE::default(),0,0,0,0,Some(HWND_MESSAGE),None,Some(instance),Some((&*state as *const super::Catalog).cast()))else{return};
+            let mut pidls:Vec<*mut ITEMIDLIST>=vec![];
+            for name in ["::{26EE0668-A00A-44D7-9371-BEB064C98683}","::{ED7BA470-8E54-465E-825C-99712043E01C}"]{
+                let name=wide(name);let mut pidl=std::ptr::null_mut();
+                if SHParseDisplayName(PCWSTR(name.as_ptr()),None,&mut pidl,0,None).is_ok(){pidls.push(pidl);}
+            }
+            let entries=pidls.iter().map(|p|SHChangeNotifyEntry{pidl:*p,fRecursive:true.into()}).collect::<Vec<_>>();
+            let registration=SHChangeNotifyRegister(hwnd,SHCNRF_ShellLevel|SHCNRF_InterruptLevel,SHCNE_ALLEVENTS.0 as i32,CHANGE,entries.len()as i32,entries.as_ptr());
+            SetTimer(Some(hwnd),2,60_000,None);let mut message=MSG::default();
+            while GetMessageW(&mut message,None,0,0).0>0{let _=TranslateMessage(&message);DispatchMessageW(&message);}
+            if registration!=0{let _=SHChangeNotifyDeregister(registration);}
+            let _=DestroyWindow(hwnd);for pidl in pidls{CoTaskMemFree(Some(pidl.cast()));}drop(state);
+        }
+    });
+}

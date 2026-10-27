@@ -49,7 +49,7 @@ pub struct Hit {
 #[derive(Clone)]
 pub struct Catalog {
     platform:Platform,entries:Vec<Entry>,options:Arc<RwLock<Options>>,launching:Arc<Mutex<HashSet<String>>>,
-    sources:Arc<RwLock<BTreeMap<String,Source>>>,refreshing:Arc<AtomicBool>,
+    sources:Arc<RwLock<BTreeMap<String,Source>>>,refreshing:Arc<AtomicBool>,watch_started:Arc<AtomicBool>,
     cache:Arc<Mutex<Option<PathBuf>>>,last_refresh:Arc<Mutex<Option<Instant>>>,
     changed:Arc<dyn Fn(Value)+Send+Sync>,
 }
@@ -59,7 +59,7 @@ impl Catalog {
         let manifest:Manifest=serde_json::from_str(include_str!("catalog.json")).expect("validated built-in settings catalog");
         assert_eq!(manifest.version,1);
         Self{platform,entries:manifest.entries,options:Arc::new(RwLock::new(options)),launching:Arc::new(Mutex::new(HashSet::new())),
-            sources:Arc::new(RwLock::new(BTreeMap::new())),refreshing:Arc::new(AtomicBool::new(false)),
+            sources:Arc::new(RwLock::new(BTreeMap::new())),refreshing:Arc::new(AtomicBool::new(false)),watch_started:Arc::new(AtomicBool::new(false)),
             cache:Arc::new(Mutex::new(None)),last_refresh:Arc::new(Mutex::new(None)),changed:Arc::new(|_|{})}
     }
     pub fn configure(&self,options:Options){*self.options.write().unwrap()=options;if self.options.read().unwrap().enabled{self.refresh_if_stale();}}
@@ -112,6 +112,10 @@ impl Catalog {
             uri:String::new(),hardware:String::new(),aliases:vec![format!("control panel {title}")],min_build:19041,max_build:None,translations:Default::default(),
             source:"documented_tasks".into(),canonical:name.into(),native:Some(NativeTarget::Canonical{name:name.into(),page:page.into()})
         }).collect()
+    }
+    pub fn start(&self){
+        #[cfg(windows)]if !self.watch_started.swap(true,Ordering::SeqCst){control_panel::watch(self.clone());}
+        self.refresh_if_stale();
     }
     pub fn refresh_if_stale(&self){
         if self.last_refresh.lock().unwrap().is_none_or(|stamp|stamp.elapsed()>Duration::from_secs(300)){self.refresh();}

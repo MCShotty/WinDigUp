@@ -103,7 +103,7 @@ pub async fn prepare_windows_settings(shell:State<'_,Arc<Shell>>)->Result<Value,
     Ok(state)
 }
 pub fn start(app:&AppHandle,shell:&Arc<Shell>) {
-    shell.windows_settings.refresh_if_stale();
+    shell.windows_settings.start();
     let weak=Arc::downgrade(shell);let app=app.clone();
     std::thread::spawn(move||{
         let mut previous=Value::Null;let mut logged=Value::Null;

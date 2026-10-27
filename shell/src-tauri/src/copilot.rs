@@ -10,7 +10,14 @@ pub async fn copilot_status()->Value {
 }
 #[cfg(windows)]fn probe()->Value {
     use std::{process::{Command,Stdio},os::windows::process::CommandExt,time::{Duration,Instant}};
-    let mut command=Command::new("powershell.exe");
+    #[repr(C)]struct Version{size:u32,major:u32,minor:u32,build:u32,platform:u32,service_pack:[u16;128]}
+    #[link(name="ntdll")]unsafe extern "system"{fn RtlGetVersion(v:*mut Version)->i32;}
+    let mut version=Version{size:std::mem::size_of::<Version>()as u32,major:0,minor:0,build:0,platform:0,service_pack:[0;128]};
+    if unsafe{RtlGetVersion(&mut version)}<0||version.build<22621{
+        return json!({"supported":false,"registered":false,"message":"Copilot-key customization requires a compatible Windows 11 update."});
+    }
+    let system=std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(||std::path::PathBuf::from(r"C:\Windows"));
+    let mut command=Command::new(system.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe"));
     command.args(["-NoProfile","-NonInteractive","-Command",
         "$p=Get-AppxPackage -Name MCShotty.WinDigUp.Launcher; $k=Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\Shell\\BrandedKey' -ErrorAction SilentlyContinue; @{registered=[bool]$p; aumid=$(if($p){$p.PackageFamilyName+'!Launcher'}else{''}); assigned=$($p -and $k.BrandedKeyChoiceType -in @('App','AppEnforcedByPolicy') -and $k.AppAumid -eq ($p.PackageFamilyName+'!Launcher')); managed=($k.BrandedKeyChoiceType -eq 'AppEnforcedByPolicy')} | ConvertTo-Json -Compress"])
         .creation_flags(0x08000000).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
