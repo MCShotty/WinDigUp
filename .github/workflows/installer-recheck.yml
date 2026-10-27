@@ -54,6 +54,16 @@ jobs:
           $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
           if($process.ExitCode -ne 0){throw 'The real NSIS installation failed'}
           scripts/check-windows-copilot.ps1
-          if($LASTEXITCODE){throw 'Installed Copilot verification failed'}
+          if($LASTEXITCODE){
+            $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
+            Write-Output 'DIAGNOSTIC: extracted identity payload'
+            Get-ChildItem (Join-Path $installed 'copilot') -Recurse | Select-Object FullName,Length | Format-Table -AutoSize
+            Get-Content -Raw (Join-Path $installed 'copilot/identity.json')
+            $native=Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+            Write-Output 'DIAGNOSTIC: direct registration after failed installer hook; does not turn this check into a pass'
+            & $native -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $installed 'copilot/register.ps1') -InstallRoot $installed
+            Write-Output ('Direct registration exit code: '+$LASTEXITCODE)
+            throw 'Installed Copilot verification failed'
+          }
           Write-Output 'PASS: actual NSIS post-install registration and cold/warm activation on Windows Server 2022; verified artifact runtime equals PR runtime.'
           Write-Output 'UNVALIDATED: physical Windows 11 key/picker and physical accelerators.'
