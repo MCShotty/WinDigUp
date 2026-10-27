@@ -347,4 +347,6 @@ jobs:
           cargo test --release --manifest-path tests/applications/native/Cargo.toml --locked -- --nocapture
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked
+          cargo test --release helper::reply_tests --locked
           cargo test --release applications:: --locked
+          cargo test --release search_scope::tests --locked

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import DigUpKit
+@testable import DigUpKit
 @testable import digup
 
 @Suite(.serialized)
@@ -330,9 +330,10 @@ struct StreamingServiceTests {
     }
 
     #if !os(Windows)
-    @Test func partialScanHoldsOldPendingRowsAndARecoveredChangeResumesThem() throws {
+    @Test(arguments:["blocked","Café"])
+    func partialScanHoldsOldPendingRowsAndARecoveredChangeResumesThem(folderName:String) throws {
         let root=try temporary()
-        let files=root.appendingPathComponent("files"),blocked=files.appendingPathComponent("blocked")
+        let files=root.appendingPathComponent("files"),blocked=files.appendingPathComponent(folderName)
         defer {
             try? FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:blocked.path)
             try? FileManager.default.removeItem(at:root)
@@ -381,13 +382,13 @@ struct StreamingServiceTests {
     }
     #endif
 
-    func runFolders(_ roots:[URL],index:URL,prune:Bool=true) throws -> (events:[[String:Any]],vectors:Int,rows:[FileRecord]) {
+    func runFolders(_ roots:[URL],index:URL,prune:Bool=true,modelReady:Bool=true) throws -> (events:[[String:Any]],vectors:Int,rows:[FileRecord]) {
         let store=try IndexStore(directory:index)
         let shared=SharedEmbedder{Model()}
         let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
         var events:[[String:Any]]=[]
         let service=IndexService(main:.init(store:store,indexer:indexer,roots:roots,keepOnly:prune ? roots : nil),
-            code:nil,folder:index,model:shared,modelReady:{true},backfill:true,newFilesLimit:50,linger:0,
+            code:nil,folder:index,model:shared,modelReady:{modelReady},backfill:true,newFilesLimit:50,linger:0,
             output:{events.append($0)})
         #expect(service.serve(commandInput:false)==0)
         return (events,try store.counts().vectors,try store.files(under:roots.flatMap {[$0.path,$0.resolvingSymlinksInPath().path]}))
@@ -441,6 +442,187 @@ struct StreamingServiceTests {
     }
 
     #if !os(Windows)
+    #if os(macOS)
+    @Test func damagedAliasCachePreservesPrivateVarVectorsForAReadableVarRoot() throws {
+        let chosenRoot=URL(fileURLWithPath:"/var/tmp",isDirectory:true)
+            .appendingPathComponent("digup-namespace-\(UUID().uuidString)",isDirectory:true)
+        try FileManager.default.createDirectory(at:chosenRoot,withIntermediateDirectories:true)
+        let root=URL(fileURLWithPath:FolderSelection.realPath(chosenRoot.path),isDirectory:true)
+        defer {try? FileManager.default.removeItem(at:root)}
+        #expect(chosenRoot.path.hasPrefix("/var/tmp/"))
+        #expect(root.path.hasPrefix("/private/var/tmp/"))
+        let chosen=chosenRoot.appendingPathComponent("files"),files=root.appendingPathComponent("files")
+        let index=root.appendingPathComponent("index")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try "A retained railway document.".write(to:files.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
+        let before=try runFolders([chosen],index:index)
+        #expect(before.vectors==1)
+        let retained=try #require(before.rows.first)
+        #expect(retained.path.hasPrefix("/private/var/tmp/"))
+        #expect(retained.path==files.appendingPathComponent("note.txt").path)
+        let store=try IndexStore(directory:index)
+        try store.setMeta("scan_root_aliases_v1","{damaged")
+        let after=try runFolders([chosen],index:index,modelReady:false)
+        #expect(after.vectors==1)
+        #expect(after.rows.count==1)
+        #expect(after.rows.first?.state=="done")
+        #expect(after.events.allSatisfy{!["file","inference_verified"].contains($0["event"] as? String ?? "")})
+        let counts=try #require(after.events.last{$0["event"] as? String=="waiting"})
+        #expect(counts["files"] as? Int==1)
+        #expect(counts["searchable"] as? Int==1)
+        #expect(counts["pending"] as? Int==0)
+        #expect(counts["known_counts_complete"] as? Bool==true)
+        #expect(try store.counts().vectors==1)
+    }
+    @Test func damagedAliasCachePreservesComposedDiskNamesAndDecomposedSelection() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let onDisk=root.path+"/Café".precomposedStringWithCanonicalMapping
+        #expect(mkdir(onDisk,0o755)==0)
+        let chosen=URL(fileURLWithPath:onDisk).standardizedFileURL
+        let resolved=try #require(IndexService.resolvedPrunePath(chosen.path))
+        #expect(!chosen.path.utf8.elementsEqual(resolved.utf8))
+        let resolvedName=String(try #require(resolved.split(separator:"/").last))
+        #expect(chosen.lastPathComponent==resolvedName)
+        #expect(!chosen.lastPathComponent.utf8.elementsEqual(resolvedName.utf8))
+        try "A retained multilingual railway document.".write(to:chosen.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
+        let index=root.appendingPathComponent("index")
+        let before=try runFolders([chosen],index:index)
+        #expect(before.vectors==1)
+        let retained=try #require(before.rows.first)
+        #expect(retained.path.utf8.starts(with:(resolved+"/").utf8))
+        let store=try IndexStore(directory:index)
+        try store.setMeta("scan_root_aliases_v1","{damaged")
+        let after=try runFolders([chosen],index:index,modelReady:false)
+        #expect(after.vectors==1)
+        #expect(after.rows.count==1)
+        #expect(after.rows.first?.state=="done")
+        #expect(after.rows.first?.path.utf8.elementsEqual(retained.path.utf8)==true)
+        #expect(after.events.allSatisfy { !["file","inference_verified"].contains($0["event"] as? String ?? "") })
+        let counts=try #require(after.events.last { $0["event"] as? String=="waiting" })
+        #expect(counts["files"] as? Int==1)
+        #expect(counts["searchable"] as? Int==1)
+        #expect(counts["pending"] as? Int==0)
+        #expect(counts["known_counts_complete"] as? Bool==true)
+        #expect(try store.counts().vectors==1)
+    }
+    #endif
+
+    @Test func failedUnicodeChildrenSurviveReportSetCollapseAndRemainHeld() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        let composed=files.path+"/Caf\u{e9}",decomposed=files.path+"/Cafe\u{301}"
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        store.setLiteralScope([files.path])
+        for (index,path) in [composed,decomposed].enumerated() {
+            _=try store.insert(Candidate(path:path+"/note.txt",kind:.doc,size:10,mtime:1,inode:UInt64(index+1),device:1))
+        }
+        let shared=SharedEmbedder {Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        let session=try indexer.beginScan([files])
+        defer {session.close()}
+        var report=CrawlReport()
+        report.recordUnreadable(composed)
+        report.recordUnreadable(decomposed)
+        #expect(report.unreadable.count==1)
+        #expect(report.unreadablePaths.count==2)
+        let summary=try session.finish(report)
+        #expect(summary.removed==0)
+        #expect(session.incompletePrefixes.contains {$0.utf8.elementsEqual(composed.utf8)})
+        #expect(session.incompletePrefixes.contains {$0.utf8.elementsEqual(decomposed.utf8)})
+        store.pendingExcludedPaths=session.incompletePrefixes
+        #expect(try store.pendingCount()==0)
+        #expect(try store.counts().byKindAndState["doc"]?["pending"]==2)
+        store.pendingExcludedPaths=IndexService.reconcilePendingHolds(store.pendingExcludedPaths,
+            completed:[composed],incomplete:[],verifiedRoots:[(chosen:files.path,resolved:files.path)])
+        #expect(try store.pendingCount()==1)
+        #expect(try store.pending(limit:nil).first?.path.utf8.elementsEqual((composed+"/note.txt").utf8)==true)
+        #expect(store.pendingExcludedPaths.contains {$0.utf8.elementsEqual(decomposed.utf8)})
+        store.pendingExcludedPaths=IndexService.reconcilePendingHolds(store.pendingExcludedPaths,
+            completed:[decomposed],incomplete:[],verifiedRoots:[(chosen:files.path,resolved:files.path)])
+        #expect(try store.pendingCount()==2)
+        #expect(try store.counts().vectors==0)
+    }
+
+    @Test func successfulUnicodeSiblingCannotClearAnUnrelatedFailedRootHold() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let composed="/fixture/Caf\u{e9}",decomposed="/fixture/Cafe\u{301}"
+        #expect(composed==decomposed)
+        #expect(!IndexStore.literalPathIsUnder(decomposed,composed))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        store.setLiteralScope([composed,decomposed])
+        for (index,path) in [composed,decomposed].enumerated() {
+            _=try store.insert(Candidate(path:path+"/note.txt",kind:.doc,size:10,mtime:1,inode:UInt64(index+1),device:1))
+        }
+        let held=IndexService.reconcilePendingHolds([decomposed],completed:[composed],incomplete:[],
+            verifiedRoots:[(chosen:composed,resolved:composed)])
+        #expect(held.count==1)
+        #expect(held.first?.utf8.elementsEqual(decomposed.utf8)==true)
+        store.pendingExcludedPaths=held
+        #expect(try store.pendingCount()==1)
+        #expect(try store.pending(limit:nil).first?.path.utf8.elementsEqual((composed+"/note.txt").utf8)==true)
+        store.pendingExcludedPaths=IndexService.reconcilePendingHolds(held,completed:[decomposed],incomplete:[],
+            verifiedRoots:[(chosen:decomposed,resolved:decomposed)])
+        #expect(store.pendingExcludedPaths.isEmpty)
+        #expect(try store.pendingCount()==2)
+    }
+
+    @Test func onlyVerifiedAliasesClearOrRestoreBothPendingHoldNamespaces() throws {
+        let raw="/selection/chosen",resolved="/disk/Café",failed=resolved+"/blocked"
+        let rawHold=raw+"/blocked"
+        let unmapped=IndexService.reconcilePendingHolds([rawHold,failed],completed:[resolved],incomplete:[],verifiedRoots:[])
+        #expect(unmapped==[rawHold])
+        let mapping=[(chosen:raw,resolved:resolved)]
+        let recovered=IndexService.reconcilePendingHolds([rawHold,failed],completed:[resolved],incomplete:[],verifiedRoots:mapping)
+        #expect(recovered.isEmpty)
+        let partial=IndexService.reconcilePendingHolds([rawHold,failed],completed:[resolved],incomplete:[failed],verifiedRoots:mapping)
+        #expect(Set(partial.map {Data($0.utf8)})==Set([Data(rawHold.utf8),Data(failed.utf8)]))
+    }
+
+    @Test(arguments:["disappeared","retargeted","captured"])
+    func pruningUsesOneValidatedNamespaceSnapshotWithoutFollowingChangedRoots(change:String) throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
+        let chosen=root.appendingPathComponent("chosen"),index=root.appendingPathComponent("index")
+        try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:second,withIntermediateDirectories:true)
+        try "A retained railway document.".write(to:first.appendingPathComponent("old.txt"),atomically:false,encoding:.utf8)
+        try "A different unselected document.".write(to:second.appendingPathComponent("new.txt"),atomically:false,encoding:.utf8)
+        try FileManager.default.createSymbolicLink(at:chosen,withDestinationURL:first)
+        #expect(try runFolders([chosen],index:index).vectors==1)
+        let previous=try #require(IndexService.resolvedPrunePath(chosen.path))
+        var resolutions=0
+        let namespaces=IndexService.validatedPruneNamespaces(roots:[chosen],
+            aliases:[Data(chosen.path.utf8).base64EncodedString():previous],requiresLiteral:false,resolve:{path in
+                resolutions+=1
+                if change != "captured" {
+                    try? FileManager.default.removeItem(at:chosen)
+                    if change=="retargeted" {try? FileManager.default.createSymbolicLink(at:chosen,withDestinationURL:second)}
+                }
+                return IndexService.resolvedPrunePath(path)
+            })
+        #expect(resolutions==1)
+        let store=try IndexStore(directory:index)
+        if change=="captured" {
+            let snapshot=try #require(namespaces)
+            #expect(snapshot.contains { $0.utf8.elementsEqual(previous.utf8) })
+            try FileManager.default.removeItem(at:chosen)
+            try FileManager.default.createSymbolicLink(at:chosen,withDestinationURL:second)
+            #expect(try store.prune(keepingUnder:snapshot,literalPaths:true)==0)
+        } else {
+            #expect(namespaces==nil)
+        }
+        let after=try runFolders([chosen],index:index,modelReady:false)
+        #expect(try store.counts().vectors==1)
+        #expect(try store.files(under:[first.path]).count==1)
+        #expect(try store.files(under:[second.path]).isEmpty)
+        #expect(after.events.allSatisfy { !["file","inference_verified"].contains($0["event"] as? String ?? "") })
+    }
+
     @Test func rootAliasCacheIsIsolatedVersionedAndRecoversFromCorruption() throws {
         let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}

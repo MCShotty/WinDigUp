@@ -104,7 +104,7 @@ public final class Indexer {
         let crawl = Crawler.crawl(roots, options: options, onProgress: onProgress)
         onProgress(CrawlProgress(stage: "reconciling", root: "", path: store.file.path,
                                 visited: crawl.visited, candidates: crawl.candidates.count))
-        let unavailable=Array(crawl.unreadable).flatMap(aliases)
+        let unavailable=crawl.unreadablePaths.flatMap(aliases)
             + roots.filter {!FileManager.default.fileExists(atPath:$0.path)}.flatMap {aliases($0.standardizedFileURL.path)}
         let existing = try store.files(under: roots.map { $0.standardizedFileURL.path })
         var byPath: [String: FileRecord] = [:]

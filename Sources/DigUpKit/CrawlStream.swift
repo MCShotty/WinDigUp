@@ -206,7 +206,7 @@ extension Crawler {
                     if inheritedProject || !projectContextKnown {break}
                 }
             }
-            if !projectContextKnown {report.unreadable.insert(root.path);continue}
+            if !projectContextKnown {report.recordUnreadable(root.path);continue}
             try db.run("INSERT INTO folders(path,project) VALUES(?,?)",[.text(root.path),.int(inheritedProject ? 1 : 0)])
             while true {
                 var nextFolder:(Int64,String,Bool)?
@@ -223,19 +223,19 @@ extension Crawler {
                 defer { scanGate?.unlock() }
                 var inProject=inherited
                 if !options.code && !inherited {
-                    guard let project=Crawler.scanProjectRoot(folder.path) else {report.unreadable.insert(folder.path);continue}
+                    guard let project=Crawler.scanProjectRoot(folder.path) else {report.recordUnreadable(folder.path);continue}
                     inProject=project
                 }
                 if options.code { repos.enter(folder.path) }
                 #if os(Windows)
                 guard let walker = FileSystem.directory(folder) else {
-                    report.unreadable.insert(folder.path); continue
+                    report.recordUnreadable(folder.path); continue
                 }
                 #else
                 guard let walker = fm.enumerator(at: folder, includingPropertiesForKeys: FileSystem.crawlKeys+[.isSymbolicLinkKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants],
-                    errorHandler: { url, _ in report.unreadable.insert(url.path); return true }) else {
-                    report.unreadable.insert(folder.path); continue
+                    errorHandler: { url, _ in report.recordUnreadable(url.path); return true }) else {
+                    report.recordUnreadable(folder.path); continue
                 }
                 #endif
                 try db.execute("DELETE FROM candidates")
@@ -252,7 +252,7 @@ extension Crawler {
                         #else
                         let values: URLResourceValues
                         do { values = try url.resourceValues(forKeys: Set(FileSystem.crawlKeys+[.isSymbolicLinkKey])) }
-                        catch { report.unreadable.insert(url.path); walker.skipDescendants(); continue }
+                        catch { report.recordUnreadable(url.path); walker.skipDescendants(); continue }
                         if values.isSymbolicLink==true {
                             report.skipped["link or special file",default:0] += 1
                             walker.skipDescendants()
@@ -278,7 +278,7 @@ extension Crawler {
                         var checked: FileInfo?
                         if header {
                             checked = FileSystem.info(of: url.path)
-                            guard let info = checked else { report.unreadable.insert(url.path); continue }
+                            guard let info = checked else { report.recordUnreadable(url.path); continue }
                             if !info.isRegular { report.skipped["link or special file", default: 0] += 1; continue }
                             if info.dataless || FileSystem.isInCloud(values) {
                                 report.skipped["in the cloud, not downloaded", default: 0] += 1; continue
@@ -291,7 +291,7 @@ extension Crawler {
                         case .skip(let reason): report.skipped[reason, default: 0] += 1
                         case .index(let kind):
                             guard let info = checked ?? FileSystem.info(of: url.path) else {
-                                report.unreadable.insert(url.path)
+                                report.recordUnreadable(url.path)
                                 report.skipped["metadata unavailable", default: 0] += 1
                                 continue
                             }
@@ -335,7 +335,7 @@ extension Crawler {
                     }
                 }
                 #if os(Windows)
-                report.unreadable.formUnion(walker.unreadable)
+                for path in walker.unreadable {report.recordUnreadable(path)}
                 #endif
                 if shouldStop() { return report }
                 if !immediate.isEmpty {
@@ -347,7 +347,7 @@ extension Crawler {
                     spellings.contains(path) || spellings.contains((path as NSString).deletingLastPathComponent)
                 }
                 if !options.code && !options.includeDatasets && !rootPaths.contains(folder.path) && incompleteFolder {
-                    report.unreadable.insert(folder.path)
+                    report.recordUnreadable(folder.path)
                     continue
                 }
                 let isDataset = !options.code && !options.includeDatasets && !rootPaths.contains(folder.path)

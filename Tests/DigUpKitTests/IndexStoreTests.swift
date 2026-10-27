@@ -34,6 +34,39 @@ import WinSDK
         #expect(try store.prune(keepingUnder: []) == 2)
     }
 
+    @Test(arguments:[false,true])
+    func unicodeHoldPrefixesKeepEveryLiteralSpellingWhenCollapsed(collapse:Bool) throws {
+        let store=try IndexStore(directory:folder)
+        let composed="/fixture/Caf\u{e9}",decomposed="/fixture/Cafe\u{301}",ready="/fixture/ready"
+        #expect(composed==decomposed)
+        #expect(!composed.utf8.elementsEqual(decomposed.utf8))
+        #expect(IndexStore.uniqueLiteralPaths([composed,decomposed,composed]).count==2)
+        store.setLiteralScope([composed,decomposed,ready])
+        for (index,path) in [composed,decomposed].enumerated() {
+            _=try store.insert(file(path+"/held/pending.png",inode:UInt64(index*2+1)))
+            let partial=try store.insert(file(path+"/held/long.png",inode:UInt64(index*2+2)))
+            try store.finish(partial,state:"partial",info:["read_to":"1","read_end":"10"])
+        }
+        _=try store.insert(file(ready+"/available.png",inode:9))
+        let holds=collapse
+            ? (0..<65).flatMap {[composed+"/held/\($0)",decomposed+"/held/\($0)"]}
+            : [composed+"/held",decomposed+"/held"]
+        store.pendingExcludedPaths=holds
+        #expect(try store.pendingCount()==1)
+        #expect(try store.pending(limit:nil).map(\.path)==[ready+"/available.png"])
+        #expect(try store.runnableUnfinishedCount()==0)
+        #expect(try store.unfinishedCount().files==2)
+        let inventory=try store.counts()
+        #expect(inventory.byKindAndState["image"]?["pending"]==3)
+        if collapse {
+            #expect(store.pendingExcludedPaths.count==2)
+            #expect(Set(store.pendingExcludedPaths.map {Data($0.utf8)})==Set([Data(composed.utf8),Data(decomposed.utf8)]))
+        }
+        store.pendingExcludedPaths=[]
+        #expect(try store.pendingCount()==3)
+        #expect(try store.runnableUnfinishedCount()==2)
+    }
+
     @Test func scopeLimitsWhatIsWaiting() throws {
         let store = try IndexStore(directory: folder)
         try store.insert(file("/a/x.png", inode: 1))

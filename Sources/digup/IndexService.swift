@@ -42,6 +42,7 @@ final class IndexService: @unchecked Sendable {
     /// The last report of folders that aren't there or can't be read, by index (said again only when it changes).
     private var unavailable: [Bool: (missing: [String], unreadable: [String])] = [:]
     private var rootAliases:[Bool:[String:String]]=[:]
+    private var verifiedRootAliases:[Bool:[String:String]]=[:]
     private var aliasLoaded=Set<Bool>()
     private var invalidAliasCache=Set<Bool>()
     private var uncertainAliasCache=Set<Bool>()
@@ -127,8 +128,8 @@ final class IndexService: @unchecked Sendable {
             if again > 0 { emit(["event": "rescan", "files": again]) }
             for part in parts {
                 try part.indexer.checkModel()   // a new model: everything is queued again
-                if let keepOnly = part.keepOnly, canPrune(part,roots:keepOnly) {
-                    let pruned = try part.store.prune(keepingUnder: namespacePaths(part,roots:keepOnly),literalPaths:true)
+                if let keepOnly = part.keepOnly, let namespaces=pruneNamespaces(part,roots:keepOnly) {
+                    let pruned = try part.store.prune(keepingUnder:namespaces,literalPaths:true)
                     if pruned > 0 { emit(["event": "pruned", "files": pruned, "code": part.code]) }
                 }
             }
@@ -276,36 +277,56 @@ final class IndexService: @unchecked Sendable {
         #endif
     }
 
-    private func canPrune(_ part:Part,roots:[URL]) -> Bool {
+    /// Capture one validated namespace set. A failed resolution must never shrink the destructive prune's keep set.
+    private func pruneNamespaces(_ part:Part,roots:[URL]) -> [String]? {
         #if os(Windows)
-        return true
+        return IndexStore.uniqueLiteralPaths(roots.map(\.path))
         #else
         let cached=aliases(part)
-        return roots.allSatisfy {root in
-            let path=root.path
-            guard Arguments.isFolder(root) && Arguments.isReadable(root) else {return false}
-            let resolved=FolderSelection.realPath(path)
-            if let previous=cached[IndexService.aliasID(path)],previous != resolved {return false}
-            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {
-                return URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
-            }
-            return true
-        }
+        return Self.validatedPruneNamespaces(roots:roots,aliases:cached,
+            requiresLiteral:invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code))
         #endif
     }
 
+    #if !os(Windows)
+    static func resolvedPrunePath(_ path:String) -> String? {
+        guard let resolved=realpath(path,nil) else{return nil}
+        defer {free(resolved)}
+        return String(cString:resolved)
+    }
+
+    static func validatedPruneNamespaces(roots:[URL],aliases:[String:String],requiresLiteral:Bool,
+        resolve:(String)->String? = IndexService.resolvedPrunePath) -> [String]? {
+        var namespaces:[String]=[]
+        for root in roots {
+            let path=root.path
+            guard let resolved=resolve(path),Arguments.isFolder(root),Arguments.isReadable(root) else{return nil}
+            if let previous=aliases[aliasID(path)],!previous.utf8.elementsEqual(resolved.utf8) {return nil}
+            let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+            if requiresLiteral && !literal {return nil}
+            namespaces += [path,resolved]
+        }
+        return IndexStore.uniqueLiteralPaths(namespaces)
+    }
+    #endif
+
     private func namespacePaths(_ part:Part,roots:[URL]) -> [String] {
         let cached=aliases(part)
-        return Array(Set(roots.flatMap {root -> [String] in
+        return IndexStore.uniqueLiteralPaths(roots.flatMap {root -> [String] in
             let path=root.path
             #if os(Windows)
             return [path]
             #else
             if let resolved=cached[IndexService.aliasID(path)] {return [path,resolved]}
-            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {return [path]}
+            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {
+                let resolved=FolderSelection.realPath(path)
+                let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+                if literal && Arguments.isFolder(root) && Arguments.isReadable(root) {return [path,resolved]}
+                return [path]
+            }
             return [path,FolderSelection.realPath(path)]
             #endif
-        })).sorted()
+        }).sorted()
     }
 
     private func scanPath(_ path:String,part:Part) -> String {
@@ -326,6 +347,7 @@ final class IndexService: @unchecked Sendable {
         var missing:[URL]=[],unreadable:[URL]=[],available:[URL]=[]
         if uncertainAliasCache.contains(part.code) {aliasLoaded.remove(part.code)}
         var cached=aliases(part)
+        var verified:[String:String]=[:]
         var complete=true
         var allLiteralAndAvailable=true
         for root in part.roots {
@@ -339,10 +361,14 @@ final class IndexService: @unchecked Sendable {
                 #if os(Windows)
                 available.append(root)
                 #else
-                let resolved=FolderSelection.realPath(path)
+                guard let resolved=Self.resolvedPrunePath(path) else {
+                    missing.append(root);allLiteralAndAvailable=false
+                    if cached[identity]==nil {complete=false}
+                    continue
+                }
                 let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
                 if !literal {allLiteralAndAvailable=false}
-                let changed=cached[identity].map {$0 != resolved} ?? false
+                let changed=cached[identity].map {!$0.utf8.elementsEqual(resolved.utf8)} ?? false
                 let unverified=(invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code))
                     && !literal && cached[identity]==nil
                 if changed || unverified {
@@ -354,6 +380,7 @@ final class IndexService: @unchecked Sendable {
                             : "This folder's cached location cannot be verified. Choose its current folder in Settings."])
                 } else {
                     cached[identity]=resolved
+                    verified[identity]=resolved
                     available.append(URL(fileURLWithPath:resolved,isDirectory:true))
                 }
                 #endif
@@ -368,14 +395,16 @@ final class IndexService: @unchecked Sendable {
         saveAliases(part)
         if uncertainAliasCache.contains(part.code) {
             available.removeAll {folder in
-                let originals=part.roots.filter {cached[IndexService.aliasID($0.path)]==folder.path && $0.path != folder.path}
+                let originals=part.roots.filter {cached[IndexService.aliasID($0.path)]?.utf8.elementsEqual(folder.path.utf8)==true && $0.path != folder.path}
                 if originals.isEmpty {return false}
                 unreadable += originals
+                for original in originals {verified[IndexService.aliasID(original.path)]=nil}
                 complete=false
                 return true
             }
         }
         #endif
+        verifiedRootAliases[part.code]=verified
         knownCountsComplete[part.code]=complete
         let report=(missing.map(\.path),unreadable.map(\.path))
         if unavailable[part.code].map({$0 != report}) ?? !(missing.isEmpty && unreadable.isEmpty) {
@@ -384,7 +413,7 @@ final class IndexService: @unchecked Sendable {
         unavailable[part.code]=report
         part.store.setLiteralScope(namespacePaths(part,roots:part.roots))
         let blocked=namespacePaths(part,roots:missing+unreadable)
-        part.store.pendingExcludedPaths=Array(Set(part.store.pendingExcludedPaths+blocked)).sorted()
+        part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(part.store.pendingExcludedPaths+blocked).sorted()
         return available
     }
 
@@ -404,14 +433,35 @@ final class IndexService: @unchecked Sendable {
         }
     }
 
+    static func expandedHoldNamespaces(_ paths:[String],verifiedRoots:[(chosen:String,resolved:String)]) -> [String] {
+        var expanded=paths
+        for root in verifiedRoots {
+            for (source,target) in [(root.chosen,root.resolved),(root.resolved,root.chosen)] {
+                for path in paths where IndexStore.literalPathIsUnder(path,source) {
+                    expanded.append(target+String(decoding:path.utf8.dropFirst(source.utf8.count),as:UTF8.self))
+                }
+            }
+        }
+        return IndexStore.uniqueLiteralPaths(expanded)
+    }
+
+    static func reconcilePendingHolds(_ existing:[String],completed:[String],incomplete:[String],
+        verifiedRoots:[(chosen:String,resolved:String)]) -> [String] {
+        let covered=expandedHoldNamespaces(completed,verifiedRoots:verifiedRoots)
+        let remaining=existing.filter {path in !covered.contains {IndexStore.literalPathIsUnder(path,$0)}}
+        return IndexStore.uniqueLiteralPaths(remaining+expandedHoldNamespaces(incomplete,verifiedRoots:verifiedRoots)).sorted()
+    }
+
     private final class ScanWork {
         let part: Part
         let session: IndexScanSession
         let stream: CrawlStream
         var summary: Indexer.SyncSummary?
         var finished = false
-        init(part: Part, session: IndexScanSession, stream: CrawlStream) {
+        let verifiedRoots:[(chosen:String,resolved:String)]
+        init(part: Part, session: IndexScanSession, stream: CrawlStream, aliases:[String:String]) {
             self.part=part;self.session=session;self.stream=stream
+            verifiedRoots=part.roots.compactMap {root in aliases[IndexService.aliasID(root.path)].map {(root.path,$0)}}
         }
     }
 
@@ -452,7 +502,7 @@ final class IndexService: @unchecked Sendable {
             for item in work { item.stream.cancel() }
             for item in work {
                 if !item.finished {
-                    item.part.store.pendingExcludedPaths=Array(Set(item.part.store.pendingExcludedPaths+item.session.rootPrefixes)).sorted()
+                    item.part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(item.part.store.pendingExcludedPaths+Self.expandedHoldNamespaces(item.session.rootPrefixes,verifiedRoots:item.verifiedRoots)).sorted()
                 }
                 item.stream.close();item.session.close()
             }
@@ -477,7 +527,7 @@ final class IndexService: @unchecked Sendable {
                 let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,
                     selectedRoots:namespacePaths(part,roots:part.roots).map {URL(fileURLWithPath:$0,isDirectory:true)},
                     beforeFolder:beforeScanFolder,scanGate:gate)
-                work.append(ScanWork(part:part,session:session,stream:stream))
+                work.append(ScanWork(part:part,session:session,stream:stream,aliases:verifiedRootAliases[part.code] ?? [:]))
                 emit(["event":"scanning","code":part.code,"discoveryActive":true])
             }
             var lastCounts=0.0
@@ -498,11 +548,9 @@ final class IndexService: @unchecked Sendable {
                         if !progress.queuedIDs.isEmpty {dirtyNames.insert(item.part.code)}
                     case .finished(let report):
                         item.summary=try item.session.finish(report)
-                        let completed=item.session.rootPrefixes
-                        let previous=item.part.store.pendingExcludedPaths.filter {path in
-                            !completed.contains {root in path==root || FolderSelection.isInside(path,root)}
-                        }
-                        item.part.store.pendingExcludedPaths=Array(Set(previous+item.session.incompletePrefixes)).sorted()
+                        item.part.store.pendingExcludedPaths=Self.reconcilePendingHolds(
+                            item.part.store.pendingExcludedPaths,completed:item.session.rootPrefixes,
+                            incomplete:item.session.incompletePrefixes,verifiedRoots:item.verifiedRoots)
                         item.finished=true
                         dirtyCounts.remove(item.part.code)
                         dirtyNames.remove(item.part.code)
@@ -513,11 +561,11 @@ final class IndexService: @unchecked Sendable {
                                 "removed":summary.removed,"unchanged":summary.unchanged,
                                 "ms":Int(Date().timeIntervalSince(started)*1000),"started":started.timeIntervalSince1970,
                                 "visited":report.visited,"candidates":report.candidateCount,"skipped":report.skipped,
-                                "skippedFolders":report.skippedFolders,"unreadable":report.unreadable.sorted(),
+                                "skippedFolders":report.skippedFolders,"unreadable":report.unreadablePaths.sorted(),
                                 "discoveryActive":false])
                         }
                     case .failed(let message):
-                        item.part.store.pendingExcludedPaths=Array(Set(item.part.store.pendingExcludedPaths+item.session.rootPrefixes)).sorted()
+                        item.part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(item.part.store.pendingExcludedPaths+Self.expandedHoldNamespaces(item.session.rootPrefixes,verifiedRoots:item.verifiedRoots)).sorted()
                         item.finished=true
                         dirtyCounts.remove(item.part.code)
                         dirtyNames.remove(item.part.code)
@@ -597,8 +645,8 @@ final class IndexService: @unchecked Sendable {
             if inferenceFailure { lock.withLock {stopRequested=true} }
         } catch {
             for part in requested {
-                let roots=part.roots.flatMap {[$0.standardizedFileURL.path,FolderSelection.realPath($0.path)]}
-                part.store.pendingExcludedPaths=Array(Set(part.store.pendingExcludedPaths+roots)).sorted()
+                let roots=namespacePaths(part,roots:part.roots)
+                part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(part.store.pendingExcludedPaths+roots).sorted()
             }
             emit(["event":"error","message":"sync failed: \(error)","discoveryActive":false])
         }

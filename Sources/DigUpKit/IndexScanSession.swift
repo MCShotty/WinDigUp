@@ -142,9 +142,9 @@ public final class IndexScanSession {
             }
             return values
         }
-        let unavailable=Array(report.unreadable).flatMap(aliases)
+        let unavailable=report.unreadablePaths.flatMap(aliases)
             + roots.filter {!FileManager.default.fileExists(atPath:$0.path)}.flatMap {aliases($0.standardizedFileURL.path)}
-        incompletePrefixes=Array(Set(unavailable)).sorted()
+        incompletePrefixes=IndexStore.uniqueLiteralPaths(unavailable).sorted()
         func protected(_ path: String) -> Bool {
             unavailable.contains { path == $0 || FolderSelection.isInside(path,$0) }
         }

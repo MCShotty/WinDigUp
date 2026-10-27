@@ -355,15 +355,7 @@ impl SearchService {
                     message["ms"]=json!({"helper_startup":elapsed});
                 }
                 match message.get("id").and_then(Value::as_u64) {
-                    Some(id) => {
-                        if let Some(elapsed)=startup.take() {
-                            if !message["ms"].is_object(){message["ms"]=json!({});}
-                            message["ms"]["helper_startup"]=json!(elapsed);
-                        }
-                        if let Some(sender) = replies.lock().unwrap().remove(&id) {
-                            let _ = sender.send(message);
-                        }
-                    }
+                    Some(id) => deliver_search_reply(id, message, &replies, &mut startup),
                     None if generation.load(Ordering::SeqCst) == number => on_event(message),
                     None => {},
                 }
@@ -615,6 +607,47 @@ impl ModelDownload {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+/// One-way metadata acknowledgements have no pending receiver. They must not consume the first query's startup time.
+fn deliver_search_reply(
+    id: u64,
+    mut message: Value,
+    replies: &Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    startup: &mut Option<f64>,
+) {
+    if let Some(sender) = replies.lock().unwrap().remove(&id) {
+        if let Some(elapsed) = startup.take() {
+            if !message["ms"].is_object() { message["ms"] = json!({}); }
+            message["ms"]["helper_startup"] = json!(elapsed);
+        }
+        let _ = sender.send(message);
+    }
+}
+
+#[cfg(test)]
+mod reply_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_acknowledgements_preserve_startup_for_the_first_pending_reply() {
+        let replies = Mutex::new(HashMap::new());
+        let mut startup = Some(37.5);
+        deliver_search_reply(1, json!({"id":1,"ok":true}), &replies, &mut startup);
+        assert_eq!(startup, Some(37.5));
+        let (sender, mut receiver) = oneshot::channel();
+        replies.lock().unwrap().insert(2, sender);
+        deliver_search_reply(2, json!({"id":2,"ms":{"retrieval":4.0}}), &replies, &mut startup);
+        let first = receiver.try_recv().unwrap();
+        assert_eq!(first["ms"]["helper_startup"], 37.5);
+        assert_eq!(first["ms"]["retrieval"], 4.0);
+        assert_eq!(startup, None);
+        let (sender, mut receiver) = oneshot::channel();
+        replies.lock().unwrap().insert(3, sender);
+        deliver_search_reply(3, json!({"id":3}), &replies, &mut startup);
+        assert!(receiver.try_recv().unwrap()["ms"]["helper_startup"].is_null());
+        assert!(replies.lock().unwrap().is_empty());
     }
 }
 
