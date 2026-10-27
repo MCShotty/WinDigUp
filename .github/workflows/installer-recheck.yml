@@ -1,4 +1,4 @@
-name: Repackage and verify installer registration
+name: Final installed payload and removal
 on:
   push:
     branches: [codex/installer-recheck]
@@ -8,67 +8,49 @@ permissions:
 jobs:
   installed:
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Verify unchanged compiled sources
-        shell: pwsh
-        run: |
-          git fetch --no-tags --depth=1 origin 6fc826c43c0a65f69cd906049aea735bd8ef91dd
-          if($LASTEXITCODE){throw 'Missing runtime source'}
-          git diff --exit-code 6fc826c43c0a65f69cd906049aea735bd8ef91dd HEAD -- . ':!.github/workflows/launcher-contracts.yml' ':!.github/workflows/installer-recheck.yml' ':!scripts/check-windows-copilot.ps1' ':!shell/src-tauri/windows/register-copilot.ps1'
-          if($LASTEXITCODE){throw 'Compiled sources differ; a full rebuild is required'}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          artifact-ids: 12713350599
-          run-id: 40454742713
+          artifact-ids: 12713184605
+          run-id: 40458998738
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/installer-candidate
-      - name: Extract verified binaries and repackage with corrected registration
-        shell: pwsh
+      - name: Verify original NSIS marker and actual uninstall hooks
+        shell: powershell
         run: |
+          $ErrorActionPreference='Stop'
           $root=Join-Path $env:RUNNER_TEMP 'installer-candidate'
           $cert=@(Get-ChildItem $root -Recurse -Filter TEST-ONLY-WinDigUp.cer)
           $setup=@(Get-ChildItem $root -Recurse -Filter '*-setup.exe')
           if($cert.Count -ne 1 -or $setup.Count -ne 1){throw 'Unexpected artifact layout'}
           scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath $cert[0].FullName
-          if($LASTEXITCODE){throw 'Certificate preparation failed'}
+          if($LASTEXITCODE){throw 'CI certificate preparation failed'}
           $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
-          if($process.ExitCode){throw 'Runtime extraction failed'}
+          if($process.ExitCode){throw 'Installation failed'}
           $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
-          $release=Join-Path $PWD 'shell/src-tauri/target/release'
-          New-Item -ItemType Directory -Force $release | Out-Null
-          Copy-Item (Join-Path $installed 'DigUp.exe') (Join-Path $release 'digup-shell.exe')
-          Copy-Item (Join-Path $installed 'DigUp.exe') (Join-Path $release 'DigUp.exe')
-          Copy-Item (Join-Path $installed 'helper/digup-discovery.exe') (Join-Path $release 'digup-discovery.exe')
-          Copy-Item (Join-Path $installed 'helper') shell/src-tauri/helper -Recurse
-          Copy-Item (Join-Path $installed 'copilot') shell/src-tauri/copilot -Recurse
-          Copy-Item (Join-Path $installed 'THIRD-PARTY-NOTICES.txt') shell/src-tauri/THIRD-PARTY-NOTICES.txt
-          Copy-Item shell/src-tauri/windows/register-copilot.ps1 shell/src-tauri/copilot/register.ps1 -Force
-          Remove-Item shell/src-tauri/copilot/registration.json -ErrorAction SilentlyContinue
-          $config=Join-Path $env:RUNNER_TEMP 'repackage.json'
-          @{bundle=@{resources=@{'helper/'='helper/';'copilot/'='copilot/';'THIRD-PARTY-NOTICES.txt'='THIRD-PARTY-NOTICES.txt'}}}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $config
-          Push-Location shell/src-tauri
-          try {
-            bash ../../scripts/tauri-cli.sh bundle --bundles nsis --config $config
-            if($LASTEXITCODE){throw 'Native installer repackaging failed'}
-          } finally {Pop-Location}
-      - name: Verify actual post-install registration and activation
-        shell: pwsh
-        run: |
-          $setup=@(Get-ChildItem shell/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
-          if($setup.Count -ne 1){throw 'Missing corrected installer'}
-          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
-          if($process.ExitCode){throw 'Corrected installation failed'}
-          scripts/check-windows-copilot.ps1
-          if($LASTEXITCODE){throw 'Corrected post-install registration failed'}
-          scripts/check-windows-settings.ps1
-          if($LASTEXITCODE){throw 'Installed Settings activation regressed'}
-          Write-Output 'PASS: real corrected NSIS installer registers the signed provider and supports cold/warm activation. Compiled sources match PR.'
-          Write-Output 'UNVALIDATED: physical Windows 11 key/picker and accelerators.'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: DigUp-windows-x64-verified
-          path: |
-            shell/src-tauri/target/release/bundle/nsis/*-setup.exe
-            shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer
+          $exe=Join-Path $installed 'DigUp.exe'
+          $binary=[IO.File]::ReadAllBytes($exe)
+          $text=[Text.Encoding]::ASCII.GetString($binary)
+          if(!$text.Contains('__TAURI_BUNDLE_TYPE_VAR_NSS') -or $text.Contains('__TAURI_BUNDLE_TYPE_VAR_UNK')){throw 'The installed binary does not retain its initialized NSIS updater marker'}
+          $hash=[Security.Cryptography.SHA256]::Create()
+          try{$digest=[BitConverter]::ToString($hash.ComputeHash($binary)).Replace('-','')}finally{$hash.Dispose()}
+          Write-Output ('PASS: original NSIS updater marker is initialized; installed main SHA256='+$digest)
+          if(!(Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher')){throw 'Actual installer did not register the provider'}
+          $sentinel=Join-Path $installed 'index/installer-retention-fixture.txt'
+          New-Item -ItemType Directory -Force (Split-Path $sentinel) | Out-Null
+          Set-Content -Encoding UTF8 $sentinel 'Preserve existing user index data'
+          $uninstaller=Join-Path $installed 'uninstall.exe'
+          if(!(Test-Path $uninstaller)){throw 'Native uninstaller absent'}
+          $process=Start-Process $uninstaller -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode){throw 'Native uninstallation failed'}
+          $deadline=[DateTime]::UtcNow.AddSeconds(30)
+          do {
+            $registered=Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher'
+            if(!$registered){break}
+            Start-Sleep -Milliseconds 250
+          }while([DateTime]::UtcNow -lt $deadline)
+          if($registered){throw 'Native uninstall retained the Copilot-key identity'}
+          if(!(Test-Path $sentinel)){throw 'Default native uninstall removed retained index data'}
+          Write-Output 'PASS: actual NSIS uninstall unregisters this provider and preserves index data by default'
