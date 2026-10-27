@@ -27,7 +27,15 @@
 
 !macro NSIS_HOOK_POSTINSTALL
   IfFileExists "$INSTDIR\copilot\register.ps1" 0 digup_identity_done
-    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR"'
+    Push $0
+    Push $1
+    StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+    ; NSIS is normally a 32-bit process; Sysnative avoids WOW64 redirection to 32-bit PowerShell.
+    IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+      StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    nsExec::ExecToLog '"$1" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR"'
+    Pop $0
+    Pop $1
     Pop $0
   digup_identity_done:
 !macroend
@@ -35,7 +43,14 @@
 !macro NSIS_HOOK_PREUNINSTALL
   ${If} $UpdateMode <> 1
     IfFileExists "$INSTDIR\copilot\register.ps1" 0 digup_identity_uninstalled
-      nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR" -Uninstall'
+      Push $0
+      Push $1
+      StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+      IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+        StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+      nsExec::ExecToLog '"$1" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR" -Uninstall'
+      Pop $0
+      Pop $1
       Pop $0
     digup_identity_uninstalled:
   ${EndIf}

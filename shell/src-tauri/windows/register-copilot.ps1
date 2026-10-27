@@ -1,5 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$InstallRoot,[switch]$Uninstall)
 $ErrorActionPreference='Stop'
+if([Environment]::Is64BitOperatingSystem -and ![Environment]::Is64BitProcess){throw 'Copilot-key registration requires 64-bit Windows PowerShell.'}
 $name='MCShotty.WinDigUp.Launcher'
 $folder=Join-Path $InstallRoot 'copilot'
 $metadata=Get-Content -Raw (Join-Path $folder 'identity.json') | ConvertFrom-Json
