@@ -305,6 +305,9 @@ jobs:
       - name: Installed Windows settings activation
         shell: pwsh
         run: scripts/check-windows-settings.ps1
+      - name: Installed registered Control Panel applet and task
+        shell: pwsh
+        run: scripts/check-windows-control-panel.ps1
       - name: Installed Copilot-key identity
         shell: pwsh
         run: scripts/check-windows-copilot.ps1

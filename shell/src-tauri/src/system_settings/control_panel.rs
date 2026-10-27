@@ -10,6 +10,10 @@ unsafe fn property(item:&IShellItem2,name:&str)->String {
     unsafe {
         if PropertiesSystem::PSGetPropertyKeyFromName(PCWSTR(name.as_ptr()),&mut key).is_ok(){
             if let Ok(value)=item.GetString(&key){return owned(value)}
+            if let Ok(mut value)=item.GetProperty(&key){
+                let text=windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc(&value).map(|p|owned(p)).unwrap_or_default();
+                let _=windows::Win32::System::Com::StructuredStorage::PropVariantClear(&mut value);return text;
+            }
         }
     }
     String::new()

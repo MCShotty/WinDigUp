@@ -208,7 +208,10 @@ impl Catalog {
         std::fs::create_dir_all(&folder).map_err(|e|e.to_string())?;
         let size=size.clamp(16,128);let path=folder.join(format!("{}-{size}.png",digest(&parsing)));
         if path.is_file(){return Ok(path)}
-        #[cfg(windows)]{crate::applications::shell_icon(&parsing,size,&path)?;Ok(path)}
+        #[cfg(windows)]{let temporary=folder.join(format!("{}-{}-{size}.png",digest(&parsing),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+            crate::applications::shell_icon(&parsing,size,&temporary)?;
+            if let Err(error)=std::fs::rename(&temporary,&path){let _=std::fs::remove_file(&temporary);if !path.is_file(){return Err(error.to_string())}}
+            Ok(path)}
         #[cfg(not(windows))]{Err("Native icons require Windows.".into())}
     }
     pub fn launch(&self,id:&str)->Result<(),String> {

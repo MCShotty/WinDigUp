@@ -130,6 +130,9 @@ jobs:
       - name: Real modern and Control Panel settings activation (no inference)
         shell: pwsh
         run: scripts/check-windows-settings.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe"
+      - name: Registered Control Panel applet and task fixture (no inference)
+        shell: pwsh
+        run: scripts/check-windows-control-panel.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe"
       - name: Compile portable search-vector conversion for Windows x64
         run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"
 
