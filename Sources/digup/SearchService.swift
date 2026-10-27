@@ -37,10 +37,12 @@ final class SearchService: @unchecked Sendable {
     private var activeWorker: EmbeddingWorker?
     private var loadingProcess: Process?
     private var refreshing = false, refreshAgain = false, refreshVectors = false
+    private var refreshEpoch: UInt64 = 0
     private var snapshotBytes = 0, snapshotRevision: UInt64 = 0
     private var snapshotError: String?
     private var stopping = false
-    private let lexical = SearchWorkQueue(), inference = SearchWorkQueue(), retrieval = SearchWorkQueue()
+    let lexical = SearchWorkQueue()
+    private let inference = SearchWorkQueue(), retrieval = SearchWorkQueue()
     private let maintenance = SearchWorkQueue(), loader = SearchWorkQueue()
     private let previewsQueue = SearchWorkQueue(concurrency: 2, capacity: 32)
     private let previews: URL
@@ -101,6 +103,10 @@ final class SearchService: @unchecked Sendable {
     func stop() {
         stateLock.withLock {
             stopping = true
+            refreshEpoch &+= 1
+            refreshing = false
+            refreshAgain = false
+            refreshVectors = false
             activeWorker?.interrupt()
             if let loadingProcess { EmbeddingWorker.interrupt(loadingProcess) }
         }
@@ -540,118 +546,157 @@ final class SearchService: @unchecked Sendable {
         return reply
     }
     func requestRefresh(vectors: Bool) {
-        let begin = stateLock.withLock { () -> Bool in
+        let ticket = stateLock.withLock { () -> UInt64? in
+            guard !stopping else { return nil }
             refreshVectors = refreshVectors || vectors
             if refreshing {
                 refreshAgain = true
-                return false
+                return nil
             }
             refreshing = true
+            refreshEpoch &+= 1
+            return refreshEpoch
+        }
+        guard let ticket else { return }
+        loader.submit(key: "refresh", foreground: false, cancel: { [self] in finishRefresh(ticket) }) { [self] in
+            refreshWords(ticket)
+        }
+    }
+    private func refreshCurrent(_ ticket: UInt64) -> Bool {
+        stateLock.withLock { !stopping && refreshing && refreshEpoch == ticket }
+    }
+    private func refreshWords(_ ticket: UInt64) {
+        let started = Self.now
+        let load = stateLock.withLock { () -> Bool? in
+            guard !stopping && refreshing && refreshEpoch == ticket else { return nil }
+            let requested = refreshVectors
+            refreshVectors = false
+            return requested
+        }
+        guard let load else { finishRefresh(ticket); return }
+        do {
+            let main = try IndexStore(directory: directory, readOnly: true)
+            let words = try Searcher(store: main, loadVectors: false, loadNames: true)
+            let hasCode = configLock.withLock { !codeRoots.isEmpty }
+            let code = try hasCode ? IndexStore(directory: directory, file: IndexStore.codeFile, readOnly: true) : nil
+            let codeWords = try code.map { try Searcher(store: $0, loadVectors: false) }
+            let namesBuilt = Self.now
+            lexical.submit(key: "publish-words", foreground: false, cancel: { [self] in finishRefresh(ticket) }) { [self] in
+                guard refreshCurrent(ticket) else { finishRefresh(ticket); return }
+                let publishing = Self.now
+                let retired = SearchRetirement((main: searcher, code: codeSearcher))
+                store = main
+                searcher = words
+                codeStore = code
+                codeSearcher = codeWords
+                // Only the retirement task clears the old contents; this job may safely retain its container.
+                DispatchQueue.global(qos: .utility).async { retired.release() }
+                write(["event": "search_index", "state": "words_ready", "ms": [
+                    "name_load": (namesBuilt - started) * 1000,
+                    "words_publish": (Self.now - publishing) * 1000,
+                ]])
+                if load {
+                    loader.submit(key: "vector-admission", foreground: false,
+                        cancel: { [self] in finishRefresh(ticket) }) { [self] in
+                        admitVectorRefresh(ticket, hasCode: hasCode, started: started)
+                    }
+                } else {
+                    finishRefresh(ticket)
+                }
+            }
+        } catch { failRefresh(error, ticket: ticket) }
+    }
+    private struct VectorRefresh {
+        let main: IndexStore
+        let code: IndexStore?
+        let bytes: Int
+        let started: Double
+        let ticket: UInt64
+    }
+    private func admitVectorRefresh(_ ticket: UInt64, hasCode: Bool, started: Double) {
+        guard refreshCurrent(ticket) else { finishRefresh(ticket); return }
+        do {
+            let db = try IndexStore(directory: directory, readOnly: true)
+            // Pin vector rows AND metadata. This reader's ownership transfers to the retrieval lane on publication.
+            try db.db.execute("BEGIN")
+            var count: Int64 = 0
+            try db.db.query("SELECT count(*) FROM segments WHERE vec IS NOT NULL") { count = $0.int(0) }
+            let code = try hasCode ? IndexStore(directory: directory, file: IndexStore.codeFile, readOnly: true) : nil
+            try code?.db.execute("BEGIN")
+            try code?.db.query("SELECT count(*) FROM segments WHERE vec IS NOT NULL") { count += $0.int(0) }
+            var files: Int64 = 0
+            try db.db.query("SELECT count(*) FROM files") { files += $0.int(0) }
+            try code?.db.query("SELECT count(*) FROM files") { files += $0.int(0) }
+            let bytes = Int(min(count, Int64(Int.max / 3200))) * 1600
+                + Int(min(files, Int64(Int.max / 1536))) * 768 + 8 * 1024 * 1024
+            let budget = Int(min(ProcessInfo.processInfo.physicalMemory / 4, 4 * 1024 * 1024 * 1024))
+            guard bytes <= budget else {
+                throw CLIError("Search vectors exceed the host-memory budget; keyword search remains available")
+            }
+            let pending = VectorRefresh(main: db, code: code, bytes: bytes, started: started, ticket: ticket)
+            if stateLock.withLock({ snapshotBytes }) + bytes > budget {
+                // The serial retrieval owner drains earlier readers before releasing the old snapshot.
+                // Continue building afterwards; never occupy a loader worker waiting for that handoff.
+                retrieval.submit(key: "release", foreground: false,
+                    cancel: { [self] in finishRefresh(ticket) }) { [self] in
+                    guard refreshCurrent(ticket) else { finishRefresh(ticket); return }
+                    semanticSearcher = nil
+                    semanticCodeSearcher = nil
+                    semanticStore = nil
+                    semanticCodeStore = nil
+                    stateLock.withLock { snapshotBytes = 0 }
+                    loader.submit(key: "vector-build", foreground: false,
+                        cancel: { [self] in finishRefresh(ticket) }) { [self] in buildVectors(pending) }
+                }
+            } else {
+                buildVectors(pending)
+            }
+        } catch { failRefresh(error, ticket: ticket) }
+    }
+    private func buildVectors(_ pending: VectorRefresh) {
+        guard refreshCurrent(pending.ticket) else { finishRefresh(pending.ticket); return }
+        do {
+            let semantic = try Searcher(store: pending.main)
+            let codeSemantic = try pending.code.map { try Searcher(store: $0) }
+            retrieval.submit(key: "publish-vectors", foreground: false,
+                cancel: { [self] in finishRefresh(pending.ticket) }) { [self] in
+                guard refreshCurrent(pending.ticket) else { finishRefresh(pending.ticket); return }
+                semanticStore = pending.main
+                semanticSearcher = semantic
+                semanticCodeStore = pending.code
+                semanticCodeSearcher = codeSemantic
+                let revision = stateLock.withLock {
+                    snapshotBytes = pending.bytes
+                    snapshotRevision += 1
+                    snapshotError = nil
+                    return snapshotRevision
+                }
+                write(["event": "search_index", "state": "ready", "revision": revision,
+                    "vectors": semantic.vectorCount, "ms": ["vector_load": (Self.now - pending.started) * 1000]])
+                finishRefresh(pending.ticket)
+            }
+        } catch { failRefresh(error, ticket: pending.ticket) }
+    }
+    private func failRefresh(_ error: any Error, ticket: UInt64) {
+        let message = String("\(error)".prefix(500))
+        let report = stateLock.withLock { () -> Bool in
+            guard !stopping && refreshing && refreshEpoch == ticket else { return false }
+            snapshotError = message
             return true
         }
-        guard begin else { return }
-        loader.submit(key: "refresh", foreground: false) { [self] in
-            let started = Self.now
-            let load = stateLock.withLock {
-                let v = refreshVectors
-                refreshVectors = false
-                return v
-            }
-            do {
-                let main = try IndexStore(directory: directory, readOnly: true)
-                let words = try Searcher(store: main, loadVectors: false, loadNames: true)
-                let hasCode = configLock.withLock { !codeRoots.isEmpty }
-                let code =
-                    try hasCode ? IndexStore(directory: directory, file: IndexStore.codeFile, readOnly: true) : nil
-                let codeWords = try code.map { try Searcher(store: $0, loadVectors: false) }
-                let namesBuilt = Self.now
-                let wordsPublished = DispatchSemaphore(value: 0)
-                lexical.submit(key: "publish-words", foreground: false, cancel: { wordsPublished.signal() }) { [self] in
-                    let publishing = Self.now
-                    let retired = SearchRetirement((main: searcher, code: codeSearcher))
-                    store = main
-                    searcher = words
-                    codeStore = code
-                    codeSearcher = codeWords
-                    // The owner properties no longer refer to the old readers. The container is harmless if
-                    // this job retains it: its contents are explicitly released only by the retirement task.
-                    DispatchQueue.global(qos: .utility).async { retired.release() }
-                    write(["event": "search_index", "state": "words_ready", "ms": [
-                        "name_load": (namesBuilt - started) * 1000,
-                        "words_publish": (Self.now - publishing) * 1000,
-                    ]])
-                    wordsPublished.signal()
-                }
-                wordsPublished.wait()
-                if load {
-                    let db = try IndexStore(directory: directory, readOnly: true)
-                    // The read transaction pins vector rows AND their metadata to the same SQLite revision.
-                    try db.db.execute("BEGIN")
-                    var count: Int64 = 0
-                    try db.db.query("SELECT count(*) FROM segments WHERE vec IS NOT NULL") { count = $0.int(0) }
-                    let codeDB =
-                        try hasCode ? IndexStore(directory: directory, file: IndexStore.codeFile, readOnly: true) : nil
-                    try codeDB?.db.execute("BEGIN")
-                    try codeDB?.db.query("SELECT count(*) FROM segments WHERE vec IS NOT NULL") { count += $0.int(0) }
-                    var files: Int64 = 0
-                    try db.db.query("SELECT count(*) FROM files") { files += $0.int(0) }
-                    try codeDB?.db.query("SELECT count(*) FROM files") { files += $0.int(0) }
-                    let bytes =
-                        Int(min(count, Int64(Int.max / 3200))) * 1600 + Int(min(files, Int64(Int.max / 1536))) * 768 + 8
-                        * 1024 * 1024
-                    let budget = Int(min(ProcessInfo.processInfo.physicalMemory / 4, 4 * 1024 * 1024 * 1024))
-                    guard bytes <= budget else {
-                        throw CLIError("Search vectors exceed the host-memory budget; keyword search remains available")
-                    }
-                    if stateLock.withLock({ snapshotBytes }) + bytes > budget {
-                        let drained = DispatchSemaphore(value: 0)
-                        retrieval.submit(key: "release", foreground: false, cancel: { drained.signal() }) { [self] in
-                            semanticSearcher = nil
-                            semanticCodeSearcher = nil
-                            semanticStore = nil
-                            semanticCodeStore = nil
-                            stateLock.withLock { snapshotBytes = 0 }
-                            drained.signal()
-                        }
-                        drained.wait()
-                    }
-                    let semantic = try Searcher(store: db)
-                    let codeSemantic = try codeDB.map { try Searcher(store: $0) }
-                    let vectorsPublished = DispatchSemaphore(value: 0)
-                    retrieval.submit(key: "publish-vectors", foreground: false, cancel: { vectorsPublished.signal() }) {
-                        [self] in
-                        semanticStore = db
-                        semanticSearcher = semantic
-                        semanticCodeStore = codeDB
-                        semanticCodeSearcher = codeSemantic
-                        stateLock.withLock {
-                            snapshotBytes = bytes
-                            snapshotRevision += 1
-                            snapshotError = nil
-                        }
-                        write([
-                            "event": "search_index", "state": "ready", "revision": snapshotRevision,
-                            "vectors": semantic.vectorCount,
-                            "ms": ["vector_load": (Self.now - started) * 1000],
-                        ])
-                        vectorsPublished.signal()
-                    }
-                    vectorsPublished.wait()
-                }
-            } catch {
-                stateLock.withLock { snapshotError = String("\(error)".prefix(500)) }
-                write(["event": "search_index", "state": "unavailable", "error": "\(error)"])
-            }
-            let again = stateLock.withLock { () -> Bool in
-                refreshing = false
-                let a = refreshAgain
-                refreshAgain = false
-                return a
-            }
-            // Only an explicit pending vector request may rebuild vectors. A coalesced name refresh must
-            // not infer vector work merely because a compatible snapshot is already loaded.
-            if again { requestRefresh(vectors: false) }
+        if report { write(["event": "search_index", "state": "unavailable", "error": message]) }
+        finishRefresh(ticket)
+    }
+    private func finishRefresh(_ ticket: UInt64) {
+        let again = stateLock.withLock { () -> Bool in
+            guard refreshing && refreshEpoch == ticket else { return false }
+            refreshing = false
+            let requested = refreshAgain
+            refreshAgain = false
+            return !stopping && requested
         }
+        // Pending vector intent is retained separately. Names alone never imply vector loading.
+        if again { requestRefresh(vectors: false) }
     }
     private func write(_ fields: [String: Any]) {
         if fields["event"] as? String == "encoder" { stateLock.withLock { encoderReceipt = fields } }

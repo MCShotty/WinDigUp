@@ -2123,7 +2123,10 @@ fn held_now(app: &AppHandle) {
     }
     if held.is_some() {
         let stopping = shell.clone();
-        std::thread::spawn(move || stopping.index.stop());
+        std::thread::spawn(move || {
+            stopping.index.stop();
+            stopping.search.refresh_names();
+        });
     }
     changed(app);
     if held.is_none() {
@@ -2139,7 +2142,10 @@ fn set_paused(app: &AppHandle, paused: bool) {
     if paused {
         // It may take a moment to leave (up to two seconds): not on the main thread.
         let stopping = shell.clone();
-        std::thread::spawn(move || stopping.index.stop());
+        std::thread::spawn(move || {
+            stopping.index.stop();
+            stopping.search.refresh_names();
+        });
     }
     changed(app);
     if !paused {
@@ -2264,7 +2270,10 @@ fn index_event(app: &AppHandle, event: Value) {
     }
     app.state::<Arc<Shell>>().status.lock().unwrap().apply(&event);
     match event["event"].as_str().unwrap_or_default() {
-        "scan_batch" | "sync" | "scan_cancelled" | "error" => refresh_search_names(app),
+        "scan_batch" => {
+            if event["namesChanged"] != false { refresh_search_names(app); }
+        }
+        "scanning" | "sync" | "scan_cancelled" | "error" => refresh_search_names(app),
         "file" | "rest" => reload(app, false),
         "idle" => {
             reload(app, true);
@@ -2278,7 +2287,10 @@ fn index_event(app: &AppHandle, event: Value) {
             }
         }
         "exit" => reload(app, true),
-        "ended" => index_ended(app, &event),
+        "ended" => {
+            refresh_search_names(app);
+            index_ended(app, &event);
+        }
         _ => {}
     }
     changed(app);
