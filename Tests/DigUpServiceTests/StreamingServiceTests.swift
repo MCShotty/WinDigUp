@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import DigUpKit
+@testable import DigUpKit
 @testable import digup
 
 @Suite(.serialized)
