@@ -29,6 +29,7 @@ let browser;
         if(publication===3)hits.push(file("receipt-obsolete-refresh.txt"));
         if(publication>=4)hits.push(file("receipt-latest-refresh.txt"));
         if(publication===5)hits.push(file("receipt-intermediate-refresh.txt"));
+        if(publication===4)hits.push(file("receipt-current-publication.txt"));
         return hits;
       };
       window.__TAURI__.core.invoke=async(command,args={})=>{
@@ -113,7 +114,7 @@ let browser;
     await page.evaluate(()=>{window.holdNextWords=true;window.published=3;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
     await page.waitForFunction(()=>heldWords.length===1);
     await page.evaluate(()=>{window.published=4;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
-    await row("file:C:/docs/receipt-latest-refresh.txt").waitFor({state:"visible"});
+    await row("file:C:/docs/receipt-current-publication.txt").waitFor({state:"visible"});
     await page.evaluate(()=>heldWords.splice(0).forEach(release=>release()));await page.waitForTimeout(80);
     assert.equal(await row("file:C:/docs/receipt-obsolete-refresh.txt").count(),0,"An older lexical completion replaced the current index publication");
     assert.equal(await row("file:C:/docs/receipt-latest-refresh.txt").count(),1);

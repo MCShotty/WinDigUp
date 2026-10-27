@@ -159,7 +159,7 @@ struct SearchNameRefreshTests {
         #expect(reply["status"] as? String == "superseded")
         #expect((reply["hits"] as? [[String: Any]])?.isEmpty == true)
         // Cancellation completed while the owner was still deliberately held.
-        #expect(returned.wait(timeout: .now()) == .timedOut)
+        #expect(!Fixture.isSignaled(returned))
         release.signal()
         try await Fixture.signal(returned)
         #expect(mailbox.events("ready") == 0)
@@ -194,7 +194,7 @@ struct SearchNameRefreshTests {
         _ = try await mailbox.reply(80)
         service.admit(SearchMessage(["op": "search", "id": 81, "q": "initial", "meaning": false]))
         #expect((try await mailbox.reply(81)["hits"] as? [[String: Any]])?.count == 1)
-        #expect(returned.wait(timeout: .now()) == .timedOut)
+        #expect(!Fixture.isSignaled(returned))
         release.signal()
         try await Fixture.signal(returned)
         _ = try await mailbox.take { $0["event"] as? String == "search_index" && $0["state"] as? String == "words_ready" }
