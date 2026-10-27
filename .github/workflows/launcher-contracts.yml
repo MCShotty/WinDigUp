@@ -10,12 +10,16 @@ permissions:
   contents: read
 jobs:
   package:
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
       - name: Parse PowerShell sources and build test-signed package
-        shell: pwsh
+        shell: powershell
         env:
           DIGUP_MSIX_TEST_SIGN: "1"
         run: |

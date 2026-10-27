@@ -1,6 +1,16 @@
 param([string]$InstallRoot=(Join-Path $env:LOCALAPPDATA 'DigUp'),[switch]$PrepareTrust,[string]$CertificatePath)
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true'){throw 'This test modifies certificate trust and is restricted to a disposable Actions runner.'}
+# Appx on Windows Server 2022 requires Windows PowerShell's full .NET Framework host.
+if($PSVersionTable.PSEdition -eq 'Core' -or ![Environment]::Is64BitProcess){
+ $folder=if([Environment]::Is64BitOperatingSystem -and ![Environment]::Is64BitProcess){'Sysnative'}else{'System32'}
+ $native=Join-Path $env:WINDIR ($folder+'/WindowsPowerShell/v1.0/powershell.exe')
+ $forward=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$PSCommandPath,'-InstallRoot',$InstallRoot)
+ if($PrepareTrust){$forward+='-PrepareTrust'}
+ if($CertificatePath){$forward+=@('-CertificatePath',$CertificatePath)}
+ & $native @forward
+ exit $LASTEXITCODE
+}
 $source=if($CertificatePath){$CertificatePath}else{Join-Path $PSScriptRoot '../shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer'}
 if($PrepareTrust){
  if(!(Test-Path $source)){throw 'Test signing certificate was not produced.'}
