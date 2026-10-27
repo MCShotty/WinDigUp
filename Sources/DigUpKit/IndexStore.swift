@@ -50,22 +50,29 @@ public final class IndexStore {
         return (prefix,prefix+"\u{10FFFF}")
     }
 
+    /// SQLite path ranges compare UTF-8 bytes; Swift String equality also equates distinct Unicode spellings.
+    public static func uniqueLiteralPaths(_ paths: [String]) -> [String] {
+        var seen=Set<Data>()
+        return paths.filter {seen.insert(Data($0.utf8)).inserted}
+    }
+
     /// Unenumerated paths retain their cached rows but cannot supply background work.
     public var pendingExcludedPaths: [String] = [] {
         didSet {
             let scopes=scope?.map {root in (root,literalScope ? [root] : [root,FolderSelection.realPath(root)])}
             if pendingExcludedPaths.count>64,let scopes {
-                pendingExcludedPaths=Array(Set(pendingExcludedPaths.map {path in
-                    scopes.first(where: {entry in entry.1.contains {root in path==root || FolderSelection.isInside(path,root)}})?.0 ?? path
-                })).sorted()
+                pendingExcludedPaths=Self.uniqueLiteralPaths(pendingExcludedPaths.flatMap {path -> [String] in
+                    let matching=scopes.filter {entry in entry.1.contains {root in path==root || FolderSelection.isInside(path,root)}}
+                    return matching.isEmpty ? [path] : matching.map(\.0)
+                }).sorted()
             }
             var conditions:[String]=[]
             var values:[SQLValue]=[]
-            for path in Set(pendingExcludedPaths) {
+            for path in Self.uniqueLiteralPaths(pendingExcludedPaths) {
                 if let scopes,!scopes.contains(where: {entry in
                     entry.1.contains {root in path==root || FolderSelection.isInside(path,root) || FolderSelection.isInside(root,path)}
                 }) {continue}
-                let variants=Set(literalScope ? [path] : [path,FolderSelection.realPath(path)])
+                let variants=Self.uniqueLiteralPaths(literalScope ? [path] : [path,FolderSelection.realPath(path)])
                 for variant in variants {
                     let prefix=variant.hasSuffix("/") ? variant : variant+"/"
                     if conditions.count>=128 {
