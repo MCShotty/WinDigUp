@@ -54,6 +54,16 @@ let browser;
     assert.ok(await page.locator('[data-result-key^="app:"]').count()>0);
     assert.ok(await page.locator('[data-result-key^="setting:"]').count()>0);
     if(view==="index.html")assert.equal(await page.locator("#result-preview").isVisible(),true,"An empty scope receipt closed app details");
+    else {
+      const choose=page.getByRole("button",{name:"Choose folders for file search",exact:true});
+      await choose.waitFor({state:"visible"});await choose.focus();
+      await page.evaluate(()=>{window.previousScopeAction=document.activeElement;window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
+      await page.waitForFunction(()=>window.previousScopeAction!==document.querySelector('[data-scope-setup="files"]'));
+      assert.equal(await page.evaluate(()=>document.activeElement.dataset.scopeSetup),"files","Refreshing an empty source lost the focused action");
+      await choose.press("Enter");
+      assert.ok(await page.evaluate(()=>window.calls.some(c=>c.command==="choose_folders")));
+      assert.equal(await page.evaluate(()=>state.selection),selected,"The folder action changed native selection");
+    }
     await page.evaluate(()=>window.emit("search-scope",{folders:[],hasCode:true}));
     await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
     assert.equal(await page.evaluate(()=>state.selection),selected,"Scope change moved the selected application");
@@ -77,13 +87,14 @@ let browser;
     await page.fill("#query","code: scope");await page.waitForSelector(".row");
     assert.match(await page.locator(".row").first().textContent(),/main\.py/,"Regular folder scope disabled separate code roots");
     if(view==="index.html")assert.equal(await page.locator("#file-setup").isVisible(),false,"A nonempty code reply retained the folder hint");
-    await page.evaluate(()=>{window.codeSelected=false;window.emit("search-scope",{folders:[],hasCode:false});window.releaseOldFiles();});
+    await page.evaluate(()=>{window.codeSelected=false;window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
     await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
-    if(view==="index.html"){
-      const choose=page.getByRole("button",{name:"Choose folders for code search",exact:true});
-      await choose.waitFor({state:"visible"});await choose.click();
-      assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_settings").at(-1).args.tab),"code");
-    }
+    const chooseCode=page.getByRole("button",{name:"Choose folders for code search",exact:true});
+    await chooseCode.waitFor({state:"visible"});await chooseCode.click();
+    if(view==="index.html")assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_settings").at(-1).args.tab),"code");
+    else assert.ok(await page.evaluate(()=>window.calls.some(c=>c.command==="choose_code_folders")));
+    await page.evaluate(()=>{window.emit("search-scope",{folders:[],hasCode:false});window.releaseOldFiles();});
+    await page.waitForFunction(()=>!document.querySelector(".cell")&&!document.querySelector(".row"));
     await page.fill("#query","apps:");await page.waitForSelector('[data-result-key^="app:"]');
     if(view==="index.html")assert.equal(await page.locator("#file-setup").isVisible(),false);
     await page.fill("#query","settings:");await page.waitForSelector('[data-result-key^="setting:"]');
@@ -94,16 +105,14 @@ let browser;
     await page.emulateMedia({colorScheme:"dark"});await page.setViewportSize({width:700,height:700});
     await page.fill("#query","scope");await page.waitForSelector('[data-result-key^="app:"]');
     assert.equal(await page.locator(fileRows).count(),0);
-    if(view==="index.html"){
-      await page.waitForFunction(()=>state.finalGeneration===state.generation);
-      await page.getByRole("button",{name:"Choose folders for file search",exact:true}).waitFor({state:"visible"});
-      await page.evaluate(()=>{window.selectedFolders=["C:/docs"];window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
-      await page.waitForSelector(".row");
-      assert.equal(await page.locator("#file-setup").isVisible(),false,"A nonempty native reply did not clear the hint");
-      assert.equal(await page.evaluate(()=>state.fileScopeEmpty),false);
-      await page.setViewportSize({width:360,height:700});
-      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
-    }
+    await page.waitForFunction(()=>state.finalGeneration===state.generation);
+    await page.getByRole("button",{name:"Choose folders for file search",exact:true}).waitFor({state:"visible"});
+    await page.evaluate(()=>{window.selectedFolders=["C:/docs"];window.emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
+    await page.waitForSelector(fileRows);
+    assert.equal(await page.getByRole("button",{name:"Choose folders for file search",exact:true}).isVisible(),false,"A nonempty native reply did not clear the hint");
+    assert.equal(await page.evaluate(()=>state.fileScopeEmpty),false);
+    if(view==="index.html")await page.setViewportSize({width:360,height:700});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     assert.deepEqual(errors,[]);
     await page.close();
   }

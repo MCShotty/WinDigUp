@@ -135,7 +135,7 @@ function run(filesOnly = false) {
   SearchTiming.begin(generation);
   state.exactFilenameKnown=false;state.exactFilename=false;
   state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;state.finalGeneration=-1;
-  state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;
+  state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;state.fileScopeEmpty=null;
   let lexicalRequest=0,lexicalPublished=0,meaningRequest=0,meaningPublished=0;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
@@ -197,7 +197,7 @@ function run(filesOnly = false) {
         state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;
         if(state.finalGeneration===generation)shown=mergeFileSearchReplies(state.fileMeaning,shown,text);
       }
-      state.filesPending=false;
+      state.filesPending=false;state.fileScopeEmpty=shown.scope_empty===true;
       if(meaning&&shown.semantic_error)state.error=shown.semantic_error;
       const hits=shown.hits||[],strong=shown.strong??hits.length;
       const counts={apps:applicationSearch.total,settings:settingsSearch.total};
@@ -339,6 +339,7 @@ function renderContent() {
   restoreHandoff();
   const focused = document.activeElement;
   const focusedLaunch = focused.closest?.(".app-row")?.dataset.resultKey;
+  const focusedScope=focused.closest?.("[data-scope-setup]")?.dataset.scopeSetup;
   const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
   state.renderedGeneration = state.generation;
   thumbnails.disconnect();
@@ -364,7 +365,8 @@ function renderContent() {
       $content.append(applicationGroup([], "Apps", shownApps));
     if (shownSettings && !layout.sections.some(section => section.source === "settings") && settingsSearch.total > shownSettings)
       $content.append(windowsSettingsGroup([], shownSettings));
-    if (!state.info.folders.length && !isCode()) $content.append(chooseFolders());
+    if(state.fileScopeEmpty===true)$content.append(chooseFolders(isCode()));
+    else if(state.fileScopeEmpty!==false&&!state.info.folders.length&&!isCode())$content.append(chooseFolders());
     else if (!state.query.trim()) $content.append(home());
     else if (state.codePhase) $content.append(codeHintOrOff());
     else if (state.fileError) $content.append(fileSearchFailure());
@@ -375,6 +377,7 @@ function renderContent() {
   $content.scrollTop = scroll;
   if (focused.isConnected) focused.focus({preventScroll: true});
   else if (focusedLaunch) ($content.querySelector('[data-result-key="' + CSS.escape(focusedLaunch) + '"] .app-launch') || $query).focus({preventScroll: true});
+  else if(focusedScope)$content.querySelector('[data-scope-setup="' + CSS.escape(focusedScope) + '"]')?.focus({preventScroll:true});
 }
 
 function bestMatches(hits) {
@@ -784,10 +787,12 @@ function brandMark() {
   return mark;
 }
 
-function chooseFolders() {
-  const button = element("button", "button primary", "Choose Folders…");
-  button.onclick = () => invoke("choose_folders").catch(failed);
-  return centered(brandMark(), element("h2", "", "Choose folders to search"),
+function chooseFolders(code = false) {
+  const button = element("button", "button primary", code?"Choose Code Folders…":"Choose Folders…");
+  button.setAttribute("aria-label",code?"Choose folders for code search":"Choose folders for file search");
+  button.dataset.scopeSetup=code?"code":"files";
+  button.onclick = () => invoke(code?"choose_code_folders":"choose_folders").catch(failed);
+  return centered(brandMark(), element("h2", "", code?"Choose code folders to search":"Choose folders to search"),
                   element("p", "", "DigUp only looks where you tell it to."), button);
 }
 
