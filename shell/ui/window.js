@@ -135,6 +135,8 @@ function run(filesOnly = false) {
   SearchTiming.begin(generation);
   state.exactFilenameKnown=false;state.exactFilename=false;
   state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;state.finalGeneration=-1;
+  state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;
+  let lexicalRequest=0,meaningRequest=0;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
@@ -176,15 +178,22 @@ function run(filesOnly = false) {
   render();
   const filter=FILTERS.find(item=>item.key===state.filter);
   const search=async (meaning,passive=false)=>{
+    const request=meaning?++meaningRequest:++lexicalRequest;
     state.filesStarted=true;
     try {
-      const shown=await SearchTiming.measure(meaning?"file_meaning":"file_words",()=>ask({op:"search",q:text,code,meaning,
+      let shown=await SearchTiming.measure(meaning?"file_meaning":"file_words",()=>ask({op:"search",q:text,code,meaning,
         prefix_last:!meaning,limit:LIMIT,kinds:filter&&!code?filter.kinds:null,facets:!code,generation,passive,phase:meaning?"meaning":"words"}),passive);
-      if(generation!==state.generation||shown.status==="superseded")return;
-      if(!meaning){state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;}
-      if(!meaning&&state.finalGeneration===generation){state.lexicalReady=true;state.fileWords=shown.hits||[];applicationSearch.changed();return;}
-      if(meaning)state.finalGeneration=generation;
-      else {state.lexicalReady=true;state.fileWords=shown.hits||[];state.categoryQuery=shown.category_query===true;}
+      if(generation!==state.generation||request!==(meaning?meaningRequest:lexicalRequest)||shown.status==="superseded"||
+        (shown.generation!=null&&shown.generation!==generation))return;
+      if(meaning){
+        state.finalGeneration=generation;state.fileMeaning=shown;
+        if(state.fileWordsRefresh&&state.fileWordsReply)shown=mergeFileSearchReplies(shown,state.fileWordsReply,text);
+      } else {
+        state.lexicalReady=true;state.fileWords=shown.hits||[];state.fileWordsReply=shown;state.fileWordsRefresh ||= passive;
+        state.categoryQuery=shown.category_query===true;
+        state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;
+        if(state.finalGeneration===generation)shown=mergeFileSearchReplies(state.fileMeaning,shown,text);
+      }
       state.filesPending=false;
       if(meaning&&shown.semantic_error)state.error=shown.semantic_error;
       const hits=shown.hits||[],strong=shown.strong??hits.length;
@@ -200,7 +209,7 @@ function run(filesOnly = false) {
       else if(!shownRows.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
       render();if(debugPending&&meaning)report();
     }catch(error){
-      if(generation!==state.generation)return;
+      if(generation!==state.generation||request!==(meaning?meaningRequest:lexicalRequest))return;
       state.filesPending=false;state.lexicalReady=true;
       if(!state.ranked.length){state.error=String(error);state.fileError=String(error);}
       if(!state.navigated){const shown=rows();state.selection=shown.length?resultKey(shown[0]):null;}
@@ -276,6 +285,7 @@ function render() {
 }
 
 function renderBar() {
+  const focused=document.activeElement, focusedKind=focused.closest?.("#kinds .chip")?.dataset.title;
   if (!Apps.supported) { $query.placeholder = "Search files and code"; $query.setAttribute("aria-label", "Search files and code"); }
   const code = isCode();
   $("glass").innerHTML = code ? ICONS.code : SEARCH_ICON;
@@ -297,6 +307,7 @@ function renderBar() {
     $kinds.append(chip("Code", "code", code ? state.counts.code : null, code,
                        () => setFilter(state.filter === "code" ? null : "code"), 7));
   }
+  if(focusedKind&&!focused.isConnected)$kinds.querySelector('[data-title="' + CSS.escape(focusedKind) + '"]')?.focus({preventScroll:true});
 }
 
 /// All · Screenshots 4 · Images 9 · …: what the query found of each kind; a click shows only that kind.
@@ -308,6 +319,7 @@ function chip(title, icon, count, selected, action, number) {
   if (count != null && state.query.trim()) button.append(element("span", "number", count.toLocaleString()));
   button.title = `${title} (${MOD}${number})`;
   if(count!=null&&state.countScope==="ranked_candidates")button.title+=" · Counts cover the current matching result set";
+  if(count!=null&&state.countScope==="displayed_matches")button.title+=" · Counts cover displayed matching files";
   button.setAttribute("aria-pressed", String(selected));
   button.onclick = action;
   return button;

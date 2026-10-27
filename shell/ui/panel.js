@@ -67,6 +67,8 @@ function queryChanged(filesOnly = false) {
   state.heightFloor = FIELD_HEIGHT; lastAnnouncement = "";
   const generation = ++state.generation;
   SearchTiming.begin(generation);state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;
+  state.finalGeneration=-1;state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;
+  let lexicalRequest=0,meaningRequest=0;
   state.exactFilenameKnown=false;state.exactFilename=false;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
@@ -100,26 +102,36 @@ function queryChanged(filesOnly = false) {
   show({ hits: [], strong: 0 }, text, "words");
   // Words now. The last word is probably half-typed, so it matches as a prefix.
   state.filesStarted=true;
-  state.refreshWords=(passive=false)=>SearchTiming.measure("file_words",()=>ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40,generation,passive }),passive)
-    .then((reply) => {
-      if(generation!==state.generation||reply.status==="superseded")return;
-      state.lexicalReady=true;state.fileWords=reply.hits||[];state.categoryQuery=reply.category_query===true;
-      state.exactFilenameKnown=reply.exact_filename_known!==false;state.exactFilename=reply.exact_filename===true;
-      if(state.finalGeneration!==generation)show(reply,text,"words");else applicationSearch.changed();
-    })
-    .catch(error => { if (generation === state.generation && state.finalGeneration !== generation) failed(error); });
+  state.refreshWords=(passive=false)=>{
+    const request=++lexicalRequest;
+    return SearchTiming.measure("file_words",()=>ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40,generation,passive }),passive)
+      .then((reply) => {
+        if(generation!==state.generation||request!==lexicalRequest||reply.status==="superseded"||
+          (reply.generation!=null&&reply.generation!==generation))return;
+        state.lexicalReady=true;state.fileWords=reply.hits||[];state.fileWordsReply=reply;
+        state.fileWordsRefresh ||= passive;
+        state.categoryQuery=reply.category_query===true;
+        state.exactFilenameKnown=reply.exact_filename_known!==false;state.exactFilename=reply.exact_filename===true;
+        show(state.finalGeneration===generation?mergeFileSearchReplies(state.fileMeaning,reply,text):reply,
+          text,state.finalGeneration===generation?state.phase:"words");
+      })
+      .catch(error => { if (generation === state.generation && request===lexicalRequest && state.finalGeneration !== generation) failed(error); });
+  };
   state.frame=requestAnimationFrame(()=>state.refreshWords());
   // Submit meaning only after typing pauses; current-query words remain available meanwhile.
   state.refine = (passive=false) => {
+    const request=++meaningRequest;
     SearchTiming.measure("file_meaning",()=>ask({ op: "search", q: text, code, meaning: true, limit: 40,generation,passive }),passive)
       .then((reply) => {
-        if (generation !== state.generation||reply.status==="superseded") return;
-        state.finalGeneration = generation;
+        if (generation !== state.generation||request!==meaningRequest||reply.status==="superseded"||
+          (reply.generation!=null&&reply.generation!==generation)) return;
+        state.finalGeneration = generation;state.fileMeaning=reply;
         if(reply.semantic_error)state.error=reply.semantic_error;
-        show(reply, text, reply.meaning ? "meaning" : "wordsOnly");
+        show(state.fileWordsRefresh&&state.fileWordsReply?mergeFileSearchReplies(reply,state.fileWordsReply,text):reply,
+          text, reply.meaning ? "meaning" : "wordsOnly");
         if (debugPending) report();
       })
-      .catch(error => { if (generation === state.generation) failed(error); });
+      .catch(error => { if (generation === state.generation && request===meaningRequest) failed(error); });
   };
   state.timer=setTimeout(state.refine,TYPING_PAUSE);
 }

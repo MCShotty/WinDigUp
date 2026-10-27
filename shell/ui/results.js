@@ -327,3 +327,44 @@ function appendUsefulResult(container, hit, fail) {
   };
   container.append(button);
 }
+
+// A refreshed name index can advance while the compatible vector snapshot is unchanged.
+function mergeFileSearchReplies(semantic, lexical, text) {
+  if (!semantic?.meaning) return {...semantic, ...lexical, meaning:false,
+    ...(semantic?.semantic_error ? {semantic_error:semantic.semantic_error} : {})};
+  const split = (reply,keep=()=>true) => {
+    const hits=reply.hits || [], strong=Math.max(0,Math.min(reply.strong ?? hits.length,hits.length));
+    const seen=new Set(),ranked=[],weaker=[];
+    hits.forEach((hit,index)=>{
+      const key=resultKey(hit);
+      if(seen.has(key)||!keep(hit))return;
+      seen.add(key);(index<strong?ranked:weaker).push(hit);
+    });
+    return [ranked,weaker];
+  };
+  const currentWords=new Set((lexical.hits || []).map(resultKey));
+  const [ranked,weaker]=split(semantic,hit=>currentWords.has(resultKey(hit))||Number.isFinite(hit.z)||Number.isFinite(hit.cosine));
+  const [words,weakWords]=split(lexical);
+  const known=new Map([...ranked,...weaker].map(hit=>[resultKey(hit),hit]));
+  const strongKeys=new Set(ranked.map(resultKey));
+  const supplement=(target,hit) => {
+    const tier=MixedResults.tier(hit,text), at=target.findIndex(current=>MixedResults.tier(current,text)>tier);
+    target.splice(at<0?target.length:at,0,hit);
+  };
+  for(const hit of words) {
+    const key=resultKey(hit);
+    if(strongKeys.has(key))continue;
+    const previous=known.get(key);
+    if(previous)weaker.splice(weaker.findIndex(current=>resultKey(current)===key),1);
+    supplement(ranked,previous || hit);strongKeys.add(key);known.set(key,previous || hit);
+  }
+  for(const hit of weakWords) {
+    const key=resultKey(hit);if(known.has(key))continue;
+    supplement(weaker,hit);known.set(key,hit);
+  }
+  const facets={};
+  for(const hit of ranked)facets[hit.kind]=(facets[hit.kind] || 0)+1;
+  return {...semantic, hits:[...ranked,...weaker], strong:ranked.length, facets, count_scope:"displayed_matches",
+    exact_filename_known:lexical.exact_filename_known,exact_filename:lexical.exact_filename,
+    category_query:lexical.category_query};
+}
