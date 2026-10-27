@@ -69,7 +69,9 @@ let browser;
       prewarm:calls.filter(c=>c.command==="ask"&&c.args.request.op==="prewarm").length,apps:calls.filter(c=>c.command==="search_apps").length,settings:calls.filter(c=>c.command==="search_windows_settings").length}));
     await page.evaluate(view=>{window.savedFocus=document.activeElement;window.savedPreview=document.querySelector(view==="window.html"?"#side":"#result-preview").firstChild;
       window.published=1;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});},view);
-    await row(exactKey).waitFor({state:"visible"});
+    await row(exactKey).waitFor({state:view==="index.html"?"attached":"visible"});
+    assert.equal(await page.evaluate(key=>resultLayout().rows.some(hit=>resultKey(hit)===key),exactKey),true,"Fresh names were absent from displayed result data");
+    if(view==="index.html")assert.equal(await page.locator("#result-preview").isVisible(),true,"A name refresh closed selected app details");
     assert.equal(await row("file:C:/docs/receipt-initial-word.txt").count(),0,"A former keyword-only vector hit survived after its lexical match was removed");
     assert.equal(await page.evaluate(()=>state.generation),generation,"A name refresh started a new generation");
     assert.equal(await page.evaluate(()=>state.selection),selected,"A new exact filename replaced the chosen app");
@@ -80,20 +82,24 @@ let browser;
     assert.equal(await row(settingKey).count(),1,"File publication removed Windows settings results");
     if(mode==="ready")assert.equal(await row("file:C:/docs/unrelated-title.txt").count(),1,"Lexical refresh erased a semantic-only hit");
     else assert.match(await page.evaluate(()=>state.error),/accelerator unavailable/,"Name results cleared the persistent inference error");
-    if(view==="index.html"){await page.locator(".preview-back").click();await page.locator("#query").focus();}
+    if(view==="index.html"){await page.locator(".preview-back").click();await row(exactKey).waitFor({state:"visible"});await page.locator("#query").focus();}
     else await page.locator("#query").focus();
+    assert.equal(await page.evaluate(()=>state.selection),selected,"Back changed the selected application");
     await row(oldKey).click();
     if(view==="index.html"){await page.locator("#details-action").click();await page.locator(".preview-back").focus();}
     else await page.locator("#side .actions button").first().focus();
     await page.evaluate(view=>{window.savedFocus=document.activeElement;window.savedPreview=document.querySelector(view==="window.html"?"#side":"#result-preview").firstChild;
       window.savedChosen=structuredClone(state.chosen);window.published=2;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});},view);
-    await row("file:C:/docs/receipt-notes.txt").waitFor({state:"visible"});
+    await row("file:C:/docs/receipt-notes.txt").waitFor({state:view==="index.html"?"attached":"visible"});
+    assert.equal(await page.evaluate(()=>resultLayout().rows.some(hit=>hit.path==="C:/docs/receipt-notes.txt")),true);
+    if(view==="index.html")assert.equal(await page.locator("#result-preview").isVisible(),true,"A name refresh closed selected file details");
     assert.equal(await page.evaluate(()=>state.selection),oldKey);
     assert.deepEqual(await page.evaluate(()=>state.chosen),await page.evaluate(()=>savedChosen),"Fresh name metadata redirected the chosen file");
     assert.equal(await page.evaluate(()=>savedFocus===document.activeElement),true);
     assert.equal(await page.evaluate(view=>savedPreview===document.querySelector(view==="window.html"?"#side":"#result-preview").firstChild,view),true,"Name refresh rebuilt the selected file preview");
     await page.press("#query","Enter");
     assert.equal(await page.evaluate(()=>calls.filter(c=>c.command==="open_path").at(-1).args.path),"C:/docs/receipt-plan.txt");
+    await row("file:C:/docs/receipt-notes.txt").waitFor({state:"visible"});
     await page.evaluate(()=>{window.holdNextWords=true;window.published=5;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
     await page.waitForFunction(()=>heldWords.length===1);
     await page.evaluate(()=>{window.holdNextWords=true;window.published=6;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
