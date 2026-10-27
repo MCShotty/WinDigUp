@@ -1,0 +1,106 @@
+name: Final Intel installer acceptance
+on:
+  push:
+    branches: [codex/intel-installer-final]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prove compiled sources are unchanged and worker policy matches the PR
+        shell: pwsh
+        run: |
+          git fetch --no-tags --depth=1 origin 30f9eb20b902b68cf9e0dd9938ada85737ac2be8 54e5a9a3209e6aaea6e087af3fa8f4a358352703
+          if($LASTEXITCODE){throw 'Missing source provenance'}
+          git diff --exit-code 54e5a9a3209e6aaea6e087af3fa8f4a358352703 HEAD -- . ':!.github/workflows/intel-installer-final.yml'
+          if($LASTEXITCODE){throw 'Final production sources differ from the PR'}
+          git diff --exit-code 30f9eb20b902b68cf9e0dd9938ada85737ac2be8 54e5a9a3209e6aaea6e087af3fa8f4a358352703 -- . ':!worker/openvino/devices.py' ':!worker/openvino/npu_runtime.py' ':!worker/openvino/tests/test_devices.py'
+          if($LASTEXITCODE){throw 'Compiled inputs changed; a fresh application build is required'}
+      - name: Wait for the verified rebuilt application payload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers=@{Authorization=('Bearer '+$env:GH_TOKEN);Accept='application/vnd.github+json'}
+          $deadline=[DateTime]::UtcNow.AddMinutes(30)
+          do {
+            $run=Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/MCShotty/WinDigUp/actions/runs/40601602878'
+            if($run.status -eq 'completed'){
+              if($run.conclusion -ne 'success'){throw 'The rebuilt application acceptance failed'}
+              $artifacts=Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/MCShotty/WinDigUp/actions/runs/40601602878/artifacts'
+              $artifact=@($artifacts.artifacts|Where-Object name -eq 'DigUp-Intel-OpenVINO-windows-x64-test-signed')
+              if($artifact.Count -ne 1){throw 'Verified application artifact missing'}
+              ('CANDIDATE_ARTIFACT='+$artifact[0].id)|Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              exit 0
+            }
+            Write-Output 'Waiting for compiled-application installed checks.'
+            Start-Sleep -Seconds 15
+          }while([DateTime]::UtcNow -lt $deadline)
+          throw 'Verified application payload was not available before the deadline'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ env.CANDIDATE_ARTIFACT }}
+          run-id: 40601602878
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/verified-application
+      - name: Repackage with the PR's final Intel device policy
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'verified-application'
+          $cert=@(Get-ChildItem $root -Recurse -Filter TEST-ONLY-WinDigUp.cer)
+          $setup=@(Get-ChildItem $root -Recurse -Filter '*-setup.exe')
+          if($cert.Count -ne 1 -or $setup.Count -ne 1){throw 'Unexpected verified application layout'}
+          scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath $cert[0].FullName
+          if($LASTEXITCODE){throw 'CI identity trust failed'}
+          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode){throw 'Verified application extraction failed'}
+          $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
+          $release=Join-Path $PWD 'shell/src-tauri/target/release'
+          New-Item -ItemType Directory -Force $release|Out-Null
+          Copy-Item (Join-Path $installed 'DigUp.exe') (Join-Path $release 'DigUp.exe')
+          Copy-Item (Join-Path $installed 'DigUp.exe') (Join-Path $release 'digup-shell.exe')
+          Copy-Item (Join-Path $installed 'helper/digup-discovery.exe') (Join-Path $release 'digup-discovery.exe')
+          Copy-Item (Join-Path $installed 'helper') shell/src-tauri/helper -Recurse
+          Copy-Item (Join-Path $installed 'copilot') shell/src-tauri/copilot -Recurse
+          Remove-Item shell/src-tauri/copilot/registration.json -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $installed 'THIRD-PARTY-NOTICES.txt') shell/src-tauri/THIRD-PARTY-NOTICES.txt
+          Copy-Item worker/openvino/*.py shell/src-tauri/helper/openvino/ -Force
+          $config=Join-Path $env:RUNNER_TEMP 'intel-final.json'
+          @{bundle=@{resources=@{'helper/'='helper/';'copilot/'='copilot/';'THIRD-PARTY-NOTICES.txt'='THIRD-PARTY-NOTICES.txt'}}}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $config
+          Push-Location shell/src-tauri
+          try {
+            bash ../../scripts/tauri-cli.sh bundle --bundles nsis --config $config
+            if($LASTEXITCODE){throw 'Final Intel installer packaging failed'}
+          }finally{Pop-Location}
+      - name: Actual final installation and source/policy verification
+        shell: pwsh
+        run: |
+          $setup=@(Get-ChildItem shell/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
+          if($setup.Count -ne 1){throw 'Final installer missing'}
+          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode){throw 'Final installation failed'}
+          $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
+          foreach($name in @('devices.py','npu_runtime.py','prepare_model.py','digup_openvino.py')){
+            $expected=Get-FileHash (Join-Path $PWD ('worker/openvino/'+$name)) -Algorithm SHA256
+            $actual=Get-FileHash (Join-Path $installed ('helper/openvino/'+$name)) -Algorithm SHA256
+            if($expected.Hash -ne $actual.Hash){throw ('Installed Intel policy differs from PR: '+$name)}
+          }
+          $binary=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $installed 'DigUp.exe')))
+          if(!$binary.Contains('__TAURI_BUNDLE_TYPE_VAR_NSS') -or $binary.Contains('__TAURI_BUNDLE_TYPE_VAR_UNK')){throw 'NSIS updater marker was lost'}
+          scripts/check-windows-openvino.ps1
+          if($LASTEXITCODE){throw 'Final installed Intel runtime failed'}
+          scripts/check-windows-settings.ps1
+          if($LASTEXITCODE){throw 'Final Settings activation regressed'}
+          scripts/check-windows-copilot.ps1
+          if($LASTEXITCODE){throw 'Final registered launcher activation regressed'}
+          Write-Output 'PASS: final installed policy matches the PR; private Intel runtime and native activation passed. No model inference or physical GPU/NPU claim.'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: DigUp-Intel-OpenVINO-windows-x64-verified-test
+          path: |
+            shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+            shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer
