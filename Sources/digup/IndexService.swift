@@ -41,15 +41,38 @@ final class IndexService: @unchecked Sendable {
     private let model: SharedEmbedder
     /// The last report of folders that aren't there or can't be read, by index (said again only when it changes).
     private var unavailable: [Bool: (missing: [String], unreadable: [String])] = [:]
+    private var rootAliases:[Bool:[String:String]]=[:]
+    private var verifiedRootAliases:[Bool:[String:String]]=[:]
+    private var aliasLoaded=Set<Bool>()
+    private var invalidAliasCache=Set<Bool>()
+    private var uncertainAliasCache=Set<Bool>()
+    private var expectedAliasText:[Bool:String]=[:]
+    private var knownCountsComplete:[Bool:Bool]=[:]
+    private static let aliasKey="scan_root_aliases_v1"
+    private static func aliasID(_ path:String) -> String {Data(path.utf8).base64EncodedString()}
+    private static func validAliasPath(_ path:String) -> Bool {
+        guard path.hasPrefix("/"),path.utf8.count<=32768,!path.utf8.contains(0) else{return false}
+        return path=="/" || !path.split(separator:"/",omittingEmptySubsequences:false).dropFirst()
+            .contains { $0.isEmpty || $0=="." || $0==".." }
+    }
+    private struct RootAliasCache:Codable {
+        let schemaVersion:Int
+        let roots:[String:String]
+    }
     private let modelReady: () -> Bool
     private let newFilesLimit: Int
     private let linger: Double
     private let output: (([String: Any]) -> Void)?
+    private let beforeScanFolder: (@Sendable (URL) -> Void)?
 
     private let lock = NSLock()
     private var syncRequested = true       // the first thing it does
     private var codeSyncRequested = true
+    private var changedPaths: [Bool:Set<String>] = [:]
+    private var preferredFolders: [Bool:String] = [:]
+    private var priorityRevision=0
     private var stopRequested = false
+    private var inferenceFailure = false
     private var backfillAllowed: Bool
     /// A sync asked for while files are being indexed waits until then. A crawl of a big folder can take minutes, and
     /// a folder that keeps changing asks for the next one meanwhile: yielding at once, every pass went back to crawling
@@ -59,7 +82,8 @@ final class IndexService: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
 
     init(main: Part, code: Part?, folder: URL, model: SharedEmbedder, modelReady: @escaping () -> Bool,
-         backfill: Bool, newFilesLimit: Int, linger: Double, output: (([String: Any]) -> Void)? = nil) {
+         backfill: Bool, newFilesLimit: Int, linger: Double, output: (([String: Any]) -> Void)? = nil,
+         beforeScanFolder: (@Sendable (URL) -> Void)? = nil) {
         self.main = main
         self.code = code
         self.folder = folder
@@ -69,6 +93,7 @@ final class IndexService: @unchecked Sendable {
         self.newFilesLimit = newFilesLimit
         self.linger = linger
         self.output = output
+        self.beforeScanFolder = beforeScanFolder
         self.model.beforeInference = { [weak self] in self?.yieldToSearch() }
     }
 
@@ -103,8 +128,8 @@ final class IndexService: @unchecked Sendable {
             if again > 0 { emit(["event": "rescan", "files": again]) }
             for part in parts {
                 try part.indexer.checkModel()   // a new model: everything is queued again
-                if let keepOnly = part.keepOnly {
-                    let pruned = try part.store.prune(keepingUnder: keepOnly.map(\.path))
+                if let keepOnly = part.keepOnly, let namespaces=pruneNamespaces(part,roots:keepOnly) {
+                    let pruned = try part.store.prune(keepingUnder:namespaces,literalPaths:true)
                     if pruned > 0 { emit(["event": "pruned", "files": pruned, "code": part.code]) }
                 }
             }
@@ -117,12 +142,19 @@ final class IndexService: @unchecked Sendable {
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var exitStatus: Int32 = 0
         while true {
-            if lock.withLock({ () -> Bool in defer { syncRequested = false }; return syncRequested }) {
-                sync(main, into: &newFiles)
+            let requests = lock.withLock { () -> (Bool,Bool,[Bool:Set<String>]) in
+                defer { syncRequested=false;codeSyncRequested=false;changedPaths.removeAll() }
+                return (syncRequested,codeSyncRequested,changedPaths)
             }
-            if let code, lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
-                sync(code, into: &newCode)
+            var scans: [Part] = []
+            if requests.0 { scans.append(main) }
+            if requests.1, let code { scans.append(code) }
+            if !scans.isEmpty {
+                let queued = scan(scans,changed:requests.2)
+                newFiles.formUnion(queued[false] ?? [])
+                newCode.formUnion(queued[true] ?? [])
             }
+            if inferenceFailure { exitStatus=1 }
             if lock.withLock({ stopRequested }) { break }
             guard modelReady() else {
                 emitCounts("waiting", ["for": "model"])
@@ -140,7 +172,7 @@ final class IndexService: @unchecked Sendable {
                 if lock.withLock({ backfillAllowed }), parts.contains(where: { ((try? $0.store.pendingCount()) ?? 0) > 0 }) { continue }
             }
             if lock.withLock({ backfillAllowed }), (try? main.store.pendingCount()) ?? 1 == 0,
-               (try? code?.store.pendingCount() ?? 0) ?? 1 == 0, (try? main.store.unfinishedCount().files) ?? 0 > 0 {
+               (try? code?.store.pendingCount() ?? 0) ?? 1 == 0, (try? main.store.runnableUnfinishedCount()) ?? 0 > 0 {
                 guard finishLongFiles() else { exitStatus = 1; break }
                 if lock.withLock({ syncRequested || codeSyncRequested && code != nil }) { continue }
             }
@@ -180,52 +212,445 @@ final class IndexService: @unchecked Sendable {
         #endif
     }
 
-    /// A part's chosen folders that are there and readable right now; also what `pending` and the counts look at.
+    private func aliases(_ part:Part) -> [String:String] {
+        #if os(Windows)
+        return [:]
+        #else
+        if aliasLoaded.insert(part.code).inserted {
+            let wanted=Set((part.keepOnly ?? part.roots).map {IndexService.aliasID($0.path)})
+            let text=try? part.store.meta(IndexService.aliasKey)
+            expectedAliasText[part.code]=text
+            var result:[String:String]=[:]
+            var valid=text==nil
+            if let text,text.utf8.count<=256*1024,let data=text.data(using:.utf8),
+               let cache=try? JSONDecoder().decode(RootAliasCache.self,from:data),
+               cache.schemaVersion==1,cache.roots.count<=256 {
+                valid=true
+                for (identity,resolved) in cache.roots {
+                    guard let data=Data(base64Encoded:identity),let root=String(data:data,encoding:.utf8),
+                          IndexService.validAliasPath(root),IndexService.validAliasPath(resolved),
+                          Data(root.utf8).base64EncodedString()==identity else {valid=false;continue}
+                    if wanted.contains(identity) {result[identity]=resolved}
+                }
+            }
+            if valid {invalidAliasCache.remove(part.code)} else {invalidAliasCache.insert(part.code);result=[:]}
+            uncertainAliasCache.remove(part.code)
+            rootAliases[part.code]=result
+            if valid {saveAliases(part)}
+        }
+        return rootAliases[part.code] ?? [:]
+        #endif
+    }
+
+    private func saveAliases(_ part:Part) {
+        #if !os(Windows)
+        guard !invalidAliasCache.contains(part.code) else{return}
+        do {
+            try part.store.db.transaction {
+                let latest=try part.store.meta(IndexService.aliasKey)
+                let expected=expectedAliasText[part.code]
+                let same:Bool
+                switch (latest,expected) {
+                case (nil,nil):same=true
+                case let (left?,right?):same=left.utf8.elementsEqual(right.utf8)
+                default:same=false
+                }
+                guard same else {uncertainAliasCache.insert(part.code);return}
+                var merged:[String:String]=[:]
+                if part.keepOnly==nil,let latest,let data=latest.data(using:.utf8),
+                   let cache=try? JSONDecoder().decode(RootAliasCache.self,from:data),cache.schemaVersion==1 {
+                    merged=cache.roots
+                }
+                for (identity,path) in rootAliases[part.code] ?? [:] {merged[identity]=path}
+                let owned=Set(rootAliases[part.code]?.keys.map {$0} ?? [])
+                for identity in merged.keys.sorted() where merged.count>256 && !owned.contains(identity) {merged[identity]=nil}
+                let cache=RootAliasCache(schemaVersion:1,roots:merged)
+                let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+                let data=try encoder.encode(cache)
+                guard merged.count<=256,data.count<=256*1024,let value=String(data:data,encoding:.utf8) else {
+                    uncertainAliasCache.insert(part.code);return
+                }
+                if latest?.utf8.elementsEqual(value.utf8) != true {try part.store.setMeta(IndexService.aliasKey,value)}
+                expectedAliasText[part.code]=value
+            }
+        } catch {uncertainAliasCache.insert(part.code)}
+        #endif
+    }
+
+    /// Capture one validated namespace set. A failed resolution must never shrink the destructive prune's keep set.
+    private func pruneNamespaces(_ part:Part,roots:[URL]) -> [String]? {
+        #if os(Windows)
+        return IndexStore.uniqueLiteralPaths(roots.map(\.path))
+        #else
+        let cached=aliases(part)
+        return Self.validatedPruneNamespaces(roots:roots,aliases:cached,
+            requiresLiteral:invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code))
+        #endif
+    }
+
+    #if !os(Windows)
+    static func resolvedPrunePath(_ path:String) -> String? {
+        guard let resolved=realpath(path,nil) else{return nil}
+        defer {free(resolved)}
+        return String(cString:resolved)
+    }
+
+    static func validatedPruneNamespaces(roots:[URL],aliases:[String:String],requiresLiteral:Bool,
+        resolve:(String)->String? = IndexService.resolvedPrunePath) -> [String]? {
+        var namespaces:[String]=[]
+        for root in roots {
+            let path=root.path
+            guard let resolved=resolve(path),Arguments.isFolder(root),Arguments.isReadable(root) else{return nil}
+            if let previous=aliases[aliasID(path)],!previous.utf8.elementsEqual(resolved.utf8) {return nil}
+            let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+            if requiresLiteral && !literal {return nil}
+            namespaces += [path,resolved]
+        }
+        return IndexStore.uniqueLiteralPaths(namespaces)
+    }
+    #endif
+
+    private func namespacePaths(_ part:Part,roots:[URL]) -> [String] {
+        let cached=aliases(part)
+        return IndexStore.uniqueLiteralPaths(roots.flatMap {root -> [String] in
+            let path=root.path
+            #if os(Windows)
+            return [path]
+            #else
+            if let resolved=cached[IndexService.aliasID(path)] {return [path,resolved]}
+            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {
+                let resolved=FolderSelection.realPath(path)
+                let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+                if literal && Arguments.isFolder(root) && Arguments.isReadable(root) {return [path,resolved]}
+                return [path]
+            }
+            return [path,FolderSelection.realPath(path)]
+            #endif
+        }).sorted()
+    }
+
+    private func scanPath(_ path:String,part:Part) -> String {
+        #if os(Windows)
+        return path
+        #else
+        let cached=aliases(part)
+        for root in part.roots.sorted(by:{$0.path.count>$1.path.count}) {
+            if let resolved=cached[IndexService.aliasID(root.path)],path==root.path || FolderSelection.isInside(path,root.path) {
+                return resolved+String(path.dropFirst(root.path.count))
+            }
+        }
+        return path
+        #endif
+    }
+
     private func availableRoots(_ part: Part) -> [URL] {
-        var missing: [URL] = [], unreadable: [URL] = []
+        var missing:[URL]=[],unreadable:[URL]=[],available:[URL]=[]
+        if uncertainAliasCache.contains(part.code) {aliasLoaded.remove(part.code)}
+        var cached=aliases(part)
+        var verified:[String:String]=[:]
+        var complete=true
+        var allLiteralAndAvailable=true
         for root in part.roots {
-            emit(["event": "phase", "stage": "checking_folder", "path": root.path, "code": part.code,
-                  "message": "Checking selected folders…"])
-            if !Arguments.isFolder(root) { missing.append(root) }
-            else if !Arguments.isReadable(root) { unreadable.append(root) }
+            let path=root.path
+            let identity=IndexService.aliasID(path)
+            emit(["event":"phase","stage":"checking_folder","path":path,"code":part.code,
+                  "message":"Checking selected folders…"])
+            if !Arguments.isFolder(root) {missing.append(root);allLiteralAndAvailable=false}
+            else if !Arguments.isReadable(root) {unreadable.append(root);allLiteralAndAvailable=false}
+            else {
+                #if os(Windows)
+                available.append(root)
+                #else
+                guard let resolved=Self.resolvedPrunePath(path) else {
+                    missing.append(root);allLiteralAndAvailable=false
+                    if cached[identity]==nil {complete=false}
+                    continue
+                }
+                let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+                if !literal {allLiteralAndAvailable=false}
+                let changed=cached[identity].map {!$0.utf8.elementsEqual(resolved.utf8)} ?? false
+                let unverified=(invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code))
+                    && !literal && cached[identity]==nil
+                if changed || unverified {
+                    unreadable.append(root)
+                    if unverified {complete=false}
+                    emit(["event":"source_unavailable","code":part.code,"path":path,
+                        "message":changed
+                            ? "This selected folder now points elsewhere. Choose its current folder in Settings."
+                            : "This folder's cached location cannot be verified. Choose its current folder in Settings."])
+                } else {
+                    cached[identity]=resolved
+                    verified[identity]=resolved
+                    available.append(URL(fileURLWithPath:resolved,isDirectory:true))
+                }
+                #endif
+            }
+            #if !os(Windows)
+            if (missing.contains(root) || unreadable.contains(root)) && cached[identity]==nil {complete=false}
+            #endif
         }
-        let report = (missing.map(\.path), unreadable.map(\.path))
-        if unavailable[part.code].map({ $0 != report }) ?? !(missing.isEmpty && unreadable.isEmpty) {
-            emit(["event": "missing", "folders": report.0, "unreadable": report.1, "code": part.code])
+        #if !os(Windows)
+        rootAliases[part.code]=cached
+        if allLiteralAndAvailable {invalidAliasCache.remove(part.code)}
+        saveAliases(part)
+        if uncertainAliasCache.contains(part.code) {
+            available.removeAll {folder in
+                let originals=part.roots.filter {cached[IndexService.aliasID($0.path)]?.utf8.elementsEqual(folder.path.utf8)==true && $0.path != folder.path}
+                if originals.isEmpty {return false}
+                unreadable += originals
+                for original in originals {verified[IndexService.aliasID(original.path)]=nil}
+                complete=false
+                return true
+            }
         }
-        unavailable[part.code] = report
-        let available = part.roots.filter { !missing.contains($0) && !unreadable.contains($0) }
-        part.store.scope = available.map(\.path)
+        #endif
+        verifiedRootAliases[part.code]=verified
+        knownCountsComplete[part.code]=complete
+        let report=(missing.map(\.path),unreadable.map(\.path))
+        if unavailable[part.code].map({$0 != report}) ?? !(missing.isEmpty && unreadable.isEmpty) {
+            emit(["event":"missing","folders":report.0,"unreadable":report.1,"code":part.code])
+        }
+        unavailable[part.code]=report
+        part.store.setLiteralScope(namespacePaths(part,roots:part.roots))
+        let blocked=namespacePaths(part,roots:missing+unreadable)
+        part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(part.store.pendingExcludedPaths+blocked).sorted()
         return available
     }
 
-    private func sync(_ part: Part, into newFiles: inout Set<Int64>) {
-        let started = Date()
+    private func priorityProvider(_ active: [Part]) -> () -> (Int,String)? {
+        var revision = -1
+        var pending: [(Int,String)] = []
+        return { [self] in
+            lock.withLock {
+                if revision != priorityRevision {
+                    revision=priorityRevision
+                    pending=active.indices.compactMap {source in
+                        preferredFolders[active[source].code].map {(source,scanPath($0,part:active[source]))}
+                    }
+                }
+                return pending.isEmpty ? nil : pending.removeFirst()
+            }
+        }
+    }
+
+    static func expandedHoldNamespaces(_ paths:[String],verifiedRoots:[(chosen:String,resolved:String)]) -> [String] {
+        var expanded=paths
+        for root in verifiedRoots {
+            for (source,target) in [(root.chosen,root.resolved),(root.resolved,root.chosen)] {
+                for path in paths where IndexStore.literalPathIsUnder(path,source) {
+                    expanded.append(target+String(decoding:path.utf8.dropFirst(source.utf8.count),as:UTF8.self))
+                }
+            }
+        }
+        return IndexStore.uniqueLiteralPaths(expanded)
+    }
+
+    static func reconcilePendingHolds(_ existing:[String],completed:[String],incomplete:[String],
+        verifiedRoots:[(chosen:String,resolved:String)]) -> [String] {
+        let covered=expandedHoldNamespaces(completed,verifiedRoots:verifiedRoots)
+        let remaining=existing.filter {path in !covered.contains {IndexStore.literalPathIsUnder(path,$0)}}
+        return IndexStore.uniqueLiteralPaths(remaining+expandedHoldNamespaces(incomplete,verifiedRoots:verifiedRoots)).sorted()
+    }
+
+    private final class ScanWork {
+        let part: Part
+        let session: IndexScanSession
+        let stream: CrawlStream
+        var summary: Indexer.SyncSummary?
+        var finished = false
+        let verifiedRoots:[(chosen:String,resolved:String)]
+        init(part: Part, session: IndexScanSession, stream: CrawlStream, aliases:[String:String]) {
+            self.part=part;self.session=session;self.stream=stream
+            verifiedRoots=part.roots.compactMap {root in aliases[IndexService.aliasID(root.path)].map {(root.path,$0)}}
+        }
+    }
+
+    private func rootsForChanges(_ paths: Set<String>, part: Part, available: [URL]) -> [URL] {
+        if part.store.pendingExcludedPaths.count>64 {return available}
+        var selected=Set<String>()
+        for path in paths {
+            let normalized=URL(fileURLWithPath:scanPath(path,part:part)).standardizedFileURL.path
+            let url=URL(fileURLWithPath:FolderSelection.realPath(normalized))
+            guard let root=available.filter({url.path==$0.path || FolderSelection.isInside(url.path,$0.path)})
+                .max(by:{$0.path.count<$1.path.count}) else {continue}
+            if url.lastPathComponent==".gitignore" || url.path.contains("/.git/") ||
+                Rules.projectMarkerChanged(url.lastPathComponent) {
+                selected.insert(root.path);continue
+            }
+            let held=part.store.pendingExcludedPaths.filter {prefix in
+                url.path==prefix || FolderSelection.isInside(url.path,prefix)
+                    || FolderSelection.realPath(url.path)==prefix || FolderSelection.isInside(FolderSelection.realPath(url.path),prefix)
+            }.min(by:{$0.count<$1.count})
+            var parent=held.map {URL(fileURLWithPath:$0,isDirectory:true)} ?? url.deletingLastPathComponent()
+            if let held,!Arguments.isFolder(parent) {parent=URL(fileURLWithPath:held).deletingLastPathComponent()}
+            if url.path==root.path {parent=root}
+            while !Arguments.isFolder(parent) && parent.path.count>root.path.count {parent=parent.deletingLastPathComponent()}
+            if parent.path.count<root.path.count {parent=root}
+            if !Crawler.canScanSubtree(parent,selectedRoots:namespacePaths(part,roots:part.roots).map {URL(fileURLWithPath:$0,isDirectory:true)},options:part.indexer.scanOptions) {parent=root}
+            let canonical=FolderSelection.realPath(parent.path)
+            if !canonical.utf8.elementsEqual(parent.path.utf8) {selected.insert(root.path)}
+            else {selected.insert(parent.path)}
+        }
+        return selected.filter {path in !selected.contains {other in path != other && FolderSelection.isInside(path,other)}}
+            .sorted().map {URL(fileURLWithPath:$0,isDirectory:true)}
+    }
+
+    private func scan(_ requested: [Part], changed: [Bool:Set<String>] = [:]) -> [Bool:Set<Int64>] {
+        let started=Date()
+        var work: [ScanWork] = []
         defer {
-            let took = Date().timeIntervalSince(started)
-            lock.withLock { yieldAt = Date() + max(took, 2) }
+            for item in work { item.stream.cancel() }
+            for item in work {
+                if !item.finished {
+                    item.part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(item.part.store.pendingExcludedPaths+Self.expandedHoldNamespaces(item.session.rootPrefixes,verifiedRoots:item.verifiedRoots)).sorted()
+                }
+                item.stream.close();item.session.close()
+            }
+            lock.withLock { yieldAt=Date()+max(Date().timeIntervalSince(started),2) }
         }
+        var result: [Bool:Set<Int64>] = [:]
         do {
-            emit(["event": "scanning", "code": part.code])
-            let summary = try part.indexer.sync(availableRoots(part), onProgress: { progress in
-                emit(["event": "scan_progress", "stage": progress.stage, "root": progress.root, "path": progress.path,
-                      "visited": progress.visited, "candidates": progress.candidates, "code": part.code])
-            })
-            if summary.queued.count <= newFilesLimit { newFiles.formUnion(summary.queued) }
-            emitCounts("sync", [
-                "code": part.code,
-                "new": newFiles.count,   // about to be indexed, whatever the power source
-                "added": summary.added, "changed": summary.changed, "moved": summary.moved,
-                "removed": summary.removed, "unchanged": summary.unchanged,
-                "ms": Int(Date().timeIntervalSince(started) * 1000),
-                "started": started.timeIntervalSince1970,   // the app checks its sync request came before this
-                "visited": summary.crawl.visited, "candidates": summary.crawl.candidates.count,
-                "skipped": summary.crawl.skipped, "skippedFolders": summary.crawl.skippedFolders,
-                "unreadable": summary.crawl.unreadable.sorted(),
-            ])
+            let gate=NSLock()
+            for part in requested {
+                let available=availableRoots(part)
+                let requestedRoots=changed[part.code].map {rootsForChanges($0,part:part,available:available)} ?? available
+                let preferred=lock.withLock {preferredFolders[part.code]}.map {scanPath($0,part:part)}
+                let roots=requestedRoots.enumerated().sorted {left,right in
+                    let rank:(URL)->Int={root in
+                        guard let preferred else{return 1}
+                        return preferred==root.path || FolderSelection.isInside(preferred,root.path) ? 0 : 1
+                    }
+                    let first=rank(left.element),second=rank(right.element)
+                    return first==second ? left.offset<right.offset : first<second
+                }.map(\.element)
+                let session=try part.indexer.beginScan(roots)
+                let stream=CrawlStream(roots:roots,options:part.indexer.scanOptions,
+                    selectedRoots:namespacePaths(part,roots:part.roots).map {URL(fileURLWithPath:$0,isDirectory:true)},
+                    beforeFolder:beforeScanFolder,scanGate:gate)
+                work.append(ScanWork(part:part,session:session,stream:stream,aliases:verifiedRootAliases[part.code] ?? [:]))
+                emit(["event":"scanning","code":part.code,"discoveryActive":true])
+            }
+            var lastCounts=0.0
+            var dirtyCounts=Set<Bool>()
+            var dirtyNames=Set<Bool>()
+            func drain() throws {
+                for _ in 0..<8 {
+                for item in work where !item.finished {
+                    guard let event=item.stream.take() else { continue }
+                    switch event {
+                    case .progress(let progress):
+                        emit(["event":"scan_progress","stage":progress.stage,"root":progress.root,"path":progress.path,
+                              "visited":progress.visited,"candidates":progress.candidates,"code":item.part.code,
+                              "discoveryActive":true])
+                    case .batch(let candidates):
+                        let progress=try item.session.admit(candidates)
+                        dirtyCounts.insert(item.part.code)
+                        if !progress.queuedIDs.isEmpty {dirtyNames.insert(item.part.code)}
+                    case .finished(let report):
+                        item.summary=try item.session.finish(report)
+                        item.part.store.pendingExcludedPaths=Self.reconcilePendingHolds(
+                            item.part.store.pendingExcludedPaths,completed:item.session.rootPrefixes,
+                            incomplete:item.session.incompletePrefixes,verifiedRoots:item.verifiedRoots)
+                        item.finished=true
+                        dirtyCounts.remove(item.part.code)
+                        dirtyNames.remove(item.part.code)
+                        if let summary=item.summary {
+                            emitCounts("sync",[
+                                "code":item.part.code,"new":item.session.queuedCount<=newFilesLimit ? item.session.queuedCount : 0,
+                                "added":summary.added,"changed":summary.changed,"moved":summary.moved,
+                                "removed":summary.removed,"unchanged":summary.unchanged,
+                                "ms":Int(Date().timeIntervalSince(started)*1000),"started":started.timeIntervalSince1970,
+                                "visited":report.visited,"candidates":report.candidateCount,"skipped":report.skipped,
+                                "skippedFolders":report.skippedFolders,"unreadable":report.unreadablePaths.sorted(),
+                                "discoveryActive":false])
+                        }
+                    case .failed(let message):
+                        item.part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(item.part.store.pendingExcludedPaths+Self.expandedHoldNamespaces(item.session.rootPrefixes,verifiedRoots:item.verifiedRoots)).sorted()
+                        item.finished=true
+                        dirtyCounts.remove(item.part.code)
+                        dirtyNames.remove(item.part.code)
+                        emit(["event":"error","message":"sync failed: \(message)","code":item.part.code,
+                            "discoveryActive":false])
+                    }
+                }
+                }
+                let now=ProcessInfo.processInfo.systemUptime
+                if !dirtyCounts.isEmpty && now-lastCounts>=0.5 {
+                    for item in work where !item.finished && dirtyCounts.contains(item.part.code) {
+                        emitCounts("scan_batch",["code":item.part.code,"discoveryActive":true,
+                            "candidates":item.session.eligibleCount,"namesChanged":dirtyNames.contains(item.part.code)])
+                    }
+                    dirtyCounts.removeAll()
+                    dirtyNames.removeAll()
+                    lastCounts=now
+                }
+            }
+            let mayEmbed=modelReady() && lock.withLock { backfillAllowed }
+            if mayEmbed {
+                while !work.contains(where:{$0.session.eligibleCount>0}) && !work.allSatisfy(\.finished)
+                    && !lock.withLock({stopRequested}) {
+                    try drain()
+                    Thread.sleep(forTimeInterval:0.005)
+                }
+                if work.contains(where:{!$0.finished}) {
+                    emit(["event":"phase","stage":"discovering_and_indexing",
+                        "message":"Discovering files and indexing ready content…","discoveryActive":true,
+                        "code":requested.allSatisfy(\.code)])
+                }
+                do {
+                    _ = try Indexer.runScheduled(work.map { .init(indexer:$0.part.indexer,includePending:false) },
+                        shouldStop:{ [self] in lock.withLock { stopRequested || !backfillAllowed } },
+                        onEvent:{ [self] source,_,event in
+                            let item=work[source]
+                            if event.note=="source_changed" {
+                                lock.withLock {
+                                    if item.part.code {codeSyncRequested=true}else{syncRequested=true}
+                                }
+                            }
+                            emit(["event":"file","new":false,"path":event.path,"kind":event.kind.rawValue,
+                                "state":event.state,"seconds":event.seconds,"note":event.note ?? "",
+                                "code":item.part.code,"discoveryActive":!item.finished])
+                        },onSnapshot:{ [self] snapshot in
+                            for source in work.indices {
+                                var own=snapshot;own.source=String(source)
+                                if let fields=try? JSONSerialization.jsonObject(with:JSONEncoder().encode(own)) {
+                                    emit(["event":"index_pipeline","code":work[source].part.code,"pipeline":fields])
+                                }
+                            }
+                        },onVerified:{ [self] info in
+                            var fields=info.fields
+                            fields["event"]="inference_verified";fields["inference_verified"]=true
+                            emit(fields)
+                        },admit:{
+                            try drain()
+                            return try work.map { try $0.session.takeEligibleIDs() }
+                        },inputComplete:{work.allSatisfy(\.finished)},priority:priorityProvider(work.map(\.part)),maintenance:drain)
+                } catch {
+                    inferenceFailure=true
+                    lock.withLock {stopRequested=true}
+                    for item in work {item.stream.cancel()}
+                    emit(["event":"error","message":"Indexing failed: \(error)","fatal":true])
+                }
+            }
+            while !work.allSatisfy(\.finished) && !lock.withLock({stopRequested}) {
+                try drain()
+                Thread.sleep(forTimeInterval:0.005)
+            }
+            for item in work {
+                if let summary=item.summary,item.session.queuedCount<=newFilesLimit {
+                    result[item.part.code]=Set(summary.queued)
+                }
+                if !item.finished { emit(["event":"scan_cancelled","code":item.part.code,"discoveryActive":false]) }
+            }
+            if inferenceFailure { lock.withLock {stopRequested=true} }
         } catch {
-            emit(["event": "error", "message": "sync failed: \(error)", "code": part.code])
+            for part in requested {
+                let roots=namespacePaths(part,roots:part.roots)
+                part.store.pendingExcludedPaths=IndexStore.uniqueLiteralPaths(part.store.pendingExcludedPaths+roots).sorted()
+            }
+            emit(["event":"error","message":"sync failed: \(error)","discoveryActive":false])
         }
+        return result
     }
 
     private func runSources(newFiles: inout Set<Int64>, newCode: inout Set<Int64>, backfill: Bool) -> Bool {
@@ -270,7 +695,7 @@ final class IndexService: @unchecked Sendable {
                 fields["event"] = "inference_verified"
                 fields["inference_verified"] = true
                 emit(fields)
-            })
+            },priority:priorityProvider(active))
             for source in active.indices where !states[source].isEmpty {
                 emit(["event": "summary", "states": states[source], "code": active[source].code,
                       "ms": Int((ProcessInfo.processInfo.systemUptime - started) * 1000)])
@@ -326,18 +751,61 @@ final class IndexService: @unchecked Sendable {
             if stop { return false }
             if sync || codeSync && code != nil { return true }
             if backfill, parts.contains(where: { (try? $0.store.pendingCount()) ?? 0 > 0 })
-                || (try? main.store.unfinishedCount().files) ?? 0 > 0 {
+                || (try? main.store.runnableUnfinishedCount()) ?? 0 > 0 {
                 return true
             }
         }
         return false
     }
 
+    private static func commandPath(_ raw:String,roots:[URL]) -> String? {
+        let path=URL(fileURLWithPath:raw).standardizedFileURL.path
+        guard let root=roots.filter({root in
+            let prefix=root.standardizedFileURL.path
+            return path==prefix || FolderSelection.isInside(path,prefix)
+        }).max(by:{$0.path.count<$1.path.count}) else{return nil}
+        let prefix=root.standardizedFileURL.path
+        return root.path+String(path.dropFirst(prefix.count))
+    }
+
     func accept(_ line: String) {
+        if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
+           let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+           request["command"] as? String=="prioritize",
+           let rawPath=request["path"] as? String {
+            let isCode=request["code"] as? Bool ?? false
+            if let part=parts.first(where:{$0.code==isCode}),
+               let path=IndexService.commandPath(rawPath,roots:part.roots) {
+                lock.withLock {preferredFolders[isCode]=path;priorityRevision+=1}
+                wake.signal()
+            }
+            return
+        }
+        if line.utf8.count<=1024*1024,let data=line.data(using:.utf8),
+           let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+           request["command"] as? String=="changes" {
+            let isCode=request["code"] as? Bool ?? false
+            guard let part=parts.first(where:{$0.code==isCode}) else {return}
+            let paths=request["paths"] as? [String] ?? []
+            let dirty=request["dirtyRoots"] as? [String] ?? []
+            let valid=Set(paths.compactMap {IndexService.commandPath($0,roots:part.roots)})
+            lock.withLock {
+                let alreadyRequested=isCode ? codeSyncRequested : syncRequested
+                if !dirty.isEmpty || paths.count>1024 || valid.count != Set(paths).count {
+                    changedPaths[isCode]=nil
+                } else if !alreadyRequested || changedPaths[isCode] != nil {
+                    changedPaths[isCode,default:[]].formUnion(valid)
+                    if (changedPaths[isCode]?.count ?? 0)>1024 {changedPaths[isCode]=nil}
+                }
+                if isCode {codeSyncRequested=true}else{syncRequested=true}
+            }
+            wake.signal()
+            return
+        }
         lock.withLock {
             switch line.trimmingCharacters(in: .whitespaces) {
-            case "sync": syncRequested = true
-            case "sync code": codeSyncRequested = true
+            case "sync": syncRequested = true; changedPaths[false]=nil
+            case "sync code": codeSyncRequested = true; changedPaths[true]=nil
             case "stop": stopRequested = true
             case "backfill on": backfillAllowed = true
             case "backfill off": backfillAllowed = false
@@ -358,7 +826,8 @@ final class IndexService: @unchecked Sendable {
         var fields = extra
         fields["event"] = event
         for part in parts {
-            guard let counts = try? part.store.counts() else { continue }
+            guard let work=try? part.store.workCounts() else { continue }
+            let counts=work.counts
             let prefix = part.code ? "code_" : ""
             var files = 0, searchable = 0, pending = 0
             for states in counts.byKindAndState.values {
@@ -372,6 +841,11 @@ final class IndexService: @unchecked Sendable {
             fields[prefix + "searchable"] = searchable
             fields[prefix + "pending"] = pending
             fields[prefix + "vectors"] = counts.vectors
+            fields[prefix + "known_counts_complete"]=knownCountsComplete[part.code] ?? true
+            fields[prefix + "runnable_pending"]=work.runnablePending
+            fields[prefix + "held_pending"]=max(0,pending-work.runnablePending)
+            fields[prefix + "runnable_unfinished"]=work.runnableUnfinished
+            fields[prefix + "held_unfinished"]=max(0,counts.unfinished-work.runnableUnfinished)
             if !part.code { fields["unfinished"] = counts.unfinished }   // long files with pages or chunks left to read
         }
         emit(fields)

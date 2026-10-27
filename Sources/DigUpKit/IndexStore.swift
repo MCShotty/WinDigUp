@@ -34,12 +34,69 @@ public final class IndexStore {
     public var scope: [String]? {
         didSet {
             guard let scope else { (scopeSQL, scopeValues) = ("", []); return }
-            let ranges = scope.flatMap(Self.pathRanges(under:))
+            let ranges = scope.flatMap {literalScope ? [Self.literalRange(under:$0)] : Self.pathRanges(under:$0)}
             scopeSQL = ranges.isEmpty ? " AND 0"
                 : " AND (" + ranges.map { _ in "(path >= ? AND path < ?)" }.joined(separator: " OR ") + ")"
             scopeValues = ranges.flatMap { [SQLValue.text($0.from), .text($0.to)] }
         }
     }
+    private var literalScope=false
+    public func setLiteralScope(_ roots:[String]) {
+        literalScope=true
+        scope=roots
+    }
+    private static func literalRange(under path:String) -> (from:String,to:String) {
+        let prefix=path.hasSuffix("/") ? path : path+"/"
+        return (prefix,prefix+"\u{10FFFF}")
+    }
+
+    /// Filesystem spellings used by SQLite scopes and holds must not equate distinct Unicode byte sequences.
+    public static func literalPathIsUnder(_ path:String,_ root:String) -> Bool {
+        path.utf8.elementsEqual(root.utf8) || path.utf8.starts(with:(root.hasSuffix("/") ? root : root+"/").utf8)
+    }
+
+    /// SQLite path ranges compare UTF-8 bytes; Swift String equality also equates distinct Unicode spellings.
+    public static func uniqueLiteralPaths(_ paths: [String]) -> [String] {
+        var seen=Set<Data>()
+        return paths.filter {seen.insert(Data($0.utf8)).inserted}
+    }
+
+    /// Unenumerated paths retain their cached rows but cannot supply background work.
+    public var pendingExcludedPaths: [String] = [] {
+        didSet {
+            let scopes=scope?.map {root in (root,literalScope ? [root] : [root,FolderSelection.realPath(root)])}
+            if pendingExcludedPaths.count>64,let scopes {
+                pendingExcludedPaths=Self.uniqueLiteralPaths(pendingExcludedPaths.flatMap {path -> [String] in
+                    let matching=scopes.filter {entry in entry.1.contains {root in Self.literalPathIsUnder(path,root)}}
+                    return matching.isEmpty ? [path] : matching.map(\.0)
+                }).sorted()
+            }
+            var conditions:[String]=[]
+            var values:[SQLValue]=[]
+            for path in Self.uniqueLiteralPaths(pendingExcludedPaths) {
+                if let scopes,!scopes.contains(where: {entry in
+                    entry.1.contains {root in Self.literalPathIsUnder(path,root) || Self.literalPathIsUnder(root,path)}
+                }) {continue}
+                let variants=Self.uniqueLiteralPaths(literalScope ? [path] : [path,FolderSelection.realPath(path)])
+                for variant in variants {
+                    let prefix=variant.hasSuffix("/") ? variant : variant+"/"
+                    if conditions.count>=128 {
+                        excludedPendingSQL=" AND 0";excludedPendingValues=[]
+                        return
+                    }
+                    conditions.append("(path=? OR (path>=? AND path<?))")
+                    values += [.text(variant),.text(prefix),.text(prefix+"\u{10FFFF}")]
+                }
+            }
+            excludedPendingSQL=conditions.isEmpty ? "" : " AND NOT ("+conditions.joined(separator:" OR ")+")"
+            excludedPendingValues=values
+        }
+    }
+    private var excludedPendingSQL=""
+    private var excludedPendingValues:[SQLValue]=[]
+    private var runnableSQL:String {scopeSQL+excludedPendingSQL}
+    private var runnableValues:[SQLValue] {scopeValues+excludedPendingValues}
+
     private var scopeSQL = ""
     private var scopeValues: [SQLValue] = []
 
@@ -300,8 +357,8 @@ public final class IndexStore {
 
     /// Removes every file that isn't under one of `roots` (folders taken out of the app). Returns how many went.
     @discardableResult
-    public func prune(keepingUnder roots: [String]) throws -> Int {
-        let prefixes = roots.flatMap { Self.pathRanges(under: $0).map(\.from) }   // a folder under /var: /private/var too
+    public func prune(keepingUnder roots: [String], literalPaths:Bool = false) throws -> Int {
+        let prefixes = roots.flatMap { literalPaths ? [Self.literalRange(under:$0).from] : Self.pathRanges(under: $0).map(\.from) }   // a folder under /var: /private/var too
         var gone: [Int64] = []
         try db.query("SELECT id, path FROM files") { row in
             let path = row.text(1) ?? ""
@@ -330,23 +387,29 @@ public final class IndexStore {
         if let ids, ids.isEmpty { return out }
         let filter = ids.map { " AND id IN (\($0.map(String.init).joined(separator: ",")))" } ?? ""
         try db.query("""
-            SELECT \(Self.fileColumns) FROM files WHERE state = 'pending'\(filter)\(scopeSQL)
+            SELECT \(Self.fileColumns) FROM files WHERE state = 'pending'\(filter)\(runnableSQL)
             ORDER BY \(FileKind.indexingOrderSQL), mtime DESC, id ASC LIMIT ?
-            """, scopeValues + [.int(Int64(limit ?? -1))]) { out.append(Self.record($0)) }
+            """, runnableValues + [.int(Int64(limit ?? -1))]) { out.append(Self.record($0)) }
         return out
     }
 
     func pendingQueue(priorityIDs: Set<Int64> = [], includePending: Bool = true, limit: Int? = nil,
                       state: String = "pending", pageSize: Int = 128) throws -> PendingFileQueue {
         try PendingFileQueue(store: self, priorityIDs: priorityIDs, includePending: includePending, limit: limit,
-                             state: state, scopeSQL: scopeSQL, scopeValues: scopeValues, pageSize: pageSize)
+                             state: state, scopeSQL: runnableSQL, scopeValues: runnableValues, pageSize: pageSize)
     }
 
     public func pendingCount() throws -> Int {
         var count = 0
-        try db.query("SELECT COUNT(*) FROM files WHERE state = 'pending'\(scopeSQL)", scopeValues) {
+        try db.query("SELECT COUNT(*) FROM files WHERE state = 'pending'\(runnableSQL)", runnableValues) {
             count = Int($0.int(0))
         }
+        return count
+    }
+
+    public func runnableUnfinishedCount() throws -> Int {
+        var count=0
+        try db.query("SELECT COUNT(*) FROM files WHERE state='partial'\(runnableSQL)",runnableValues) {count=Int($0.int(0))}
         return count
     }
 
@@ -492,6 +555,10 @@ public final class IndexStore {
         /// Long files still being read (`unfinishedCount`), and their pages and chunks left.
         public var unfinished = 0
         public var left = 0
+    }
+
+    public func workCounts() throws -> (counts:Counts,runnablePending:Int,runnableUnfinished:Int) {
+        try db.transaction {(try counts(),try pendingCount(),try runnableUnfinishedCount())}
     }
 
     public func counts() throws -> Counts {

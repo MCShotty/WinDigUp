@@ -16,7 +16,7 @@ const FILTER_OF = { Screenshots: "screenshots", Images: "images", Documents: "do
 const $ = (id) => document.getElementById(id);
 const $panel = $("panel"), $query = $("query"), $body = $("body"), $list = $("list"), $preview = $("preview");
 const $footer = $("footer"), $summary = $("summary"), $keys = $("keys"), $activity = $("activity");
-const $moreResults = $("more-results"), $results = $("results"), $primary = $("primary-action"), $details = $("details-action");
+const $moreResults = $("more-results"), $results = $("results"), $primary = $("primary-action"), $details = $("details-action"), $fileSetup = $("file-setup");
 const panelConfig = {maxHeight: PANEL_HEIGHT, nativeSized: false};
 let layoutFrame = null, announceTimer = null, lastAnnouncement = "", statusTimer = null;
 if (!Apps.supported) { $query.placeholder = "Search files and code"; $query.setAttribute("aria-label", "Search files and code"); }
@@ -57,20 +57,25 @@ const applicationSearch = new ApplicationSearch((statusOnly=false) => {
 
 // MARK: Searching
 
-function queryChanged() {
+function queryChanged(filesOnly = false) {
+  filesOnly = filesOnly === true;
+  const retained = filesOnly ? {selection:state.selection,chosen:state.chosen,navigated:state.navigated} : null;
   if(state.composing)return;
-  closeBig();
+  if(!filesOnly || !isLauncher(selectedHit()))closeBig();
   clearTimeout(statusTimer); state.waitingVisible = false;
   statusTimer = setTimeout(() => { state.waitingVisible = true; renderFooter(); renderPreview(); scheduleFit(); }, 180);
   state.heightFloor = FIELD_HEIGHT; lastAnnouncement = "";
   const generation = ++state.generation;
   SearchTiming.begin(generation);state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;
+  state.finalGeneration=-1;state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;state.fileScopeEmpty=null;
+  let lexicalRequest=0,lexicalPublished=0,meaningRequest=0,meaningPublished=0;
   state.exactFilenameKnown=false;state.exactFilename=false;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
-  state.navigated = false;
-  state.chosen = null;
+  state.navigated = retained?.navigated || false;
+  state.chosen = retained?.chosen || null;
+  if(retained)state.selection=retained.selection;
   state.error = null;
   const typed = $query.value.trim();
   const mode = Apps.parse(typed);
@@ -81,8 +86,10 @@ function queryChanged() {
   state.isApps = mode.mode === "apps";
   state.isSettings=mode.mode==="settings";
   applicationSearch.limit=state.isApps?6:3;
-  applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps),mode.mode);
-  settingsSearch.begin(text,mode.settings&&(Boolean(typed)||state.isSettings),mode.mode);
+  if(!filesOnly){
+    applicationSearch.begin(text, mode.apps && (Boolean(typed) || state.isApps),mode.mode);
+    settingsSearch.begin(text,mode.settings&&(Boolean(typed)||state.isSettings),mode.mode);
+  }
   if(state.isSettings){show({hits:[],strong:0},text,"settings");return;}
   if (state.isApps) {
     show({ hits: [], strong: 0 }, text, "applications");
@@ -95,26 +102,40 @@ function queryChanged() {
   show({ hits: [], strong: 0 }, text, "words");
   // Words now. The last word is probably half-typed, so it matches as a prefix.
   state.filesStarted=true;
-  state.refreshWords=(passive=false)=>SearchTiming.measure("file_words",()=>ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40,generation,passive }),passive)
-    .then((reply) => {
-      if(generation!==state.generation||reply.status==="superseded")return;
-      state.lexicalReady=true;state.fileWords=reply.hits||[];state.categoryQuery=reply.category_query===true;
-      state.exactFilenameKnown=reply.exact_filename_known!==false;state.exactFilename=reply.exact_filename===true;
-      if(state.finalGeneration!==generation)show(reply,text,"words");else applicationSearch.changed();
-    })
-    .catch(error => { if (generation === state.generation && state.finalGeneration !== generation) failed(error); });
+  state.refreshWords=(passive=false)=>{
+    const request=++lexicalRequest;
+    return SearchTiming.measure("file_words",()=>ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40,generation,passive }),passive)
+      .then((reply) => {
+        if(generation!==state.generation||request<lexicalPublished||reply.status==="superseded"||
+          (reply.generation!=null&&reply.generation!==generation))return;
+        lexicalPublished=request;
+        if(reply.scope_empty===true)state.fileMeaning=null;
+        state.lexicalReady=true;state.fileWords=reply.hits||[];state.fileWordsReply=reply;
+        state.fileWordsRefresh ||= passive;
+        state.categoryQuery=reply.category_query===true;
+        state.exactFilenameKnown=reply.exact_filename_known!==false;state.exactFilename=reply.exact_filename===true;
+        show(state.finalGeneration===generation?mergeFileSearchReplies(state.fileMeaning,reply,text):reply,
+          text,state.finalGeneration===generation?state.phase:"words");
+      })
+      .catch(error => { if (generation === state.generation && request===lexicalRequest && state.finalGeneration !== generation) failed(error); });
+  };
   state.frame=requestAnimationFrame(()=>state.refreshWords());
   // Submit meaning only after typing pauses; current-query words remain available meanwhile.
   state.refine = (passive=false) => {
+    const request=++meaningRequest;
     SearchTiming.measure("file_meaning",()=>ask({ op: "search", q: text, code, meaning: true, limit: 40,generation,passive }),passive)
       .then((reply) => {
-        if (generation !== state.generation||reply.status==="superseded") return;
-        state.finalGeneration = generation;
+        if (generation !== state.generation||request<meaningPublished||reply.status==="superseded"||
+          (reply.generation!=null&&reply.generation!==generation)) return;
+        meaningPublished=request;
+        state.finalGeneration = generation;state.fileMeaning=reply;
+        if(reply.scope_empty===true){state.fileWords=[];state.fileWordsReply=null;state.fileWordsRefresh=false;state.lexicalReady=true;state.exactFilenameKnown=true;state.exactFilename=false;}
         if(reply.semantic_error)state.error=reply.semantic_error;
-        show(reply, text, reply.meaning ? "meaning" : "wordsOnly");
+        show(state.fileWordsRefresh&&state.fileWordsReply?mergeFileSearchReplies(reply,state.fileWordsReply,text):reply,
+          text, reply.meaning ? "meaning" : "wordsOnly");
         if (debugPending) report();
       })
-      .catch(error => { if (generation === state.generation) failed(error); });
+      .catch(error => { if (generation === state.generation && request===meaningRequest) failed(error); });
   };
   state.timer=setTimeout(state.refine,TYPING_PAUSE);
 }
@@ -124,6 +145,7 @@ function show(reply, text, phase) {
   const strong = Math.min(reply.strong ?? hits.length, hits.length);
   state.text = text;
   state.phase = phase;
+  state.fileScopeEmpty=reply.scope_empty===true;
   state.strong = hits.slice(0, strong);
   state.weaker = hits.slice(strong);
   const visible = state.strong.slice(0, ROWS_PER_GROUP * 3);
@@ -380,6 +402,10 @@ function row(hit) {
   // The words found, where keyword search found them; else where the file is.
   if (hit.excerpt && hit.excerpt.includes("«")) sub.innerHTML = marked(hit.excerpt);
   else sub.textContent = folderOf(hit);
+  const match = element("span", "result-match-reason", matchLabel(hit) + " · ");
+  sub.prepend(match);
+  const availability = availabilityLabel(hit);
+  if (availability) { sub.append(element("span", "result-availability", " · " + availability)); sub.title = availability; }
   text.append(title, sub);
   item.append(text);
   item.onmousedown = event => { if (event.button === 0) event.preventDefault(); };
@@ -421,10 +447,15 @@ function renderPreview() {
   const hasResults = rowIDs().length > 0;
   $preview.hidden = hasResults;
   if (hasResults) return;
-  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps,state.waitingVisible,state.error,state.indexing]);
+  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps,state.waitingVisible,state.error,state.indexing,state.fileScopeEmpty]);
   if(signature===previewSignature)return;
   previewSignature=signature;
   $preview.replaceChildren();
+  if(state.fileScopeEmpty===true&&!state.isApps&&!state.isSettings){
+    $preview.append(message(state.isCode?"Code search needs folders":"File search needs folders",state.isCode
+      ? "Choose code folders in Settings to search their names and contents."
+      : "Choose folders to search their names and contents."));return;
+  }
   if (state.error) { $preview.append(message("Search needs attention", "Open Activity for details. Available app and settings matches remain usable.")); return; }
   if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length && !settingsSearch.visible().length) {
     if(state.isSettings){$preview.append(message("Windows settings",settingsSearch.status()));return;}
@@ -567,6 +598,9 @@ function renderFooter() {
     }
   }
   $summary.textContent = summary;
+  $fileSetup.hidden=state.fileScopeEmpty!==true||state.isApps||state.isSettings||!$big.hidden;
+  $fileSetup.textContent=state.isCode?"Choose folders for code search":"Choose folders for file search";
+  $fileSetup.setAttribute("aria-label",state.isCode?"Choose folders for code search":"Choose folders for file search");
   const hit = selectedHit();
   $primary.hidden = !hit; $details.hidden = !hit;
   $primary.textContent = isSetting(hit) ? "Open settings" : isLauncher(hit) ? "Launch" : "Open";
@@ -628,7 +662,9 @@ function renderBig() {
   box.append(view);
   const location = element("div", "preview-location");
   if (!isLauncher(hit)) { location.textContent = folderOf(hit) + " · " + details(hit); location.title = hit.path; }
-  $big.replaceChildren(head, ...(!isLauncher(hit) ? [location] : []), box);
+  const feedback = element("div","feedback-actions");
+  if (!isLauncher(hit)) appendUsefulResult(feedback,hit,failed);
+  $big.replaceChildren(head, ...(!isLauncher(hit) ? [location] : []), box, ...(!feedback.childElementCount ? [] : [feedback]));
 }
 
 function message(title, text) {
@@ -734,7 +770,15 @@ function showState(app) {
 $("expand-search").onclick = () => openInWindow();
 $primary.onclick = openSelected;
 $details.onclick = toggleBig;
+$fileSetup.onclick = () => invoke("open_settings",{tab:state.isCode?"code":"folders"}).catch(failed);
 $activity.onclick = () => invoke("open_settings", {tab:"activity"}).catch(failed);
+
+
+tauri.event.listen("search-scope", ({payload}) => {
+  if(typeof payload.hasCode==="boolean")state.hasCode=payload.hasCode;
+  if(state.isApps||state.isSettings){render();return;}
+  queryChanged(true);
+});
 
 tauri.event.listen("state", ({ payload }) => showState(payload));
 invoke("app_state").then(showState).catch(() => {});

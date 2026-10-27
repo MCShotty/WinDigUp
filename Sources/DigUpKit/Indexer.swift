@@ -90,9 +90,22 @@ public final class Indexer {
     /// Crawls `roots` and reconciles the index: new files are queued, changed ones re-queued, moved ones re-pathed
     /// (no re-embedding), and files that are gone or newly excluded are removed.
     public func sync(_ roots: [URL], onProgress: (CrawlProgress) -> Void = { _ in }) throws -> SyncSummary {
+        let rootAliases=roots.map {root in
+            (root.standardizedFileURL.path,[root.standardizedFileURL.path,FolderSelection.realPath(root.path)])
+        }
+        let rootSpellings=rootAliases.flatMap {$0.1}
+        func aliases(_ path:String) -> [String] {
+            var variants=[path,FolderSelection.realPath(path)]
+            for (root,spellings) in rootAliases where path==root || FolderSelection.isInside(path,root) {
+                variants += spellings.map {$0+String(path.dropFirst(root.count))}
+            }
+            return variants
+        }
         let crawl = Crawler.crawl(roots, options: options, onProgress: onProgress)
         onProgress(CrawlProgress(stage: "reconciling", root: "", path: store.file.path,
                                 visited: crawl.visited, candidates: crawl.candidates.count))
+        let unavailable=crawl.unreadablePaths.flatMap(aliases)
+            + roots.filter {!FileManager.default.fileExists(atPath:$0.path)}.flatMap {aliases($0.standardizedFileURL.path)}
         let existing = try store.files(under: roots.map { $0.standardizedFileURL.path })
         var byPath: [String: FileRecord] = [:]
         var byInode: [String: FileRecord] = [:]
@@ -127,15 +140,23 @@ public final class Indexer {
                 }
             }
             // Failed listings and roots that disappeared mid-crawl are incomplete evidence, not deletions.
-            let unavailable = Array(crawl.unreadable) + roots.map { $0.standardizedFileURL.path }
-                .filter { !FileManager.default.fileExists(atPath: $0) }
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)
                 && !unavailable.contains(where: { row.path == $0 || FolderSelection.isInside(row.path, $0) }) {
                 try store.delete(row.id)
                 summary.removed += 1
             }
         }
+        let untouched=store.pendingExcludedPaths.filter {path in
+            !rootSpellings.contains {root in path==root || FolderSelection.isInside(path,root)}
+        }
+        store.pendingExcludedPaths=Array(Set(untouched+unavailable)).sorted()
         return summary
+    }
+
+    public var scanOptions: IndexOptions { options }
+
+    public func beginScan(_ roots: [URL]) throws -> IndexScanSession {
+        try IndexScanSession(store:store,roots:roots)
     }
 
     // MARK: Run
@@ -172,7 +193,11 @@ public final class Indexer {
         onEvent: (Int, Bool, Event) -> Void = { _, _, _ in },
         onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
         onRemaining: (Int, Set<Int64>) -> Void = { _, _ in },
-        onVerified: (WorkerInfo) -> Void = { _ in }) throws -> [[String: Int]] {
+        onVerified: (WorkerInfo) -> Void = { _ in },
+        admit: @escaping () throws -> [[Int64]] = { [] },
+        inputComplete: @escaping () -> Bool = { true },
+        priority: @escaping () -> (Int,String)? = { nil },
+        maintenance: @escaping () throws -> Void = {}) throws -> [[String: Int]] {
         guard !sources.isEmpty else { return [] }
         guard Set(sources.map { $0.indexer.store.file.standardizedFileURL.path }).count == sources.count else {
             throw Database.Failure(message: "Each scheduled index must have one database owner.")
@@ -185,22 +210,28 @@ public final class Indexer {
                 includePending: source.includePending, limit: source.limit))
         }
         var lastSource = sources.count - 1
+        var consecutive = 0
         var states = Array(repeating: [String: Int](), count: sources.count)
         var done = Array(repeating: 0, count: sources.count)
         func nextJob() throws -> Job? {
+            if let (source,path)=priority(),queues.indices.contains(source) {try queues[source].prioritize(path)}
+            let updates = try admit()
+            for index in queues.indices where index < updates.count { try queues[index].append(updates[index]) }
             var priorities: [Int: Int] = [:]
             for index in queues.indices {
                 if let first = try queues[index].peek() { priorities[index] = first.priority }
             }
             guard let best = priorities.values.min() else { return nil }
             let order = (1...sources.count).map { (lastSource + $0) % sources.count }
-            guard let selected = order.first(where: { priorities[$0] == best }),
-                  let batch = try queues[selected].takeBatch() else { return nil }
+            let preferred = order.first(where: { priorities[$0] == best })
+            let fair = consecutive>=8 ? order.first(where:{$0 != lastSource && priorities[$0] != nil}) : nil
+            guard let selected=fair ?? preferred,let batch=try queues[selected].takeBatch() else {return nil}
+            consecutive = selected==lastSource ? consecutive+1 : 1
             lastSource = selected
             return Job(files: batch.files, source: selected, priority: batch.priority,
                        options: sources[selected].indexer.options)
         }
-        try processOwned(sources.map(\.indexer), nextJob: nextJob, shouldStop: shouldStop,
+        try processOwned(sources.map(\.indexer), nextJob: nextJob, inputComplete: inputComplete, maintenance: maintenance, shouldStop: shouldStop,
             decorate: { snapshot in for queue in queues { queue.decorate(&snapshot) } },
             onSnapshot: onSnapshot, onVerified: onVerified, committed: { _, job, results, seconds in
                 let source = job.source
@@ -282,7 +313,7 @@ public final class Indexer {
     }
 
     private static func processOwned(_ indexers: [Indexer], nextJob: @escaping () throws -> Job?,
-        shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
+        inputComplete: @escaping () -> Bool = { true }, maintenance: () throws -> Void = {}, shouldStop: () -> Bool, decorate: (inout IndexPipelineSnapshot) -> Void = { _ in },
         onSnapshot: (IndexPipelineSnapshot) -> Void = { _ in },
         onVerified: (WorkerInfo) -> Void = { _ in },
         committed: (Int, Job, [(String, String?)], Double) -> Void,
@@ -290,7 +321,7 @@ public final class Indexer {
         let folders = indexers.map { $0.scratch.appendingPathComponent(UUID().uuidString) }
         let options = indexers.map(\.options)
         // Concrete type references avoid Swift 6.4's dynamic-Self closure-specialization crash.
-        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob,
+        let pipeline = IndexPipeline<Job, Prepared, ComputedEmbedding?>(nextInput: nextJob, inputComplete: inputComplete,
             source: { String($0.source) }, sizes: { $0.footprint },
             prepare: { index, job in
                 autoreleasepool {
@@ -334,6 +365,11 @@ public final class Indexer {
             progress(force: true)
         }
 
+        func tick() {
+            do {try maintenance()} catch {pipeline.fail(error)}
+            progress()
+        }
+
         func publish(_ item: IndexPipeline<Job, Prepared, ComputedEmbedding?>.Item,
                      computed: ComputedEmbedding?, inferenceMs: Double) throws {
             let start = ProcessInfo.processInfo.systemUptime
@@ -363,7 +399,7 @@ public final class Indexer {
         do {
             while let item = pipeline.nextPrepared(shouldStop: shouldStop, canStartWith: {
                 Indexer.embeddingCalls($0, options: $0.options).contains(where: { !$0.inputs.isEmpty })
-            }, onTick: { progress() }) {
+            }, onTick: { tick() }) {
                 if skip(item.input) || !Indexer.embeddingCalls(item.value, options: item.value.options).contains(where: { !$0.inputs.isEmpty }) {
                     try publish(item, computed: nil, inferenceMs: 0)
                     continue
@@ -382,7 +418,7 @@ public final class Indexer {
                     guard calls.contains(where: { !$0.inputs.isEmpty }) else { return nil }
                     return try ComputedEmbedding(calls: calls, worker: owners.models[prepared.source])
                 }
-                while let result = pipeline.next(shouldStop: shouldStop, onTick: { progress() }) {
+                while let result = pipeline.next(shouldStop: shouldStop, onTick: { tick() }) {
                     try publish(result.item, computed: result.result.get(), inferenceMs: result.inferenceMs)
                 }
                 break

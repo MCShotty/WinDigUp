@@ -126,21 +126,26 @@ function isCode() {
 function isAppsMode() { return Apps.parse(state.query, state.filter).mode === "apps"; }
 function hasQuery() { return Boolean(state.query.trim()) || isAppsMode() || isSettingsMode(); }
 
-function run() {
+function run(filesOnly = false) {
+  filesOnly = filesOnly === true;
+  const retained = filesOnly ? {selection:state.selection,chosen:state.chosen,navigated:state.navigated,handoff:state.handoff} : null;
   const generation = ++state.generation;
-  state.handoff = state.nextSelection ? {key: state.nextSelection, generation} : null;
+  state.handoff = retained?.handoff ? {key:retained.handoff.key,generation} : state.nextSelection ? {key: state.nextSelection, generation} : null;
   state.nextSelection = null;
   SearchTiming.begin(generation);
   state.exactFilenameKnown=false;state.exactFilename=false;
   state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;state.finalGeneration=-1;
+  state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;state.fileScopeEmpty=null;
+  let lexicalRequest=0,lexicalPublished=0,meaningRequest=0,meaningPublished=0;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
-  state.navigated = Boolean(state.handoff);
-  state.chosen = null;
+  state.navigated = retained ? retained.navigated : Boolean(state.handoff);
+  state.chosen = retained?.chosen || null;
   state.error = null;
   state.fileError = null;
-  state.ranked = []; state.weaker = []; state.hasResults = false; state.filesPending = false; state.selection = null;
+  state.ranked = []; state.weaker = []; state.hasResults = Boolean(filesOnly && (applicationSearch.hits.length || settingsSearch.visible().length)); state.filesPending = false; state.selection = retained?.selection || null;
+  if(filesOnly)state.counts={apps:applicationSearch.total,settings:settingsSearch.total};
   const typed = state.query.trim();
   const mode = Apps.parse(typed, state.filter);
   const code = mode.code;
@@ -149,8 +154,10 @@ function run() {
     state.filesStarted=false;ask({op:"cancel",generation}).catch(()=>{});
   }
   applicationSearch.limit = mode.mode === "apps" ? 100 : 3;
-  applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"),mode.mode);
-  settingsSearch.begin(text,mode.settings&&(Boolean(typed)||mode.mode==="settings"),mode.mode);
+  if(!filesOnly){
+    applicationSearch.begin(text, mode.apps && (Boolean(typed) || mode.mode === "apps"),mode.mode);
+    settingsSearch.begin(text,mode.settings&&(Boolean(typed)||mode.mode==="settings"),mode.mode);
+  }
   state.codePhase = null;
   if (mode.mode === "settings") {
     Object.assign(state,{ranked:[],weaker:[],counts:{},text,hasResults:true,filesPending:false,selection:null});
@@ -171,16 +178,26 @@ function run() {
   render();
   const filter=FILTERS.find(item=>item.key===state.filter);
   const search=async (meaning,passive=false)=>{
+    const request=meaning?++meaningRequest:++lexicalRequest;
     state.filesStarted=true;
     try {
-      const shown=await SearchTiming.measure(meaning?"file_meaning":"file_words",()=>ask({op:"search",q:text,code,meaning,
+      let shown=await SearchTiming.measure(meaning?"file_meaning":"file_words",()=>ask({op:"search",q:text,code,meaning,
         prefix_last:!meaning,limit:LIMIT,kinds:filter&&!code?filter.kinds:null,facets:!code,generation,passive,phase:meaning?"meaning":"words"}),passive);
-      if(generation!==state.generation||shown.status==="superseded")return;
-      if(!meaning){state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;}
-      if(!meaning&&state.finalGeneration===generation){state.lexicalReady=true;state.fileWords=shown.hits||[];applicationSearch.changed();return;}
-      if(meaning)state.finalGeneration=generation;
-      else {state.lexicalReady=true;state.fileWords=shown.hits||[];state.categoryQuery=shown.category_query===true;}
-      state.filesPending=false;
+      if(generation!==state.generation||request<(meaning?meaningPublished:lexicalPublished)||shown.status==="superseded"||
+        (shown.generation!=null&&shown.generation!==generation))return;
+      if(meaning)meaningPublished=request;else lexicalPublished=request;
+      if(meaning){
+        state.finalGeneration=generation;state.fileMeaning=shown;
+        if(shown.scope_empty===true){state.fileWords=[];state.fileWordsReply=null;state.fileWordsRefresh=false;state.lexicalReady=true;state.exactFilenameKnown=true;state.exactFilename=false;}
+        if(state.fileWordsRefresh&&state.fileWordsReply)shown=mergeFileSearchReplies(shown,state.fileWordsReply,text);
+      } else {
+        if(shown.scope_empty===true)state.fileMeaning=null;
+        state.lexicalReady=true;state.fileWords=shown.hits||[];state.fileWordsReply=shown;state.fileWordsRefresh ||= passive;
+        state.categoryQuery=shown.category_query===true;
+        state.exactFilenameKnown=shown.exact_filename_known!==false;state.exactFilename=shown.exact_filename===true;
+        if(state.finalGeneration===generation)shown=mergeFileSearchReplies(state.fileMeaning,shown,text);
+      }
+      state.filesPending=false;state.fileScopeEmpty=shown.scope_empty===true;
       if(meaning&&shown.semantic_error)state.error=shown.semantic_error;
       const hits=shown.hits||[],strong=shown.strong??hits.length;
       const counts={apps:applicationSearch.total,settings:settingsSearch.total};
@@ -195,7 +212,7 @@ function run() {
       else if(!shownRows.some(hit=>resultKey(hit)===state.selection)){state.selection=null;state.chosen=null;}
       render();if(debugPending&&meaning)report();
     }catch(error){
-      if(generation!==state.generation)return;
+      if(generation!==state.generation||request!==(meaning?meaningRequest:lexicalRequest))return;
       state.filesPending=false;state.lexicalReady=true;
       if(!state.ranked.length){state.error=String(error);state.fileError=String(error);}
       if(!state.navigated){const shown=rows();state.selection=shown.length?resultKey(shown[0]):null;}
@@ -271,6 +288,7 @@ function render() {
 }
 
 function renderBar() {
+  const focused=document.activeElement, focusedKind=focused.closest?.("#kinds .chip")?.dataset.title;
   if (!Apps.supported) { $query.placeholder = "Search files and code"; $query.setAttribute("aria-label", "Search files and code"); }
   const code = isCode();
   $("glass").innerHTML = code ? ICONS.code : SEARCH_ICON;
@@ -292,6 +310,7 @@ function renderBar() {
     $kinds.append(chip("Code", "code", code ? state.counts.code : null, code,
                        () => setFilter(state.filter === "code" ? null : "code"), 7));
   }
+  if(focusedKind&&!focused.isConnected)$kinds.querySelector('[data-title="' + CSS.escape(focusedKind) + '"]')?.focus({preventScroll:true});
 }
 
 /// All · Screenshots 4 · Images 9 · …: what the query found of each kind; a click shows only that kind.
@@ -303,6 +322,7 @@ function chip(title, icon, count, selected, action, number) {
   if (count != null && state.query.trim()) button.append(element("span", "number", count.toLocaleString()));
   button.title = `${title} (${MOD}${number})`;
   if(count!=null&&state.countScope==="ranked_candidates")button.title+=" · Counts cover the current matching result set";
+  if(count!=null&&state.countScope==="displayed_matches")button.title+=" · Counts cover displayed matching files";
   button.setAttribute("aria-pressed", String(selected));
   button.onclick = action;
   return button;
@@ -319,6 +339,7 @@ function renderContent() {
   restoreHandoff();
   const focused = document.activeElement;
   const focusedLaunch = focused.closest?.(".app-row")?.dataset.resultKey;
+  const focusedScope=focused.closest?.("[data-scope-setup]")?.dataset.scopeSetup;
   const scroll = state.renderedGeneration === state.generation ? $content.scrollTop : 0;
   state.renderedGeneration = state.generation;
   thumbnails.disconnect();
@@ -344,7 +365,8 @@ function renderContent() {
       $content.append(applicationGroup([], "Apps", shownApps));
     if (shownSettings && !layout.sections.some(section => section.source === "settings") && settingsSearch.total > shownSettings)
       $content.append(windowsSettingsGroup([], shownSettings));
-    if (!state.info.folders.length && !isCode()) $content.append(chooseFolders());
+    if(state.fileScopeEmpty===true)$content.append(chooseFolders(isCode()));
+    else if(state.fileScopeEmpty!==false&&!state.info.folders.length&&!isCode())$content.append(chooseFolders());
     else if (!state.query.trim()) $content.append(home());
     else if (state.codePhase) $content.append(codeHintOrOff());
     else if (state.fileError) $content.append(fileSearchFailure());
@@ -355,6 +377,7 @@ function renderContent() {
   $content.scrollTop = scroll;
   if (focused.isConnected) focused.focus({preventScroll: true});
   else if (focusedLaunch) ($content.querySelector('[data-result-key="' + CSS.escape(focusedLaunch) + '"] .app-launch') || $query).focus({preventScroll: true});
+  else if(focusedScope)$content.querySelector('[data-scope-setup="' + CSS.escape(focusedScope) + '"]')?.focus({preventScroll:true});
 }
 
 function bestMatches(hits) {
@@ -443,7 +466,8 @@ function cell(hit, compact = false) {
   }
   const place = placeOf(hit);
   if (place) picture.append(element("span", "place on-image", place));
-  item.append(picture, element("div", "name", "‎" + nameOf(hit.path)), folderLine(folderOf(hit)));
+  item.append(picture, element("div", "name", "‎" + nameOf(hit.path)), folderLine(folderOf(hit)),
+    element("div","result-match-reason",[matchLabel(hit),availabilityLabel(hit)].filter(Boolean).join(" · ")));
   wire(item, hit);
   styleFileCell(item, compact, key === state.selection);
   fileCells.set(key,{signature,node:item});
@@ -763,10 +787,12 @@ function brandMark() {
   return mark;
 }
 
-function chooseFolders() {
-  const button = element("button", "button primary", "Choose Folders…");
-  button.onclick = () => invoke("choose_folders").catch(failed);
-  return centered(brandMark(), element("h2", "", "Choose folders to search"),
+function chooseFolders(code = false) {
+  const button = element("button", "button primary", code?"Choose folders for code search":"Choose Folders…");
+  button.setAttribute("aria-label",code?"Choose folders for code search":"Choose folders for file search");
+  button.dataset.scopeSetup=code?"code":"files";
+  button.onclick = () => invoke(code?"choose_code_folders":"choose_folders").catch(failed);
+  return centered(brandMark(), element("h2", "", code?"Choose code folders to search":"Choose folders to search"),
                   element("p", "", "DigUp only looks where you tell it to."), button);
 }
 
@@ -1130,6 +1156,7 @@ function actions(hit) {
   const revealButton = element("button", "", `Show in ${FILE_MANAGER}`);
   revealButton.onclick = () => reveal(hit);
   box.append(openButton, revealButton);
+  appendUsefulResult(box, hit, failed);
   return box;
 }
 
@@ -1361,6 +1388,14 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+
+tauri.event.listen("search-scope", ({payload}) => {
+  if(Array.isArray(payload.folders))state.info.folders=payload.folders;
+  if(typeof payload.hasCode==="boolean")state.info.hasCode=payload.hasCode;
+  if(isAppsMode()||isSettingsMode()){render();return;}
+  run(true);
+});
+
 tauri.event.listen("state", ({ payload }) => {
   const before = state.app;
   state.app = payload;
@@ -1463,6 +1498,7 @@ function debugSearch(query) {
 function report() {
   // Drive discovery publishes names after the first reply; do not end an installed launch check on a partial catalog.
   if (isAppsMode() && !applicationSearch.hits.length && applicationSearch.catalog.refreshing) return;
+  if (isSettingsMode() && settingsSearch.active && settingsSearch.settledEpoch !== settingsSearch.epoch) return;
   debugPending = false;
   if (state.info.debugLaunch) {
     const hit = selectedHit();

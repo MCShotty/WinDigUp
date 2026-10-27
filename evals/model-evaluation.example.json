@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "id": "windows-purpose-smoke-v1",
+  "origin": "synthetic",
+  "split": "test",
+  "root": ".",
+  "documents": [
+    {
+      "id": "app:vlc",
+      "modality": "application",
+      "operation": "text",
+      "language": "en",
+      "title": "VLC media player",
+      "input": "Play videos, movies, music and audio recordings in many formats.",
+      "source": "https://www.videolan.org/vlc/"
+    },
+    {
+      "id": "app:audacity",
+      "modality": "application",
+      "operation": "text",
+      "language": "en",
+      "title": "Audacity",
+      "input": "Record and edit audio. Trim recordings and reduce background noise.",
+      "source": "https://www.audacityteam.org/"
+    },
+    {
+      "id": "app:7zip",
+      "modality": "application",
+      "operation": "text",
+      "language": "en",
+      "title": "7-Zip",
+      "input": "Compress files into archives and extract ZIP and 7z archives.",
+      "source": "https://www.7-zip.org/"
+    },
+    {
+      "id": "setting:bluetooth",
+      "modality": "windows-settings",
+      "operation": "text",
+      "language": "en",
+      "title": "Bluetooth and devices",
+      "input": "Connect and manage Bluetooth devices, including wireless headphones, mice and keyboards.",
+      "source": "https://support.microsoft.com/windows/pair-a-bluetooth-device-in-windows"
+    },
+    {
+      "id": "setting:sound",
+      "modality": "windows-settings",
+      "operation": "text",
+      "language": "en",
+      "title": "Sound",
+      "input": "Choose audio output and input devices. Adjust speaker volume and microphone settings.",
+      "source": "https://support.microsoft.com/windows/fix-sound-or-audio-problems-in-windows"
+    },
+    {
+      "id": "setting:display",
+      "modality": "windows-settings",
+      "operation": "text",
+      "language": "en",
+      "title": "Display",
+      "input": "Change display resolution, screen scaling and monitor arrangement.",
+      "source": "https://support.microsoft.com/windows/change-your-screen-resolution-in-windows"
+    }
+  ],
+  "queries": [
+    {
+      "id": "app-video-en",
+      "q": "watch a movie",
+      "modality": "application",
+      "language": "en",
+      "expected": [
+        "app:vlc"
+      ]
+    },
+    {
+      "id": "app-audio-en",
+      "q": "remove noise from a podcast recording",
+      "modality": "application",
+      "language": "en",
+      "expected": [
+        "app:audacity"
+      ]
+    },
+    {
+      "id": "app-archive-en",
+      "q": "extract a ZIP archive",
+      "modality": "application",
+      "language": "en",
+      "expected": [
+        "app:7zip"
+      ]
+    },
+    {
+      "id": "app-audio-ar",
+      "q": "تسجيل الصوت وتحريره",
+      "modality": "application",
+      "language": "ar",
+      "expected": [
+        "app:audacity"
+      ]
+    },
+    {
+      "id": "app-video-bn",
+      "q": "সিনেমা দেখার অ্যাপ",
+      "modality": "application",
+      "language": "bn",
+      "expected": [
+        "app:vlc"
+      ]
+    },
+    {
+      "id": "app-negative-en",
+      "q": "a zebra standing beside a river",
+      "modality": "application",
+      "language": "en",
+      "expected": []
+    },
+    {
+      "id": "app-negative-ar",
+      "q": "عقد إيجار شقة",
+      "modality": "application",
+      "language": "ar",
+      "expected": []
+    },
+    {
+      "id": "settings-bluetooth-en",
+      "q": "pair wireless headphones",
+      "modality": "windows-settings",
+      "language": "en",
+      "expected": [
+        "setting:bluetooth"
+      ]
+    },
+    {
+      "id": "settings-sound-en",
+      "q": "change my microphone input",
+      "modality": "windows-settings",
+      "language": "en",
+      "expected": [
+        "setting:sound"
+      ]
+    },
+    {
+      "id": "settings-display-en",
+      "q": "increase screen resolution",
+      "modality": "windows-settings",
+      "language": "en",
+      "expected": [
+        "setting:display"
+      ]
+    },
+    {
+      "id": "settings-display-ar",
+      "q": "تغيير دقة الشاشة",
+      "modality": "windows-settings",
+      "language": "ar",
+      "expected": [
+        "setting:display"
+      ]
+    },
+    {
+      "id": "settings-bluetooth-bn",
+      "q": "ব্লুটুথ হেডফোন সংযোগ",
+      "modality": "windows-settings",
+      "language": "bn",
+      "expected": [
+        "setting:bluetooth"
+      ]
+    },
+    {
+      "id": "settings-negative-en",
+      "q": "photos of mountains",
+      "modality": "windows-settings",
+      "language": "en",
+      "expected": []
+    },
+    {
+      "id": "settings-negative-bn",
+      "q": "মুদি কেনার তালিকা",
+      "modality": "windows-settings",
+      "language": "bn",
+      "expected": []
+    }
+  ]
+}

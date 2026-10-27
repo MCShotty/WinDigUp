@@ -1,0 +1,28 @@
+name: Model evaluation contracts
+on:
+  pull_request:
+    paths:
+      - 'scripts/model_evaluation.py'
+      - 'scripts/evaluate-embedding-model.py'
+      - 'scripts/compare-model-evaluations.py'
+      - 'tests/native/test_model_evaluation.py'
+      - 'evals/model-*.json'
+      - 'docs/model-evaluation.md'
+      - '.github/workflows/model-evaluation.yml'
+  push:
+    branches: ['codex/model-evaluation']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evidence-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Validate model evidence without downloading weights
+        run: |
+          python3 -m py_compile scripts/model_evaluation.py scripts/evaluate-embedding-model.py scripts/compare-model-evaluations.py
+          python3 -m unittest discover -s tests/native -p 'test_model_evaluation.py' -v
+          python3 scripts/evaluate-embedding-model.py --help
+          python3 scripts/compare-model-evaluations.py --help

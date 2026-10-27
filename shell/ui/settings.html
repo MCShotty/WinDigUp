@@ -21,6 +21,8 @@
     <button role="tab" data-tab="code">Code</button>
     <button role="tab" data-tab="apps" id="apps-tab" hidden>Apps</button>
     <button role="tab" data-tab="drives" id="drives-tab" hidden>Drives</button>
+    <button role="tab" data-tab="executable-review" id="review-tab" hidden>Review apps</button>
+    <button role="tab" data-tab="windows-settings" id="win-settings-tab" hidden>Windows settings</button>
     <button role="tab" data-tab="storage">Storage</button>
   </nav>
   <main class="settings">
@@ -81,6 +83,10 @@
         <button id="refresh-gpus" type="button">Refresh devices</button>
         <p id="gpu-discovery" class="note" role="status"></p>
       </div>
+      <label for="resource-profile">Background GPU resource use</label>
+      <select id="resource-profile" class="field" aria-describedby="resource-profile-note"><option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="faster">Faster</option></select>
+      <p id="resource-profile-message" class="note problem" role="status" hidden></p>
+      <p id="resource-profile-note" class="note">Quiet uses one background GPU model owner. Balanced and Faster currently preserve the same GPU-job ceiling, subject to available memory. This GPU-only choice is kept when using NPU or Metal. Search keeps priority; it does not cap device power or clocks.</p>
       <div id="gpu-jobs-control" class="gpu-jobs-control">
         <label for="gpu-jobs">Concurrent GPU jobs</label>
         <select id="gpu-jobs" class="field"><option value="0">Automatic, up to 3</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
@@ -99,6 +105,11 @@
         normalization. Unsupported operations or missing hardware stop inference. CPU fallback is disabled.
         File reading, decoding, tokenization and the app still use the CPU.</p>
       <button id="apply-accelerator">Apply and Restart DigUp</button>
+
+      <h3>Result order</h3>
+      <label class="option"><input id="personalization-enabled" type="checkbox" checked disabled><span class="text"><span class="name">Personalize result order</span><span class="info">Uses successful opens and useful-result feedback stored only on this computer. Turn off for consistent ranking. Search text is not stored. Turning off stops collection and restores consistent ranking. Your history stays local until you clear it.</span></span></label>
+      <button id="clear-personalization" type="button" disabled>Clear relevance history</button>
+      <p id="personalization-status" class="note" role="status"></p>
 
       <h3>The shortcut</h3>
       <div class="keys" id="keys"></div>
@@ -135,6 +146,7 @@
       <button class="link" id="index-now">Index now</button>
       <button class="link" id="index-diagnostics">Activity and diagnostics…</button>
       <div class="card list" id="folder-rows"></div>
+      <p id="folder-priority-status" class="note" role="status"></p>
       <button class="link" id="folders-drives" type="button" hidden>Choose drives…</button>
       <button class="link" id="add-folders">Add Folders…</button>
 
@@ -171,6 +183,7 @@
 
       <h3>Code folders</h3>
       <div class="card list" id="code-rows"></div>
+      <p id="code-priority-status" class="note" role="status"></p>
       <button class="link" id="add-code">Add Folders…</button>
 
       <h3>Open code in</h3>
@@ -199,15 +212,6 @@
         <button id="apps-prepare">Prepare purpose matching</button><button class="link" id="apps-diagnostics">Activity and diagnostics…</button></div>
       <button id="open-drives" type="button">Choose drives…</button>
       <div id="extra-app-sources" hidden>
-        <details class="source-section"><summary>Windows settings</summary>
-          <p class="note">Open Windows pages by name or describe a task. Use the Settings filter or settings: for destinations only.</p>
-          <label class="option"><input id="win-settings-enabled" type="checkbox"><span>Include Windows settings</span></label>
-          <label class="option"><input id="win-settings-purpose" type="checkbox"><span>Match settings by purpose on the selected accelerator</span></label>
-          <label class="option"><input id="win-settings-ordinary" type="checkbox"><span>Show settings in ordinary searches</span></label>
-          <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-prepare">Prepare settings purpose matching</button>
-          <p id="source-message-windows" class="source-message" role="status"></p>
-        </details>
-
         <details class="source-section"><summary>Enhance app descriptions online</summary>
           <p class="note">Optional. Reads installed product IDs and versions through WinGet, then requests matching manifests from Microsoft's community catalog on GitHub. If allowed, it may fetch the publisher page listed there. Those services see the requested product and your IP address. Search queries, documents and local file paths are never sent.</p>
           <label class="option"><input id="descriptions-enabled" type="checkbox"><span>Fetch online app descriptions</span></label>
@@ -217,7 +221,7 @@
           <div class="apps-settings-actions"><button id="descriptions-refresh">Refresh descriptions</button><button id="descriptions-clear">Turn off and clear saved descriptions</button></div>
           <p id="source-message-enrichment" class="source-message" role="status"></p>
         </details>
-        <p id="source-message" class="note" role="status"></p><span id="sources-announcement" class="visually-hidden" role="status"></span>
+        <span id="sources-announcement" class="visually-hidden" role="status"></span>
       </div>
       <div class="apps-catalog-tools"><label for="apps-filter">Find an application to customize</label>
         <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">
@@ -231,22 +235,46 @@
     <section class="tab" id="drives" role="tabpanel" hidden>
       <h2>Drives</h2>
       <button id="drive-file-settings" class="link" type="button">File indexing status and exclusions</button>
-      <p class="note">Choose Files to index supported content across a drive using your folder exclusions. Choose Applications to discover programs. You can select either or both.</p>
-          <p class="note">Discover unregistered desktop apps on selected drives. Windows shortcuts remain the preferred launch targets. Installers, internal helpers and uncertain executables stay in review.</p>
-          <label class="option"><input id="drive-enabled" type="checkbox"><span>Discover applications on selected drives</span></label>
-          <label class="option"><input id="drive-paused" type="checkbox"><span>Pause application discovery</span></label>
+      <p class="note">Choose Files, Applications, or both. File choices retain your folder exclusions. Windows shortcuts remain the preferred application launch targets.</p>
           <button id="drive-list-refresh" type="button">Refresh drive list</button>
           <p id="drive-volumes-state" class="note" role="status"></p><p id="source-message-volumes" class="source-message" role="status"></p>
+          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p>
           <div id="drive-volumes" class="source-volumes" aria-label="Drives to scan"></div>
+          <div class="drive-source-policy" aria-label="Application discovery policy">
+          <label class="option"><input id="drive-enabled" type="checkbox"><span>Discover applications on selected drives</span></label>
+          <label class="option"><input id="drive-paused" type="checkbox"><span>Pause application discovery</span></label>
+          </div>
           <p id="drive-draft" class="note" role="status"></p>
           <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan applications</button></div>
-          <p id="drive-status" class="note" aria-label="Drive discovery progress"></p><div id="drive-progress-list"></div>
+          <p id="source-message-discovery" class="source-message" role="status"></p>
+          <details id="drive-measurements"><summary>Application discovery stage measurements</summary><div id="drive-progress-list"></div></details>
           <button id="drive-install">Install or update fast NTFS discovery…</button>
           <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
+          <button id="open-app-review" type="button">Review discovered applications</button>
+          <p class="note">Review installers, helpers and uncertain executables separately. Including an entry makes it searchable; it does not run it.</p>
+    </section>
+
+    <section class="tab" id="executable-review" role="tabpanel" hidden>
+      <h2>Review discovered applications</h2>
+      <p class="note">Drive scans can find installers and internal helpers as well as applications. Include only the programs you want to find and launch. Original Windows shortcuts remain the preferred launch targets.</p>
+      <button id="review-drive-settings" class="link" type="button">Drive choices and scan status</button>
           <label for="drive-filter">Review discovered executables</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
           <label for="drive-visibility">Candidates</label><select id="drive-visibility" class="field"><option value="review">Needs review</option><option value="accepted">Included</option><option value="hidden">Hidden</option><option value="excluded">Excluded</option><option value="all">All</option></select>
           <p id="drive-list-state" class="note" role="status"></p><button id="drive-retry-list" type="button" hidden>Retry catalog</button><div id="drive-candidates" aria-label="Discovered executable candidates"></div><button id="drive-more" hidden>Show more executables</button><p id="drive-count" class="note"></p>
-          <p id="source-message-discovery" class="source-message" role="status"></p>
+          <p id="source-message-review" class="source-message" role="status"></p>
+    </section>
+
+    <section class="tab" id="windows-settings" role="tabpanel" hidden>
+      <h2>Windows settings search</h2>
+      <div class="settings-source">
+          <p class="note">Open Windows pages by name or describe a task. Use the Settings filter or settings: for destinations only.</p>
+          <label class="option"><input id="win-settings-enabled" type="checkbox"><span>Include Windows settings</span></label>
+          <label class="option"><input id="win-settings-purpose" type="checkbox"><span>Match settings by purpose on the selected accelerator</span></label>
+          <label class="option"><input id="win-settings-ordinary" type="checkbox"><span>Show settings in ordinary searches</span></label>
+          <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-prepare">Prepare settings purpose matching</button>
+          <p id="source-message-windows" class="source-message" role="status"></p>
+        </div>
+      <button id="win-settings-activity" class="link" type="button">Activity and diagnostics</button>
     </section>
 
     <section class="tab" id="storage" role="tabpanel" hidden>

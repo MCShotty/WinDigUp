@@ -127,6 +127,8 @@ window.ActivityUI = (() => {
     return ["DigUp activity summary", `Files: ${phases[f.phase] || f.phase}`,
       `Entries checked: ${number(f.entriesChecked)}; candidates${f.candidatesFinal ? "" : " so far"}: ${number(f.candidates)}`,
       `Searchable files: ${number(f.searchable)}; queued: ${number(f.pending)}`,
+      f.knownCountsComplete === false ? "Selected-folder totals are incomplete; reported counts are lower bounds." : "",
+      PipelineUI.heldSummary(f),
       f.error ? `File error: ${f.error}` : "", `Applications: ${number(apps.catalog.count)} available; discovery ${apps.catalog.enabled ? "on" : "off"}`,
       `Purpose matching: ${apps.purpose.state || "idle"}; ${number(apps.purpose.embedded)} of ${number(apps.purpose.total)} prepared`,
       `Configured accelerator: ${inference.configured.backend || "unknown"}`,
@@ -139,12 +141,13 @@ window.ActivityUI = (() => {
       snapshot.enrichment ? `Online descriptions: ${snapshot.enrichment.options?.enabled?"on":"off"}; ${number(snapshot.enrichment.progress?.enriched)} apps enhanced; ${snapshot.enrichment.progress?.message||""}` : "",
       snapshot.discovery?.version===2 ? PipelineUI.summary(snapshot.discovery) : "",
       PipelineUI.indexSummary(f),
+      inference.telemetry?.schemaVersion===1 ? `Device measurements: ${inference.telemetry.state}; source ${inference.telemetry.source||"not reported"}; utilization ${Number.isFinite(inference.telemetry.utilizationPercent)?inference.telemetry.utilizationPercent+"%":"unknown"}; memory ${Number.isFinite(inference.telemetry.memoryUsedBytes)?inference.telemetry.memoryUsedBytes+" bytes":"unknown"}` : "",
       `Encoder: ${inference.encoder}`, `Last file progress: ${ago(f.lastProgressAt)}`,
       snapshot.search?.last ? `Last search (${snapshot.search.last.phase}): ${Math.round(snapshot.search.last.total||0)} ms input to render; ${searchBreakdown(snapshot.search.last)}` : ""].filter(Boolean).join("\n");
   }
   function searchBreakdown(sample) {
     return [["debounce","Typing pause"],["queue","Helper queue"],["transport","Dispatch"],["model_load","Model startup"],
-      ["encode","Query encoding"],["scoring","Vector scoring"],["keywords","Keyword search"],["metadata","Metadata"],["render","Rendering"]]
+      ["encode","Query encoding"],["scoring","Vector scoring"],["keywords","Keyword search"],["metadata","Metadata"],["availability","Availability cache lookup"],["render","Rendering"]]
       .filter(([key])=>Number.isFinite(sample?.[key])).map(([key,label])=>`${label} ${Math.round(sample[key])} ms`).join(" · ");
   }
 
@@ -165,14 +168,18 @@ window.ActivityUI = (() => {
             <p data-key="progress-label" class="activity-progress-label"></p>
             <div class="activity-metrics"><div><strong data-key="first-value"></strong><span data-key="first-label"></span></div>
               <div><strong data-key="second-value"></strong><span data-key="second-label"></span></div></div>
-            <p data-key="candidates-note" class="activity-muted"></p>
+            <p data-key="candidates-note" class="activity-muted"></p><p data-key="held-work" class="activity-muted" hidden></p><p data-key="inventory-note" class="activity-muted" hidden></p>
             <div class="activity-location"><div><span data-key="root"></span><p data-key="path" class="activity-path"></p></div>
               <button data-key="pause" type="button">Pause indexing</button></div>
             <p data-key="freshness" class="activity-muted"></p>
             <p data-key="file-error" class="activity-error" hidden></p>
             <details data-key="file-details"><summary>File statistics and exclusions</summary>
-              <dl><div><dt>Searchable files</dt><dd data-key="searchable"></dd></div><div><dt>Queued files</dt><dd data-key="pending"></dd></div>
-              <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
+              <dl><div><dt>Discovered file names</dt><dd data-key="known-files"></dd></div><div><dt>Content searchable</dt><dd data-key="searchable"></dd></div><div><dt>Queued files</dt><dd data-key="pending"></dd></div>
+              <div><dt>Long files to finish</dt><dd data-key="unfinished"></dd></div>
+              <div><dt>Eligible queued files</dt><dd data-key="runnable-pending"></dd></div>
+              <div><dt>Eligible long files</dt><dd data-key="runnable-unfinished"></dd></div>
+              <div><dt>Queued files held</dt><dd data-key="held-pending"></dd></div>
+              <div><dt>Long files held</dt><dd data-key="held-unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
           </section>
           <section class="activity-section" data-key="indexing-work" hidden></section>
           <section class="activity-section"><h3>Last search</h3><p data-key="search-total">No search timing reported yet.</p>
@@ -181,7 +188,7 @@ window.ActivityUI = (() => {
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="discovery-section" hidden><h3>Application sources</h3>
-            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Application source settings</button><button data-key="drive-settings" type="button">Choose drives</button>
+            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Apps settings</button><button data-key="windows-settings" type="button">Windows settings search</button><button data-key="drive-settings" type="button">Choose drives</button>
             <p data-key="discovery-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="gpu-work"></section><section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
@@ -215,6 +222,7 @@ window.ActivityUI = (() => {
       this.indexingView=new PipelineUI.IndexingView(this.get("indexing-work"));
       this.get("drive-settings").onclick=()=>options.onSettings ? options.onSettings("drives") : invoke("open_settings",{tab:"drives"});
       this.get("source-settings").onclick=()=>options.onSettings ? options.onSettings("apps") : invoke("open_settings",{tab:"apps"});
+      this.get("windows-settings").onclick=()=>options.onSettings ? options.onSettings("windows-settings") : invoke("open_settings",{tab:"windows-settings"});
       this.get("close").hidden = !options.onClose;
       this.get("close").onclick = () => options.onClose?.();
       const prefix=`activity-view-${++viewId}`;
@@ -242,8 +250,21 @@ window.ActivityUI = (() => {
       this.get("folders").onclick = () => options.onSettings ? options.onSettings("folders") : invoke("open_settings", { tab:"folders" });
       this.get("acceleration").onclick = () => options.onSettings ? options.onSettings("general") : invoke("open_settings", { tab: "general" });
     }
+    focusDrive(id) {
+      this.setTab("overview");
+      this.pendingDrive = id;
+      this.focusPendingDrive();
+    }
+    focusPendingDrive() {
+      if (!this.pendingDrive) return;
+      const row = this.driveList.rows.get(this.pendingDrive);
+      if (!row?.root.isConnected) return;
+      row.name.tabIndex = -1;
+      row.name.focus({ preventScroll: true }); row.root.scrollIntoView({ block: "nearest" });
+      this.pendingDrive = null;
+    }
     show(tab = this.tab) { this.setTab(tab); this.stop ||= subscribe((s, error) => this.update(s, error)); }
-    hide() { this.stop?.(); this.stop = null; }
+    hide() { this.stop?.(); this.stop = null; this.pendingDrive = null; }
     destroy() { this.hide(); this.host.replaceChildren(); }
     setTab(tab) {
       this.tab = tab;
@@ -271,15 +292,21 @@ window.ActivityUI = (() => {
       const search=snapshot.search?.last;
       put("search-total",search?`${Math.round(search.total||0)} ms input to render · ${search.phase.replace(/_/g," ")}${search.cacheHit?" · Cached query":""}`:"No search timing reported yet.");
       put("search-breakdown",search?searchBreakdown(search):"");
-      const scanning = ["discovering", "preparing_queue", "starting"].includes(f.phase);
-      const title = phases[f.phase] || "File indexing";
+      const discovery = f.discoveryActive === true && !f.paused && !["paused", "pausing", "stopped", "failed", "scheduled"].includes(f.phase);
+      const overlap = discovery && ["indexing", "finishing"].includes(f.phase);
+      const scanning = discovery || ["discovering", "preparing_queue", "starting"].includes(f.phase);
+      const title = overlap
+        ? "Discovering and indexing files" : discovery && ["preparing_model", "unavailable", "checking_accelerator"].includes(f.phase)
+          ? "Discovering file names" : phases[f.phase] || "File indexing";
       put("phase", title);
       const explanations = {
-        discovering: f.searchable ? "Checking for changes. Your existing file index remains searchable." : "The first scan is still running. File indexing starts after discovery finishes.",
+        discovering: f.searchable ? "Checking for changes. Your existing file index remains searchable." : "The first scan is running. Discovered names and completed content appear as they become available.",
         preparing_queue: "Applying exclusions and reconciling supported files with the index.",
         not_configured: "Apps work without folders. Choose folders in Settings to add file search.",
         indexing: "Reading eligible files and preparing searchable content on your selected accelerator.",
-        waiting: "Files are queued, but no file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
+        waiting: PipelineUI.heldFiles(f) ? "Some file work is held until its folders are checked. Existing searchable content is kept. "
+          + ((f.unreadable?.length || f.missing?.length) ? "Review the unavailable or unreadable folders below, then choose Index now in Diagnostics." : "Choose Index now in Diagnostics to retry scanning.")
+          : "No file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
         finishing: "Reading the remaining pages and chunks of long files. Partial content is already searchable.",
         scheduled: `Existing results remain searchable. Indexing resumes from ${f.scheduledAt || "the scheduled time"}.`,
         paused: "Existing results and application launching remain available.", pausing: "Waiting for the file worker to stop. Search remains available.",
@@ -291,26 +318,38 @@ window.ActivityUI = (() => {
         preparing_model: "File indexing is waiting for model files. Application names and launching remain available.",
         unavailable: "The selected accelerator cannot run inference. Application names and launching remain available.",
       };
-      put("explanation", explanations[f.phase] || "Waiting for the next file-worker update.");
-      const known = typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
+      put("explanation", overlap ? "Discovery is still running while prepared files become searchable. The final eligible total is not known yet."
+        : discovery && ["preparing_model", "unavailable", "checking_accelerator"].includes(f.phase)
+          ? "File names are being discovered. Content matching is waiting for the selected accelerator; its status is shown independently below."
+          : explanations[f.phase] || "Waiting for the next file-worker update.");
+      const known = f.knownCountsComplete !== false && !scanning && typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
       const meter = this.get("meter"); meter.classList.toggle("indeterminate", !known);
-      meter.hidden = !known && !["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
+      meter.hidden = !known && !scanning && !["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
       meter.firstElementChild.style.width = known ? `${100 * f.done / f.total}%` : "";
       for (const attr of ["aria-valuenow", "aria-valuemin", "aria-valuemax"]) meter.removeAttribute(attr);
       if (known) { meter.setAttribute("aria-valuemin", "0"); meter.setAttribute("aria-valuemax", String(f.total)); meter.setAttribute("aria-valuenow", String(f.done)); }
       meter.setAttribute("aria-valuetext", known ? `${number(f.done)} of ${number(f.total)}` : "Working; total not known yet");
       put("progress-label", known ? `${number(f.done)} of ${number(f.total)} ${f.phase === "finishing" ? "pages and chunks" : "files"}` : meter.hidden ? "" : "Total not known yet");
       const stage = f.phase === "idle" ? 2 : ["indexing", "finishing", "waiting"].includes(f.phase) ? 1 : 0;
-      this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { el.classList.toggle("current", i === stage); el.setAttribute("aria-current", i === stage ? "step" : "false"); });
-      this.host.querySelector(".activity-stages").hidden = ["not_configured", "failed", "unavailable", "preparing_model"].includes(f.phase);
-      put("first-value", number(scanning ? f.entriesChecked : f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
-      put("second-value", number(scanning ? f.candidates : f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
+      this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (overlap && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
+      this.host.querySelector(".activity-stages").setAttribute("aria-label", overlap ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");
+      this.host.querySelector(".activity-stages").hidden = !discovery && ["not_configured", "failed", "unavailable", "preparing_model", "paused", "pausing"].includes(f.phase);
+      const inventoryNumber = value => f.knownCountsComplete === false ? Number.isFinite(value) && value > 0 ? "At least "+number(value) : "Not known yet" : number(value);
+      put("first-value", scanning ? number(f.entriesChecked) : inventoryNumber(f.searchable)); put("first-label", scanning ? "Entries checked" : "Searchable files");
+      put("second-value", scanning ? number(f.candidates) : inventoryNumber(f.pending)); put("second-label", scanning ? (f.candidatesFinal ? "Eligible candidates" : "Candidates so far") : "Queued files");
       put("candidates-note", scanning && !f.candidatesFinal ? "Candidates are checked against exclusions before indexing." : "");
+      put("inventory-note",f.knownCountsComplete === false ? "Some selected-folder totals are unknown. Shown totals are lower bounds; missing totals stay unknown." : "");
+      this.get("inventory-note").hidden=f.knownCountsComplete !== false;
+      const held=PipelineUI.heldSummary(f);
+      put("held-work",held ? held+". Existing searchable content is kept." : "");
+      this.get("held-work").hidden=!held;
+      put("runnable-pending",number(f.runnablePending));put("runnable-unfinished",number(f.runnableUnfinished));
+      put("held-pending",number(f.heldPending));put("held-unfinished",number(f.heldUnfinished));
       put("root", f.root ? `Scanning: ${shortPath(f.root)}` : scanning ? "Checking selected folders" : "");
       put("path", shortPath(f.path)); this.get("path").title = f.path || "";
       put("freshness", `Last progress: ${ago(f.lastProgressAt)}${snapshot.helpers.index?.pid ? " · File worker running" : snapshot.helpers.index?.busy ? " · Reading worker state" : " · File worker stopped"}`);
       put("file-error", f.error); this.get("file-error").hidden = !f.error;
-      put("searchable", number(f.searchable)); put("pending", scanning && !f.candidatesFinal ? "Not known yet" : number(f.pending)); put("unfinished", number(f.unfinished));
+      put("known-files", inventoryNumber(f.knownFiles)); put("searchable", inventoryNumber(f.searchable)); put("pending", scanning && !f.candidatesFinal ? "Not known yet" : inventoryNumber(f.pending)); put("unfinished", inventoryNumber(f.unfinished));
       const skips = [...Object.entries(f.skipped || {}).map(([reason, count]) => `${number(count)} files: ${reason}`),
         ...Object.entries(f.skippedFolders || {}).map(([reason, count]) => `${number(count)} folders: ${reason}`),
         ...(f.missing || []).map(path => `Unavailable: ${shortPath(path)}`), ...(f.unreadable || []).map(path => `Unreadable: ${shortPath(path)}`)];
@@ -345,13 +384,14 @@ window.ActivityUI = (() => {
       const descriptionStatus=`${enrichment.options?.enabled?(ep.state||"Waiting"):"Online descriptions off"}${ep.enriched!=null?` · ${number(ep.enriched)} apps enhanced`:""}`;
       this.get("discovery-section").hidden=this.get("discovery-health").hidden=!drive.supported;
       this.driveList.update(drive);this.get("drive-list").hidden=drive.version!==2;
+      this.focusPendingDrive();
       this.inferenceView.update(inference);
       this.indexingView.update(f,inference);
       const driveSummary=drive.version===2 ? (!drive.options?.enabled ? "Drive discovery off" :
         PipelineUI.entries(drive).length+" selected drives"+(drive.running?" · Discovery running":"")) : driveStatus;
       put("settings-status",settingsStatus);put("drive-status",driveSummary);put("description-status",descriptionStatus);
       put("health-settings",settingsStatus);put("health-drives",driveSummary);put("health-descriptions",descriptionStatus);
-      put("discovery-note",[dp.message,ep.message,settings.purpose?.message,dp.mode==="directory"?"Using directory fallback. Fast NTFS discovery is optional in Apps settings.":""].filter(Boolean).join(" · "));
+      put("discovery-note",[dp.message,ep.message,settings.purpose?.message,dp.mode==="directory"?"Using directory fallback. Fast NTFS discovery is optional in Drives settings.":""].filter(Boolean).join(" · "));
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
       put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),
         ...(f.unreadable || []).map(path=>`Folder unreadable: ${shortPath(path)}`), ...sourceErrors, purpose.message, inference.error, dp.message, ep.message, settings.purpose?.message].filter(Boolean).join("\n"));
@@ -361,7 +401,7 @@ window.ActivityUI = (() => {
       this.get("prepare").disabled = Boolean(this.busy) || !catalog.enabled || !catalog.semanticEnabled || inference.model?.state !== "ready" || complete;
       this.get("prepare").hidden = catalog.supported === false;
       this.renderEvents(snapshot.events || []);
-      const phaseSignature=JSON.stringify([f.phase,drive.supported?dp.phase:null,drive.supported?ep.state:null,...PipelineUI.entries(drive).map(item=>item.progress.phase)]);
+      const phaseSignature=JSON.stringify([f.phase,f.discoveryActive,drive.supported?dp.phase:null,drive.supported?ep.state:null,...PipelineUI.entries(drive).map(item=>item.progress.phase)]);
       if(this.lastPhase!==phaseSignature){this.lastPhase=phaseSignature;put("announcement",title+(drive.supported?` · Drive discovery ${dp.phase||"off"} · Online descriptions ${ep.state||"off"}`:""));}
     }
     renderEvents(events) {

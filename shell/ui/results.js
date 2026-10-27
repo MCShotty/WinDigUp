@@ -120,7 +120,7 @@ function matchedMeaning(hit) {
 
 /// Why it's here, in a few words: "Matches the picture", "Matches the frame at 0:06".
 function reasonOf(hit) {
-  if (isLauncher(hit)) return hit.reason === "semantic" ? "Matches what this application does" : "Matches its name or alias";
+  if (isLauncher(hit)) return matchLabel(hit);
   const words = hit.keyword_rank != null;
   if (!matchedMeaning(hit)) return words ? "Has your words" : "Matches its name";
   const at = hit.loc != null ? clock(hit.loc) : "";
@@ -298,3 +298,74 @@ const ICONS = {
   image: '<svg viewBox="0 0 24 24"><path d="M4 5 H20 V19 H4 Z M4 16 L9 11 L13 15 L16 12 L20 16"/></svg>',
   screenshot: '<svg viewBox="0 0 24 24"><path d="M4 8 V4 H8 M16 4 H20 V8 M20 16 V20 H16 M8 20 H4 V16 M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12"/></svg>',
 };
+
+function matchLabel(hit) {
+  const labels = {name:"Name match",alias:"Alias match",content:"Content match",purpose:"Purpose match"};
+  if (labels[hit.matchSource]) return labels[hit.matchSource];
+  if (isLauncher(hit)) return hit.reason === "semantic" ? "Purpose match" : "Name or alias match";
+  return matchedMeaning(hit) || hit.keyword_rank != null ? "Content match" : "Name match";
+}
+
+function availabilityLabel(hit) {
+  return !isLauncher(hit) && (hit.availability === "unknown" || hit.availability_stale === true)
+    ? "Availability checked when opened" : "";
+}
+
+function appendUsefulResult(container, hit, fail) {
+  if (!hit.feedbackToken) return;
+  const button = element("button", "relevance-feedback", hit.usefulSaved ? "Feedback saved" : "Useful result");
+  button.type = "button";
+  button.disabled = hit.usefulSaved === true;
+  button.setAttribute("aria-label", "Mark " + titleOf(hit) + " as a useful result");
+  button.onclick = async event => {
+    event.stopPropagation(); button.disabled = true;
+    try {
+      await invoke("useful_result", {token:hit.feedbackToken});
+      hit.usefulSaved = true; button.textContent = "Feedback saved";
+      button.setAttribute("aria-label", "Useful feedback saved for " + titleOf(hit));
+    } catch (error) { button.disabled = false; fail(error); }
+  };
+  container.append(button);
+}
+
+// A refreshed name index can advance while the compatible vector snapshot is unchanged.
+function mergeFileSearchReplies(semantic, lexical, text) {
+  if(lexical.scope_empty===true)return {...semantic,...lexical,hits:[],strong:0,facets:{},meaning:false,scope_empty:true};
+  if (!semantic?.meaning) return {...semantic, ...lexical, meaning:false,scope_empty:false,
+    ...(semantic?.semantic_error ? {semantic_error:semantic.semantic_error} : {})};
+  const split = (reply,keep=()=>true) => {
+    const hits=reply.hits || [], strong=Math.max(0,Math.min(reply.strong ?? hits.length,hits.length));
+    const seen=new Set(),ranked=[],weaker=[];
+    hits.forEach((hit,index)=>{
+      const key=resultKey(hit);
+      if(seen.has(key)||!keep(hit))return;
+      seen.add(key);(index<strong?ranked:weaker).push(hit);
+    });
+    return [ranked,weaker];
+  };
+  const currentWords=new Set((lexical.hits || []).map(resultKey));
+  const [ranked,weaker]=split(semantic,hit=>currentWords.has(resultKey(hit))||matchedMeaning(hit));
+  const [words,weakWords]=split(lexical);
+  const known=new Map([...ranked,...weaker].map(hit=>[resultKey(hit),hit]));
+  const strongKeys=new Set(ranked.map(resultKey));
+  const supplement=(target,hit) => {
+    const tier=MixedResults.tier(hit,text), at=target.findIndex(current=>MixedResults.tier(current,text)>tier);
+    target.splice(at<0?target.length:at,0,hit);
+  };
+  for(const hit of words) {
+    const key=resultKey(hit);
+    if(strongKeys.has(key))continue;
+    const previous=known.get(key);
+    if(previous)weaker.splice(weaker.findIndex(current=>resultKey(current)===key),1);
+    supplement(ranked,previous || hit);strongKeys.add(key);known.set(key,previous || hit);
+  }
+  for(const hit of weakWords) {
+    const key=resultKey(hit);if(known.has(key))continue;
+    supplement(weaker,hit);known.set(key,hit);
+  }
+  const facets={};
+  for(const hit of ranked)facets[hit.kind]=(facets[hit.kind] || 0)+1;
+  return {...semantic, hits:[...ranked,...weaker], strong:ranked.length, facets, count_scope:"displayed_matches",scope_empty:false,
+    exact_filename_known:lexical.exact_filename_known,exact_filename:lexical.exact_filename,
+    category_query:lexical.category_query};
+}

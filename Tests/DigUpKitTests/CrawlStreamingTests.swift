@@ -1,0 +1,384 @@
+import Foundation
+import Testing
+@testable import DigUpKit
+
+@Suite(.serialized)
+struct CrawlStreamingTests {
+    func temporary() throws -> URL {
+        let root=FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        return URL(fileURLWithPath:FolderSelection.realPath(root.path),isDirectory:true)
+    }
+    func write(_ file:URL) throws {
+        try "A useful railway timetable document.".write(to:file,atomically:false,encoding:.utf8)
+    }
+
+    @Test func batchesPublishBeforeTheWalkEndsAndStayBounded() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        for index in 0..<300 {try write(root.appendingPathComponent("note-\(index).txt"))}
+        var received=0,peak=0
+        let report=try Crawler.scan([root],options:IndexOptions(),shouldStop:{received>0},onBatch:{
+            received += $0.count;peak=max(peak,$0.count)
+        })
+        #expect(received==64)
+        #expect(peak<=64)
+        #expect(report.visited<300)
+    }
+
+    @Test func datasetsAndCodeProjectsAgreeWithTheCompleteCrawler() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let dataset=root.appendingPathComponent("training")
+        let project=root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at:dataset,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:project,withIntermediateDirectories:true)
+        for index in 0..<320 {try Data([1]).write(to:dataset.appendingPathComponent("clip_\(1000+index).jpg"))}
+        try write(root.appendingPathComponent("note.txt"))
+        try write(project.appendingPathComponent("package.json"))
+        try write(project.appendingPathComponent("private.txt"))
+        try Data([1]).write(to:project.appendingPathComponent("Screenshot test.jpg"))
+        var streamed:[Candidate]=[]
+        let report=try Crawler.scan([root],options:IndexOptions(),onBatch:{streamed += $0})
+        let legacy=Crawler.crawl([root],options:IndexOptions())
+        #expect(Set(streamed.map(\.path))==Set(legacy.candidates.map(\.path)))
+        #expect(report.skipped["dataset"]==320)
+        #expect(report.candidateCount==streamed.count)
+        #expect(report.skipped["inside a code project"]==legacy.skipped["inside a code project"])
+    }
+
+    @Test func partialRootsAndCancelledScansPreserveExistingNames() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        let first=files.appendingPathComponent("first.txt"),second=files.appendingPathComponent("second.txt")
+        try write(first);try write(second)
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let firstCandidate=try #require(Crawler.crawl([files],options:IndexOptions()).candidates.first{$0.path==first.path})
+        let cancelled=try indexer.beginScan([files])
+        _=try cancelled.admit([firstCandidate])
+        cancelled.close()
+        #expect(try store.files(under:[files.path]).count==2)
+        let partial=try indexer.beginScan([files])
+        _=try partial.admit([firstCandidate])
+        var report=CrawlReport();report.unreadable.insert(second.path)
+        _=try partial.finish(report)
+        partial.close()
+        #expect(try store.files(under:[files.path]).count==2)
+    }
+
+    @Test func renameReusesIdentityAndNamesAreCommittedBeforeCompletion() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        let old=files.appendingPathComponent("old.txt"),new=files.appendingPathComponent("renamed.txt")
+        try write(old)
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let id=try #require(store.files(under:[files.path]).first).id
+        try FileManager.default.moveItem(at:old,to:new)
+        let report=Crawler.crawl([files],options:IndexOptions())
+        let scan=try indexer.beginScan([files])
+        _=try scan.admit(report.candidates)
+        let summary=try scan.finish(report)
+        scan.close()
+        let row=try #require(store.files(under:[files.path]).first)
+        #expect(row.id==id)
+        #expect(row.path==new.path)
+        #expect(summary.moved==1)
+        let extra=files.appendingPathComponent("extra.txt")
+        try write(extra)
+        let extraCandidate=try #require(Crawler.crawl([files],options:IndexOptions()).candidates.first{$0.path==extra.path})
+        let next=try indexer.beginScan([files])
+        _=try next.admit([extraCandidate])
+        #expect(try store.files(under:[files.path]).count==2)
+        next.close()
+    }
+
+    @Test func temporaryEmptyInputDoesNotFinishThePipeline() throws {
+        var polls=0
+        let pipeline=IndexPipeline<Int,Int,Int>(nextInput:{
+            polls += 1
+            return polls==4 ? 7 : nil
+        },inputComplete:{polls>4},source:{_ in "files"},sizes:{_ in (0,0)},
+        prepare:{_,value in value},cleanup:{_ in})
+        defer {pipeline.close()}
+        let item=try #require(pipeline.nextPrepared(shouldStop:{false}))
+        #expect(item.value==7)
+        pipeline.release(item,commitMs:0)
+        #expect(pipeline.nextPrepared(shouldStop:{false})==nil)
+        #expect(polls>=5)
+    }
+
+    @Test func ambiguousHardLinkDestinationsDoNotStealTheOldIdentity() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        let old=files.appendingPathComponent("old.txt")
+        let first=files.appendingPathComponent("first.txt"),second=files.appendingPathComponent("second.txt")
+        try write(old)
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let oldID=try #require(store.files(under:[files.path]).first).id
+        try FileManager.default.moveItem(at:old,to:first)
+        try FileManager.default.linkItem(at:first,to:second)
+        let report=Crawler.crawl([files],options:IndexOptions())
+        let session=try indexer.beginScan([files])
+        _=try session.admit(report.candidates)
+        let summary=try session.finish(report)
+        session.close()
+        let rows=try store.files(under:[files.path])
+        #expect(summary.moved==0)
+        #expect(rows.count==2)
+        #expect(!rows.contains{$0.id==oldID})
+    }
+
+    @Test func cancellingBackpressuredScannersReleasesTheirSharedGate() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        for index in 0..<160 {try write(root.appendingPathComponent("note-\(index).txt"))}
+        let gate=NSLock()
+        let first=CrawlStream(roots:[root],options:IndexOptions(),capacity:1,scanGate:gate)
+        let second=CrawlStream(roots:[root],options:IndexOptions(),capacity:1,scanGate:gate)
+        Thread.sleep(forTimeInterval:0.05)
+        first.cancel();second.cancel()
+        let start=Date()
+        first.close();second.close()
+        #expect(Date().timeIntervalSince(start)<5)
+        #expect(first.peakQueuedBatches<=1 && second.peakQueuedBatches<=1)
+    }
+
+    @Test func priorityAndAppendedPagesDoNotLoseFilesAfterCursorReset() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:second,withIntermediateDirectories:true)
+        try write(first.appendingPathComponent("a.txt"));try write(second.appendingPathComponent("b.txt"))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([first,second])
+        let queue=try store.pendingQueue()
+        defer {queue.close()}
+        try queue.prioritize(second.path)
+        #expect(try queue.take()?.file.path==second.appendingPathComponent("b.txt").path)
+        #expect(try queue.take()?.file.path==first.appendingPathComponent("a.txt").path)
+        #expect(try queue.take()==nil)
+        let extra=first.appendingPathComponent("extra.txt")
+        try write(extra)
+        let candidate=try #require(Crawler.crawl([first],options:IndexOptions()).candidates.first{$0.path==extra.path})
+        let id=try store.insert(candidate)
+        try queue.append([id])
+        #expect(try queue.take()?.file.id==id)
+        let ordinary=first.appendingPathComponent("ordinary.txt")
+        let preferred=second.appendingPathComponent("preferred.txt")
+        try write(ordinary);try write(preferred)
+        let candidates=Crawler.crawl([first,second],options:IndexOptions()).candidates
+        let normalID=try store.insert(try #require(candidates.first{$0.path==ordinary.path}))
+        let preferredID=try store.insert(try #require(candidates.first{$0.path==preferred.path}))
+        try queue.append([normalID,preferredID])
+        #expect(try queue.take()?.file.id==preferredID)
+        #expect(try queue.take()?.file.id==normalID)
+    }
+
+    @Test func wideDirectoryFanoutCompletesWithBoundedCandidateBatches() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        for index in 0..<400 {
+            let folder=root.appendingPathComponent("folder-\(index)")
+            try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+            try write(folder.appendingPathComponent("note.txt"))
+        }
+        var count=0,peak=0
+        let report=try Crawler.scan([root],options:IndexOptions(),onBatch:{count += $0.count;peak=max(peak,$0.count)})
+        #expect(count==400)
+        #expect(report.candidateCount==400)
+        #expect(peak<=64)
+    }
+
+    @Test func targetedSubtreesRespectExclusionsAndExplicitNestedSelections() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let excluded=root.appendingPathComponent("excluded")
+        try FileManager.default.createDirectory(at:excluded,withIntermediateDirectories:true)
+        try write(excluded.appendingPathComponent("note.txt"))
+        var options=IndexOptions();options.excludedFolders=[excluded.path]
+        let ordinary=root.appendingPathComponent("ordinary")
+        try FileManager.default.createDirectory(at:ordinary,withIntermediateDirectories:true)
+        try write(ordinary.appendingPathComponent("note.txt"))
+        #expect(Crawler.canScanSubtree(ordinary,selectedRoots:[root],options:options))
+        var ordinaryCandidates:[Candidate]=[]
+        _=try Crawler.scan([ordinary],options:options,selectedRoots:[root],onBatch:{ordinaryCandidates += $0})
+        #expect(ordinaryCandidates.count==1)
+        var hidden:[Candidate]=[]
+        _=try Crawler.scan([excluded],options:options,selectedRoots:[root],onBatch:{hidden += $0})
+        #expect(hidden.isEmpty)
+        var selected:[Candidate]=[]
+        _=try Crawler.scan([excluded],options:options,selectedRoots:[root,excluded],onBatch:{selected += $0})
+        #expect(selected.count==1)
+        let vendor=root.appendingPathComponent("vendor")
+        try FileManager.default.createDirectory(at:vendor,withIntermediateDirectories:true)
+        var code=IndexOptions();code.code=true
+        #expect(!Crawler.canScanSubtree(vendor,selectedRoots:[root],options:code))
+    }
+
+    #if !os(Windows)
+    @Test func childDirectoryLinksCannotEscapeOrCycleTheSelectedRoot() throws {
+        let root=try temporary(),outside=try temporary()
+        defer {try? FileManager.default.removeItem(at:root);try? FileManager.default.removeItem(at:outside)}
+        try write(root.appendingPathComponent("inside.txt"))
+        try write(outside.appendingPathComponent("outside.txt"))
+        try FileManager.default.createSymbolicLink(at:root.appendingPathComponent("escape"),withDestinationURL:outside)
+        try FileManager.default.createSymbolicLink(at:root.appendingPathComponent("cycle"),withDestinationURL:root)
+        var candidates:[Candidate]=[]
+        _=try Crawler.scan([root],options:IndexOptions(),onBatch:{candidates += $0})
+        #expect(candidates.count==1)
+        #expect(candidates.first?.path==root.appendingPathComponent("inside.txt").path)
+    }
+    #endif
+
+    @Test(.enabled(if:FileSystem.git != nil))
+    func codeGitIgnoreBehaviorMatchesTheCompleteCrawler() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let process=Process()
+        process.executableURL=URL(fileURLWithPath:try #require(FileSystem.git))
+        process.arguments=["-C",root.path,"init","--quiet"]
+        process.standardOutput=FileHandle.nullDevice;process.standardError=FileHandle.nullDevice
+        try process.run();process.waitUntilExit()
+        #expect(process.terminationStatus==0)
+        try "ignored.py\n".write(to:root.appendingPathComponent(".gitignore"),atomically:false,encoding:.utf8)
+        try write(root.appendingPathComponent("kept.py"));try write(root.appendingPathComponent("ignored.py"))
+        var options=IndexOptions();options.code=true
+        var streamed:[Candidate]=[]
+        _=try Crawler.scan([root],options:options,onBatch:{streamed += $0})
+        let legacy=Crawler.crawl([root],options:options)
+        #expect(Set(streamed.map(\.path))==Set(legacy.candidates.map(\.path)))
+        #expect(streamed.map{URL(fileURLWithPath:$0.path).lastPathComponent}==["kept.py"])
+    }
+
+    #if !os(Windows)
+    @Test func canonicalExclusionsApplyThroughSelectedRootAliases() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let alias=root.deletingLastPathComponent().appendingPathComponent("alias-\(UUID().uuidString)")
+        defer {try? FileManager.default.removeItem(at:alias)}
+        try FileManager.default.createSymbolicLink(at:alias,withDestinationURL:root)
+        let excluded=root.appendingPathComponent("excluded")
+        try FileManager.default.createDirectory(at:excluded,withIntermediateDirectories:true)
+        try write(excluded.appendingPathComponent("note.txt"))
+        var options=IndexOptions();options.excludedFolders=[excluded.path]
+        let target=alias.appendingPathComponent("excluded")
+        #expect(!Crawler.canScanSubtree(target,selectedRoots:[alias],options:options))
+        var candidates:[Candidate]=[]
+        _=try Crawler.scan([target],options:options,selectedRoots:[alias],onBatch:{candidates += $0})
+        #expect(candidates.isEmpty)
+    }
+    #endif
+
+    @Test func interleavedReadyMetadataStillFormsFullImageBatches() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        for index in 0..<8 {
+            try Data([1]).write(to:files.appendingPathComponent("photo-\(index).jpg"))
+            try write(files.appendingPathComponent("note-\(index).txt"))
+        }
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let rows=try store.files(under:[files.path])
+        var ids:[Int64]=[]
+        for index in 0..<8 {
+            ids.append(try #require(rows.first{$0.path.hasSuffix("photo-\(index).jpg")}).id)
+            ids.append(try #require(rows.first{$0.path.hasSuffix("note-\(index).txt")}).id)
+        }
+        let queue=try store.pendingQueue(includePending:false)
+        defer {queue.close()}
+        try queue.append(ids)
+        let batch=try #require(try queue.takeBatch())
+        #expect(batch.files.count==8)
+        #expect(batch.files.allSatisfy{$0.kind == .image})
+    }
+
+    @Test func folderUrgencyPrecedesOtherKindsWhileKeepingImageGroups() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let ordinary=root.appendingPathComponent("ordinary"),preferred=root.appendingPathComponent("preferred")
+        try FileManager.default.createDirectory(at:ordinary,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:preferred,withIntermediateDirectories:true)
+        for index in 0..<8 {
+            try Data([1]).write(to:ordinary.appendingPathComponent("ordinary-\(index).jpg"))
+            try Data([1]).write(to:preferred.appendingPathComponent("preferred-\(index).jpg"))
+            try write(preferred.appendingPathComponent("note-\(index).txt"))
+        }
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([ordinary,preferred])
+        let queue=try store.pendingQueue(includePending:false)
+        defer {queue.close()}
+        try queue.prioritize(preferred.path)
+        try queue.append(store.files(under:[ordinary.path,preferred.path]).map(\.id))
+        let pictures=try #require(try queue.takeBatch())
+        #expect(pictures.files.count==8)
+        #expect(pictures.files.allSatisfy{$0.path.hasPrefix(preferred.path+"/") && $0.kind == .image})
+        let document=try #require(try queue.takeBatch())
+        #expect(document.files.first?.kind == .doc)
+        #expect(document.files.first?.path.hasPrefix(preferred.path+"/")==true)
+    }
+
+    @Test func heldPendingWorkDoesNotEraseKnownOrPartialCounts() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try write(files.appendingPathComponent("pending.txt"));try write(files.appendingPathComponent("partial.txt"))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([files])
+        let partial=try #require(store.files(under:[files.path]).first{$0.path.hasSuffix("partial.txt")})
+        try store.finish(partial.id,state:"partial",info:["read_to":"1","read_end":"3"])
+        store.pendingExcludedPaths=[files.path]
+        #expect(try store.pendingCount()==0)
+        #expect(try store.runnableUnfinishedCount()==0)
+        let queue=try store.pendingQueue()
+        #expect(try queue.take()==nil)
+        queue.close()
+        let counts=try store.counts()
+        #expect(counts.byKindAndState["doc"]?["pending"]==1)
+        #expect(counts.byKindAndState["doc"]?["partial"]==1)
+        #expect(counts.unfinished==1)
+        store.pendingExcludedPaths=[]
+        #expect(try store.pendingCount()==1)
+        #expect(try store.runnableUnfinishedCount()==1)
+    }
+
+    @Test func manyUnreadablePathsHoldOnlyTheirSourceRoot() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let first=root.appendingPathComponent("first"),second=root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at:first,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:second,withIntermediateDirectories:true)
+        try write(first.appendingPathComponent("a.txt"));try write(second.appendingPathComponent("b.txt"))
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{throw FixtureError.noModel})
+        _=try indexer.sync([first,second])
+        store.scope=[first.path,second.path]
+        store.pendingExcludedPaths=(0..<200).map {first.appendingPathComponent("missing-\($0).txt").path}
+        #expect(store.pendingExcludedPaths==[first.path])
+        #expect(try store.pendingCount()==1)
+        #expect(try store.counts().byKindAndState["doc"]?["pending"]==2)
+        store.scope=[second.path]
+        #expect(try store.pendingCount()==1)
+    }
+
+    enum FixtureError:Error {case noModel}
+}

@@ -150,8 +150,13 @@ pub async fn search_apps(
         }
         *shell.app_semantic.lock().unwrap() = semantic.clone();
     }
+    shell.personalization.rank(&session, generation.unwrap_or(0), &q, &mut hits,
+        |hit| hit.id.clone(), |hit| crate::personalization::tier(&hit.reason));
     let anchor_offset = crate::applications::anchor_offset(&hits, visibility, anchor_id.as_deref());
     let (hits, total, offset) = crate::applications::page_hits(hits, visibility, offset.unwrap_or(0), limit.unwrap_or(6));
+    let mut hits: Vec<Value> = hits.into_iter().map(|hit| serde_json::to_value(hit).unwrap()).collect();
+    crate::personalization::match_sources(&mut hits, &q);
+    shell.personalization.decorate(&session, generation.unwrap_or(0), &mut hits);
     Ok(
         json!({"hits":hits,"total":total,"offset":offset,"anchorOffset":anchor_offset,"generation":generation.unwrap_or(0),
         "catalog":shell.applications.info(),"semantic":semantic,"ms":started.elapsed().as_secs_f64()*1000.0}),
@@ -174,6 +179,7 @@ pub async fn launch_app(
     let result=tauri::async_runtime::spawn_blocking(move || catalog.launch(&id))
         .await.map_err(|e| AppError::new("launch_failed", &app_id, e.to_string()))?;
     if let Err(error)=result{shell.discovery.schedule(false);return Err(error)}
+    shell.personalization.accepted(&app_id);
     crate::hide_panel(app);
     Ok(json!({"accepted":true,"appId":app_id}))
 }

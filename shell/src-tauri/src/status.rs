@@ -20,6 +20,12 @@ pub enum Activity {
 #[derive(Clone, Debug, Default)]
 pub struct Status {
     pub activity: Activity,
+    pub discovery_active: bool,
+    pub held_pending: Option<u64>,
+    pub held_unfinished: Option<u64>,
+    pub runnable_pending: Option<u64>,
+    pub runnable_unfinished: Option<u64>,
+    pub known_counts_complete: Option<bool>,
     /// Files in the index, in any state.
     pub files: u64,
     /// Done or partly read: what search finds by what's in it.
@@ -92,24 +98,33 @@ impl Status {
         self.last_event_at = Some(time);
         let count = |key: &str| event[key].as_u64().unwrap_or(0);
         // Only complete count snapshots describe the index. Rest/rescan/pruned events count a subset.
-        if event["files"].is_u64() && matches!(event["event"].as_str(), Some("counts" | "sync" | "idle" | "waiting")) {
+        if event["files"].is_u64() && matches!(event["event"].as_str(), Some("counts" | "sync" | "scan_batch" | "idle" | "waiting")) {
             self.files = count("files");
             self.searchable = count("searchable");
             self.pending = count("pending");
             self.unfinished = count("unfinished");
+            self.held_pending=event["held_pending"].as_u64();
+            self.held_unfinished=event["held_unfinished"].as_u64();
+            self.runnable_pending=event["runnable_pending"].as_u64();
+            self.runnable_unfinished=event["runnable_unfinished"].as_u64();
+            self.known_counts_complete=event["known_counts_complete"].as_bool();
         }
+        if let Some(active) = event["discoveryActive"].as_bool() { self.discovery_active=active; }
         match event["event"].as_str().unwrap_or_default() {
-            "started" => { self.scan = Value::Null; self.activity = Activity::Starting; }
+            "started" => { self.discovery_active=false; self.scan = Value::Null; self.activity = Activity::Starting; }
             "phase" | "scanning" | "scan_progress" => {
                 self.activity = Activity::Scanning;
                 self.scan = event.clone();
             }
+            "scan_batch" => { self.activity=Activity::Scanning; }
+            "scan_cancelled" => { self.discovery_active=false; self.activity=Activity::Idle; }
             "sync" => {
                 self.scan_unreadable = event["unreadable"].as_array().into_iter().flatten()
                     .filter_map(Value::as_str).map(String::from).collect();
-                self.last_error = None; self.scan = event.clone(); self.activity = if count("new") > 0 || self.pending > 0 {
-                Activity::Indexing { done: 0, total: count("new").max(self.pending) }
-            } else { Activity::Idle }; },
+                let runnable=event["runnable_pending"].as_u64().unwrap_or(count("new").max(self.pending));
+                self.last_error = None; self.scan = event.clone();
+                self.activity=if runnable>0 {Activity::Indexing {done:0,total:runnable}} else {Activity::Idle};
+            },
             "file" => {
                 self.activity = Activity::Indexing { done: count("done"), total: count("total") };
                 // The counts come with a sync; each file read since leaves "waiting".
@@ -136,6 +151,7 @@ impl Status {
             }
             // The helper is gone: whatever it was doing is over.
             "exit" | "ended" => {
+                self.discovery_active=false;
                 if event["event"] == "ended" && event["status"].as_i64() != Some(0) {
                     let message = self.last_error.clone().unwrap_or_else(|| format!("Indexing helper exited (status {}). Open indexing diagnostics for details.", event["status"]));
                     self.last_error = Some(message.clone());
@@ -159,6 +175,13 @@ impl Status {
         }
     }
 
+    fn all_work_held(&self) -> bool {
+        !self.discovery_active && self.known_counts_complete!=Some(false)
+            && !matches!(self.activity,Activity::Failed(_)) && self.last_error.is_none()
+            && (self.held_pending.unwrap_or(0)>0 || self.held_unfinished.unwrap_or(0)>0)
+            && self.runnable_pending==Some(0) && self.runnable_unfinished==Some(0)
+    }
+
     /// One line for the tray and the window: "Indexing 42% · 120 of 306", "306 files indexed".
     pub fn line(&self, has_folders: bool, model: &Value) -> String {
         if !has_folders {
@@ -175,6 +198,19 @@ impl Status {
         if self.measuring {
             return "Checking this computer's speed…".into();
         }
+        if self.known_counts_complete==Some(false) && (!self.missing.is_empty() || !self.unreadable.is_empty()) {
+            return "Cached file counts unavailable · some selected folders cannot be read".into();
+        }
+        if self.all_work_held() {
+            return if self.paused {"Indexing paused · some folders cannot be read".into()}
+                else {"Waiting for folders · cached results kept".into()};
+        }
+        if self.discovery_active {
+            return match self.scan["visited"].as_u64() {
+                Some(visited) => format!("Discovering files · {} entries checked · {} content ready",number(visited),number(self.searchable)),
+                None => format!("Discovering files · {} content ready",number(self.searchable)),
+            };
+        }
         match self.activity {
             // Held or paused, no index helper runs to say it has started: what's indexed stands.
             Activity::Starting if !self.paused && self.held_until.is_none() => "Starting…".into(),
@@ -184,6 +220,7 @@ impl Status {
                     None => self.scan["message"].as_str().unwrap_or("Scanning folders…").to_string(),
                 }
             },
+            Activity::Indexing { total: 0, .. } => format!("Indexing files · {} content ready",number(self.searchable)),
             Activity::Indexing { done, total } => format!("Indexing {}% · {} of {}", percent(done, total), number(done), number(total)),
             Activity::Finishing { done, total, files } => {
                 let which = if files > 0 { format!("{} long {}", number(files), plural(files, "file", "files")) } else { "long files".into() };
@@ -238,6 +275,7 @@ impl Status {
         if model["state"] == "downloading" {
             return Some(fraction(model));
         }
+        if self.discovery_active || self.all_work_held() { return None; }
         match self.activity {
             Activity::Indexing { done, total } | Activity::Finishing { done, total, .. } if total > 0 => {
                 Some(done as f64 / total as f64)
@@ -256,6 +294,9 @@ impl Status {
             Some("failed") => return Some("Matching words only: model inference is unavailable".into()),
             _ => {}
         }
+        if self.all_work_held() {
+            return Some("Some folders cannot be read; cached results are kept".into());
+        }
         if let Activity::Indexing { done, total } = self.activity {
             if total > 0 {
                 return Some(format!("Still indexing ({}%): some files aren't in yet", percent(done, total)));
@@ -270,7 +311,7 @@ impl Status {
     pub fn snapshot(&self, has_folders: bool, model: &Value) -> Value {
         let unreadable: std::collections::BTreeSet<_> = self.unreadable.iter().chain(&self.scan_unreadable).collect();
         let indexing = match self.activity {
-            Activity::Indexing { done, total } => json!({"done": done, "total": total}),
+            Activity::Indexing { done, total } => json!({"done": done, "total": if total>0 {Some(total)} else {None}}),
             _ => Value::Null,
         };
         json!({
@@ -279,6 +320,14 @@ impl Status {
             "caveat": self.caveat(model),
             "indexing": indexing,
             "files": self.files,
+            "discoveryActive": self.discovery_active,
+            "heldPending": self.held_pending,
+            "heldUnfinished": self.held_unfinished,
+            "runnablePending": self.runnable_pending,
+            "runnableUnfinished": self.runnable_unfinished,
+            "knownCountsComplete": self.known_counts_complete.unwrap_or(true),
+            "reachableFiles": Value::Null,
+            "reachableSearchable": Value::Null,
             "searchable": self.searchable,
             "pending": self.pending,
             "unfinished": self.unfinished,
@@ -287,14 +336,14 @@ impl Status {
             "heldUntil": self.held_until,
             "badge": self.badge(model),
             "busy": self.busy(model),
-            "activity": match self.activity {
+            "activity": if self.all_work_held() {"waiting"} else {match self.activity {
                 Activity::Starting => "starting",
                 Activity::Scanning => "scanning",
                 Activity::Idle => "idle",
                 Activity::Indexing { .. } => "indexing",
                 Activity::Finishing { .. } => "finishing",
                 Activity::Failed(_) => "failed",
-            },
+            }},
             "model": model,
             "scan": self.scan,
             "lastError": self.last_error,
@@ -387,6 +436,57 @@ mod tests {
         held.held_until = None;
         held.paused = true;
         assert_eq!(held.line(true, &ready), "Paused · 4 files waiting");
+    }
+
+    #[test]
+    fn streaming_discovery_has_no_fake_completion_percentage() {
+        let ready=json!({"state":"ready"});
+        let mut status=Status::default();
+        status.apply(&json!({"event":"scan_progress","discoveryActive":true,"visited":500,"candidates":80}));
+        status.apply(&json!({"event":"scan_batch","discoveryActive":true,"files":80,"searchable":5,"pending":75}));
+        assert_eq!(status.snapshot(true,&ready)["discoveryActive"],true);
+        assert_eq!(status.files,80);
+        assert!(status.progress(&ready).is_none());
+        assert!(status.line(true,&ready).contains("5 content ready"));
+        status.apply(&json!({"event":"scan_cancelled","discoveryActive":false}));
+        assert!(!status.discovery_active);
+        assert_eq!(status.files,80);
+    }
+
+    #[test]
+    fn measured_holds_preserve_inventory_and_set_waiting_without_a_percentage() {
+        let ready=json!({"state":"ready"});
+        let mut status=Status::default();
+        status.apply(&json!({"event":"missing","folders":["D:/Files"]}));
+        status.apply(&json!({"event":"idle","files":83,"searchable":66,"pending":17,"unfinished":2,
+            "held_pending":17,"held_unfinished":2,"runnable_pending":0,"runnable_unfinished":0,
+            "known_counts_complete":true}));
+        let value=status.snapshot(true,&ready);
+        assert_eq!(value["files"],83);assert_eq!(value["searchable"],66);
+        assert_eq!(value["heldPending"],17);assert_eq!(value["heldUnfinished"],2);
+        assert_eq!(value["runnablePending"],0);assert_eq!(value["runnableUnfinished"],0);
+        assert_eq!(value["activity"],"waiting");
+        assert!(value["progress"].is_null());
+        assert!(value["reachableFiles"].is_null());
+        status.apply(&json!({"event":"sync","files":83,"searchable":66,"pending":17,
+            "held_pending":2,"held_unfinished":0,"runnable_pending":15,"runnable_unfinished":0}));
+        assert_eq!(status.activity,Activity::Indexing{done:0,total:15});
+        assert_eq!(status.snapshot(true,&ready)["heldPending"],2);
+        status.apply(&json!({"event":"idle","files":83,"searchable":83,"pending":0,
+            "held_pending":0,"held_unfinished":0,"runnable_pending":0,"runnable_unfinished":0}));
+        assert_eq!(status.snapshot(true,&ready)["activity"],"idle");
+    }
+
+    #[test]
+    fn unknown_cached_namespace_never_claims_an_empty_index() {
+        let ready=json!({"state":"ready"});
+        let mut status=Status::default();
+        status.apply(&json!({"event":"missing","folders":["/var/missing"]}));
+        status.apply(&json!({"event":"idle","files":0,"searchable":0,"pending":0,
+            "known_counts_complete":false}));
+        assert_eq!(status.snapshot(true,&ready)["knownCountsComplete"],false);
+        assert!(status.line(true,&ready).contains("Cached file counts unavailable"));
+        assert!(!status.line(true,&ready).contains("0 files indexed"));
     }
 
     #[test]

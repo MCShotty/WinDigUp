@@ -7,7 +7,7 @@ Windows 10 (19041+) and Windows 11 x64 are the supported desktop targets. Linux 
 
 Use **Settings** (Ctrl+9 in the larger window) or type `settings: display`. An empty `settings:` lists destinations
 alphabetically. Ordinary searches include up to two matching destinations in the shared Best matches/source ordering. Exact settings
-names and aliases can lead file results; Apps placement preferences continue to apply to applications. Settings → Apps → Windows settings controls inclusion, purpose
+names and aliases can lead file results; Apps placement preferences continue to apply to applications. Settings → Windows settings controls inclusion, purpose
 matching and ordinary-search visibility independently.
 
 The versioned built-in catalog contains 38 destinations, descriptions and aliases. Display names have English
@@ -26,7 +26,7 @@ In **Settings → Drives**, choose Applications for the desired drives, enable a
 Choose Files independently to index supported file content across a drive. Existing subfolder selections and exclusions
 are retained. Refresh drive list works before discovery is enabled. See [drive choices](mixed-result-ordering.md#drives). Volumes are
 identified by Windows volume GUIDs; drive letters are labels. Discovery is off by default and has its own pause,
-rescan and candidate-review controls. Unsaved drive choices survive progress updates and focus changes.
+rescan and candidate-review controls in Review apps. Unsaved drive choices survive progress updates and focus changes.
 
 The optional fast component reads NTFS metadata using documented filesystem controls (`FSCTL_ENUM_USN_DATA`,
 `FSCTL_QUERY_USN_JOURNAL`, `FSCTL_READ_USN_JOURNAL`). It does not parse raw disk sectors. Reads proceed in bounded
@@ -44,8 +44,7 @@ their last usable catalog and remain visible in Activity. A failure on one selec
 
 Install **fast NTFS discovery** explicitly from Drives settings. Windows requests administrator permission once
 to register a demand-start service. Declining leaves ordinary directory discovery available. Non-NTFS volumes
-use the directory provider, which is slower and does not traverse reparse points. The selected-volume controller
-processes volumes sequentially; metadata work is parallel and bounded, rather than multiplying random disk reads.
+use the directory provider, which is slower and does not traverse reparse points. The selected-volume controller scans at most two proven independent physical disks concurrently, with one producer per overlapping physical disk set. Metadata work and commit queues are bounded.
 Foreground search temporarily holds background work; manual pause and folder schedules are separate.
 
 Executable discovery is not an app recommendation or a trust verdict. Clear desktop products can enter the app

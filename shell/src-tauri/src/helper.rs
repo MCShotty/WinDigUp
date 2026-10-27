@@ -9,7 +9,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -121,6 +121,8 @@ pub struct SearchService {
     on_event: EventSink,
     failure: Arc<Mutex<Option<String>>>,
     sessions: Arc<Mutex<HashMap<String, (u64, std::time::Instant)>>>,
+    names_refresh_pending: Arc<AtomicBool>,
+    names_refresh_revision: Arc<AtomicU64>,
 }
 
 struct Searching {
@@ -192,6 +194,8 @@ impl SearchService {
             on_event: Arc::new(on_event),
             failure: Arc::default(),
             sessions: Arc::default(),
+            names_refresh_pending: Arc::default(),
+            names_refresh_revision: Arc::default(),
         }
     }
 
@@ -216,6 +220,35 @@ impl SearchService {
             let _ = searching.child.kill();
             let _ = searching.child.wait();
         }
+    }
+
+    /// Name commits update only a live helper; indexing must not reopen a stopped search service.
+    pub fn refresh_names(&self) {
+        self.names_refresh_revision.fetch_add(1, Ordering::SeqCst);
+        if self.names_refresh_pending.swap(true, Ordering::SeqCst) { return; }
+        let service = self.clone();
+        tauri::async_runtime::spawn_blocking(move || loop {
+            let revision = service.names_refresh_revision.load(Ordering::SeqCst);
+            service.refresh_current_names();
+            if service.names_refresh_revision.load(Ordering::SeqCst) != revision { continue; }
+            service.names_refresh_pending.store(false, Ordering::SeqCst);
+            if service.names_refresh_revision.load(Ordering::SeqCst) == revision
+                || service.names_refresh_pending.swap(true, Ordering::SeqCst) { break; }
+        });
+    }
+
+    fn refresh_current_names(&self) {
+        let stdin = {
+            let Ok(mut running) = self.running.lock() else { return; };
+            let Some(searching) = running.as_mut() else { return; };
+            if !matches!(searching.child.try_wait(), Ok(None)) { return; }
+            searching.stdin.clone()
+        };
+        let request = json!({"id":self.next_id.fetch_add(1, Ordering::Relaxed),"op":"refresh_names"});
+        // Stop/reconfiguration closes this generation's pipe; a failed write must never start another.
+        if let Ok(mut stdin) = stdin.lock() {
+            let _ = writeln!(stdin, "{request}").and_then(|_| stdin.flush());
+        };
     }
 
     /// Sends a request and waits for its reply.
@@ -322,15 +355,7 @@ impl SearchService {
                     message["ms"]=json!({"helper_startup":elapsed});
                 }
                 match message.get("id").and_then(Value::as_u64) {
-                    Some(id) => {
-                        if let Some(elapsed)=startup.take() {
-                            if !message["ms"].is_object(){message["ms"]=json!({});}
-                            message["ms"]["helper_startup"]=json!(elapsed);
-                        }
-                        if let Some(sender) = replies.lock().unwrap().remove(&id) {
-                            let _ = sender.send(message);
-                        }
-                    }
+                    Some(id) => deliver_search_reply(id, message, &replies, &mut startup),
                     None if generation.load(Ordering::SeqCst) == number => on_event(message),
                     None => {},
                 }
@@ -391,6 +416,7 @@ impl SearchService {
 /// launch), starts it over with them. When it ends by itself, `on_event` gets {"event": "ended", "status": its exit
 /// code, "owed": whether a sync asked of it never started}; one stopped here doesn't report.
 pub struct IndexService {
+    preferred: Mutex<HashMap<bool,String>>,
     running: Arc<Mutex<Option<Indexing>>>,
     generation: Arc<AtomicU64>,
     on_event: EventSink,
@@ -424,7 +450,7 @@ impl IndexService {
         }
     }
     pub fn new(on_event: impl Fn(Value) + Send + Sync + 'static) -> IndexService {
-        IndexService { running: Arc::default(), generation: Arc::new(AtomicU64::new(0)), on_event: Arc::new(on_event) }
+        IndexService { preferred: Mutex::default(), running: Arc::default(), generation: Arc::new(AtomicU64::new(0)), on_event: Arc::new(on_event) }
     }
 
     pub fn run(&self, launch: &Launch) -> Result<(), String> {
@@ -471,7 +497,12 @@ impl IndexService {
                 }
             }
         });
-        *running = Some(Indexing { child, stdin, args: launch.args.clone(), number, owed: false });
+        let mut indexing=Indexing { child, stdin, args: launch.args.clone(), number, owed: false };
+        for (code,path) in self.preferred.lock().unwrap().iter() {
+            let request=json!({"command":"prioritize","code":code,"path":path});
+            writeln!(indexing.stdin,"{request}").and_then(|_|indexing.stdin.flush()).map_err(|error|error.to_string())?;
+        }
+        *running=Some(indexing);
         Ok(())
     }
 
@@ -483,6 +514,30 @@ impl IndexService {
             if let Some(indexing) = running.as_mut() {
                 if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
                     return writeln!(indexing.stdin, "sync code").and_then(|_| indexing.stdin.flush()).map_err(|e| e.to_string());
+                }
+            }
+        }
+        self.run(launch)
+    }
+
+    pub fn prioritize(&self, path: String, code: bool) -> Result<(),String> {
+        self.preferred.lock().unwrap().insert(code,path.clone());
+        let mut running=self.running.lock().unwrap();
+        if let Some(indexing)=running.as_mut() {
+            let request=json!({"command":"prioritize","path":path,"code":code});
+            writeln!(indexing.stdin,"{request}").and_then(|_|indexing.stdin.flush()).map_err(|error|error.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn changes(&self, launch: &Launch, batch: crate::watch_changes::ChangeBatch, code: bool) -> Result<(), String> {
+        {
+            let mut running = self.running.lock().unwrap();
+            if let Some(indexing) = running.as_mut() {
+                if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
+                    indexing.owed = true;
+                    let request = json!({"command":"changes","code":code,"paths":batch.paths,"dirtyRoots":batch.dirty_roots});
+                    return writeln!(indexing.stdin,"{request}").and_then(|_| indexing.stdin.flush()).map_err(|error|error.to_string());
                 }
             }
         }
@@ -552,6 +607,47 @@ impl ModelDownload {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+/// One-way metadata acknowledgements have no pending receiver. They must not consume the first query's startup time.
+fn deliver_search_reply(
+    id: u64,
+    mut message: Value,
+    replies: &Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    startup: &mut Option<f64>,
+) {
+    if let Some(sender) = replies.lock().unwrap().remove(&id) {
+        if let Some(elapsed) = startup.take() {
+            if !message["ms"].is_object() { message["ms"] = json!({}); }
+            message["ms"]["helper_startup"] = json!(elapsed);
+        }
+        let _ = sender.send(message);
+    }
+}
+
+#[cfg(test)]
+mod reply_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_acknowledgements_preserve_startup_for_the_first_pending_reply() {
+        let replies = Mutex::new(HashMap::new());
+        let mut startup = Some(37.5);
+        deliver_search_reply(1, json!({"id":1,"ok":true}), &replies, &mut startup);
+        assert_eq!(startup, Some(37.5));
+        let (sender, mut receiver) = oneshot::channel();
+        replies.lock().unwrap().insert(2, sender);
+        deliver_search_reply(2, json!({"id":2,"ms":{"retrieval":4.0}}), &replies, &mut startup);
+        let first = receiver.try_recv().unwrap();
+        assert_eq!(first["ms"]["helper_startup"], 37.5);
+        assert_eq!(first["ms"]["retrieval"], 4.0);
+        assert_eq!(startup, None);
+        let (sender, mut receiver) = oneshot::channel();
+        replies.lock().unwrap().insert(3, sender);
+        deliver_search_reply(3, json!({"id":3}), &replies, &mut startup);
+        assert!(receiver.try_recv().unwrap()["ms"]["helper_startup"].is_null());
+        assert!(replies.lock().unwrap().is_empty());
     }
 }
 

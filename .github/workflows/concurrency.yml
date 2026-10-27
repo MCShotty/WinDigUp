@@ -89,9 +89,9 @@ jobs:
             Vendor/llama-build
           key: concurrency-macos-native-v1-${{ hashFiles('scripts/build-llama.sh', 'scripts/llama.cpp-*.patch') }}
       - name: Continuous service scheduling and ready dispatch regressions
-        run: swift test --filter 'ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests'
+        run: swift test --filter 'StreamingServiceTests|CrawlStreamingTests|ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests|IndexStoreTests'
       - name: Optimized scheduling and storage regressions
-        run: swift test -c release --filter 'ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests|IndexConcurrencyTests|LongFilesTests'
+        run: swift test -c release --filter 'StreamingServiceTests|CrawlStreamingTests|ServiceSchedulingTests|ReadyDispatchTests|PendingQueueTests|IndexConcurrencyTests|LongFilesTests|IndexStoreTests'
       - name: Bounded worker startup and response deadlines
         run: swift test --filter 'WorkerDeadlineTests'
       - name: Storage, prepared inference and long-file contracts with synthetic embedders

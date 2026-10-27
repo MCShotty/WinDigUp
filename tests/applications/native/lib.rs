@@ -1,3 +1,7 @@
+#[path = "../../../shell/src-tauri/src/watch_changes.rs"]
+pub mod watch_changes;
+#[path = "../../../shell/src-tauri/src/search_scope.rs"]
+pub mod search_scope;
 #[cfg(not(windows))]
 #[path = "../../../shell/src-tauri/src/discovery_manager.rs"]
 pub mod discovery_manager;
@@ -24,6 +28,8 @@ pub mod diagnostics;
 pub mod helper;
 #[path = "../../../shell/src-tauri/src/status.rs"]
 pub mod status;
+#[path = "../../../shell/src-tauri/src/gpu_telemetry.rs"]
+pub mod gpu_telemetry;
 #[path = "../../../shell/src-tauri/src/acceleration.rs"]
 pub mod acceleration;
 #[path = "../../../shell/src-tauri/src/accelerator_probe.rs"]
@@ -32,6 +38,10 @@ pub mod accelerator_probe;
 pub mod hours;
 #[path = "../../../shell/src-tauri/src/settings.rs"]
 pub mod settings;
+#[path = "../../../shell/src-tauri/src/personalization.rs"]
+pub mod personalization;
+#[path = "../../../shell/src-tauri/src/result_open.rs"]
+pub mod result_open;
 
 #[cfg(test)]
 mod tests {

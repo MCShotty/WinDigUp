@@ -5,6 +5,7 @@ final class PendingFileQueue {
     struct Entry {
         let file: FileRecord
         let priority: Int
+        let ordinal: Int64
     }
     private(set) var total = 0
     private let store: IndexStore
@@ -15,10 +16,13 @@ final class PendingFileQueue {
     private let scopeSQL: String
     private let scopeValues: [SQLValue]
     private var after: Int64 = 0
+    private var lastOrdinal: Int64 = 0
     private var buffer: [Entry] = []
     private var offset = 0
     private var exhausted = false
     private var closed = false
+    private var preferredPath: String?
+    private var preferredAvailable=false
     private(set) var buildMs = 0.0
     private(set) var fetchMs = 0.0
     private(set) var pages = 0
@@ -54,6 +58,7 @@ final class PendingFileQueue {
             var count = 0
             try store.db.query("SELECT COUNT(*) FROM \(table)") { count = Int($0.int(0)) }
             total = count
+            lastOrdinal=Int64(count)
             buildMs = (ProcessInfo.processInfo.systemUptime - start) * 1000
         } catch {
             try? store.db.execute("DROP TABLE IF EXISTS \(table); DROP TABLE IF EXISTS \(members);")
@@ -70,16 +75,81 @@ final class PendingFileQueue {
             """
     }
 
+    func append(_ ids: [Int64]) throws {
+        guard !closed, !ids.isEmpty else { return }
+        guard ids.count<=256 else {throw Database.Failure(message:"The live queue batch is too large.")}
+        var ordered:[Int64]=[]
+        try store.db.query("""
+            SELECT id FROM files WHERE id IN (\(ids.map {_ in "?"}.joined(separator:",")))
+            ORDER BY \(FileKind.indexingOrderSQL),mtime DESC,id
+            """,ids.map(SQLValue.int)) {ordered.append($0.int(0))}
+        var preferenceArrived=false
+        try store.db.transaction {
+            for id in ordered {
+                try store.db.run("""
+                    INSERT OR IGNORE INTO \(table)(ord,file,priority)
+                    SELECT ?,id,1 FROM files WHERE id=? AND state=?\(scopeSQL)
+                    """,[.int(lastOrdinal+1),.int(id),.text(state)] + scopeValues)
+                var inserted=false
+                try store.db.query("SELECT changes()") { if $0.int(0)>0 {total += 1;lastOrdinal += 1;inserted=true} }
+                if inserted,let preferredPath,!preferenceArrived {
+                    try store.db.query("SELECT path FROM files WHERE id=?",[.int(id)]) {row in
+                        guard let path=row.text(0) else{return}
+                        preferenceArrived=path==preferredPath || IndexStore.pathRanges(under:preferredPath).contains {path.hasPrefix($0.from)}
+                    }
+                }
+            }
+        }
+        if preferenceArrived {
+            try flushConsumed()
+            buffer.removeAll(keepingCapacity:true)
+            offset=0;after=0;preferredAvailable=true
+        }
+        exhausted=false
+    }
+
+    private func flushConsumed() throws {
+        let ordinals=buffer.prefix(offset).map {SQLValue.int($0.ordinal)}
+        guard !ordinals.isEmpty else {return}
+        try store.db.run("DELETE FROM \(table) WHERE ord IN (\(ordinals.map {_ in "?"}.joined(separator:",")))",ordinals)
+        buffer.removeFirst(offset)
+        offset=0
+    }
+
+    func prioritize(_ path: String) throws {
+        try flushConsumed()
+        preferredPath=path
+        preferredAvailable=true
+        buffer.removeAll(keepingCapacity:true)
+        offset=0;after=0;exhausted=false
+    }
+
     func peek() throws -> Entry? {
         guard !closed else { return nil }
         if offset == buffer.count {
+            try flushConsumed()
             guard !exhausted else { return nil }
             buffer.removeAll(keepingCapacity: true)
             offset = 0
             let start = ProcessInfo.processInfo.systemUptime
-            try store.db.query(pageSQL, [.int(after), .text(state), .int(Int64(pageSize))]) {
-                buffer.append(Entry(file: IndexStore.record($0), priority: Int($0.int(8))))
-                after = $0.int(9)
+            if let path=preferredPath,preferredAvailable {
+                let ranges=IndexStore.pathRanges(under:path)
+                let conditions=ranges.map {_ in "(f.path>=? AND f.path<?)"}.joined(separator:" OR ")
+                let columns=IndexStore.fileColumns.split(separator:",").map {"f." + $0.trimmingCharacters(in:.whitespaces)}.joined(separator:",")
+                let values=ranges.flatMap {[SQLValue.text($0.from),.text($0.to)]}
+                try store.db.query("""
+                    SELECT \(columns),-1,q.ord FROM files f INDEXED BY sqlite_autoindex_files_1 CROSS JOIN \(table) q ON q.file=f.id
+                    WHERE f.state=? AND (\(conditions)) ORDER BY q.ord LIMIT ?
+                    """,[.text(state)] + values + [.int(Int64(pageSize))]) {
+                    buffer.append(Entry(file:IndexStore.record($0),priority:-1,ordinal:$0.int(9)))
+                }
+                if buffer.isEmpty {preferredAvailable=false;after=0}
+            }
+            if buffer.isEmpty {
+                try store.db.query(pageSQL, [.int(after), .text(state), .int(Int64(pageSize))]) {
+                    buffer.append(Entry(file: IndexStore.record($0), priority: Int($0.int(8)),ordinal:$0.int(9)))
+                    after = $0.int(9)
+                }
             }
             pages += 1
             rows += buffer.count
@@ -102,8 +172,8 @@ final class PendingFileQueue {
         if first.file.kind == .image || first.file.kind == .screenshot {
             while files.count < 8, let next = try peek(),
                   next.priority == first.priority, next.file.kind == first.file.kind {
+                _ = try take()
                 files.append(next.file)
-                offset += 1
             }
         }
         return (files, first.priority)

@@ -46,3 +46,6 @@
   outline:2px solid var(--leaf-text,var(--moss)); outline-offset:3px;
 }
 .gpu-jobs-control select, #appearance { min-height:44px; }
+
+.pipeline-device-measurements { margin-top:16px; }
+.pipeline-device-measurements h4 { margin:0 0 6px; font-size:13px; }

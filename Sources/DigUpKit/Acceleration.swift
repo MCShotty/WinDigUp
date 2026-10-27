@@ -49,6 +49,9 @@ public enum Acceleration: String, Sendable, CaseIterable {
     }
 
     public static func requireInferenceReady(environment: [String: String] = ProcessInfo.processInfo.environment) throws {
+        if let value = environment["DIGUP_RESOURCE_PROFILE"], !["quiet", "balanced", "faster"].contains(value) {
+            throw WorkerError.failed("DIGUP_RESOURCE_PROFILE must be quiet, balanced, or faster.")
+        }
         if let value=environment["DIGUP_GPU_JOBS"],Int(value).map({(0...3).contains($0)}) != true {
             throw WorkerError.failed("DIGUP_GPU_JOBS must be 0 (automatic), 1, 2, or 3.")
         }

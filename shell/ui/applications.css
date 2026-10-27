@@ -133,3 +133,11 @@ body.apps-mode .app-group-title { font-size:23px; font-weight:650; }
   border-left-color: var(--leaf-text, var(--moss));
   background: color-mix(in srgb, var(--moss, #356652) 8%, var(--surface));
 }
+
+.result-match-reason, .result-availability { color: var(--secondary); font-size: 11px; line-height: 1.4; }
+.cell.best-file-row .result-match-reason { grid-column: 2; }
+.cell.best-file-row .picture { grid-row: 1 / 4; }
+.feedback-actions { padding: 8px 16px 12px; }
+.relevance-feedback { font: inherit; color: var(--text); background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.relevance-feedback:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+.relevance-feedback:disabled { color: var(--secondary); }

@@ -18,6 +18,7 @@ pub enum PanelMaterial { #[default] Automatic, Solid }
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub appearance: Appearance,
+    pub personalization: crate::personalization::Options,
     pub panel_material: PanelMaterial,
     pub applications: crate::applications::Options,
     pub windows_settings: crate::system_settings::Options,

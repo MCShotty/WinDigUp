@@ -1,7 +1,7 @@
 "use strict";
 const DiscoverySettings = {
   started:false, draft:null, dirty:false, generation:0, hits:[], offset:0, fileChoices:new Map(),
-  pending:new Map(), messages:new Map(), rows:new Map(), candidatePending:new Set(), providerDrafts:new Map(),
+  pending:new Map(), messages:new Map(), rows:new Map(), volumeRows:new Map(), volumeSerial:0, candidatePending:new Set(), providerDrafts:new Map(),
   el(id){return document.getElementById(id);},
   text(id,value){const el=this.el(id);if(el&&el.textContent!==value)el.textContent=value;},
   n(value){return Number.isFinite(value)?value.toLocaleString():"Not reported";},
@@ -13,7 +13,7 @@ const DiscoverySettings = {
         this.accept(key,payload);
         if(key==="enrichment"&&payload.progress?.cleared)this.message("enrichment","Saved descriptions cleared. Your aliases and purpose notes are kept.");
         this.render();
-        if(key==="discovery"&&payload.progress?.phase==="watching"&&!this.el("drives").hidden){
+        if(key==="discovery"&&payload.progress?.phase==="watching"&&!this.el("executable-review").hidden){
           clearTimeout(this.refreshTimer);this.refreshTimer=setTimeout(()=>this.candidates(),400);
         }
       });
@@ -51,7 +51,6 @@ const DiscoverySettings = {
   },
   message(source,value){
     this.messages.set(source,value);
-    this.text("source-message",value);
     this.text("source-message-"+source,value);
   },
   render(){
@@ -60,6 +59,8 @@ const DiscoverySettings = {
     const s=info.windowsSettingsSemantic||{},p=d.progress||{},ep=e.progress||{};
     this.el("extra-app-sources").hidden=!d.supported;
     this.el("drives-tab").hidden=!d.supported;
+    this.el("review-tab").hidden=!d.supported;
+    this.el("win-settings-tab").hidden=!d.supported;
     this.el("open-drives").hidden=!d.supported;
     this.el("folders-drives").hidden=!d.supported;
     if(!d.supported)return;
@@ -74,35 +75,67 @@ const DiscoverySettings = {
       "Select Files, Applications, or both for each drive.");
     const volumes=d.volumes||[];
     const all=[...volumes,...(draft.volumes||[]).filter(id=>!volumes.some(v=>v.id===id)).map(id=>({id,name:"Disconnected volume",paths:[],available:false}))];
-    const signature=JSON.stringify([all.map(v=>[v.id,v.paths,v.name,v.filesystem,v.available]),draft.volumes,info.folders,[...this.fileChoices],all.length?null:volumeState]);
-    if(signature!==this.volumeSignature){
-      this.volumeSignature=signature;
-      const box=this.el("drive-volumes"),focused=document.activeElement?.value,focusedSource=document.activeElement?.dataset.source;
-      box.replaceChildren();
-      for(const volume of all){
-        const row=element("div","source-volume");
-        const title=[(volume.paths||[]).join(", "),volume.name,volume.filesystem,volume.available===false?"Unavailable":""].filter(Boolean).join(" · ");
-        row.append(element("div","drive-name",title));
-        const controls=element("div","source-drive-options");
+    const box=this.el("drive-volumes"),present=new Set(),focused=document.activeElement;
+    const focusedInDrives=box.contains(focused);
+    for(const volume of all){
+      present.add(volume.id);
+      let row=this.volumeRows.get(volume.id);
+      if(!row){
+        const root=element("div","source-volume"),description=element("div","drive-description");
+        const name=element("div","drive-name"),state=element("p","drive-state"),selection=element("p","drive-selection"),counts=element("p","drive-state");
+        name.id="drive-name-"+(++this.volumeSerial);root.setAttribute("role","group");root.setAttribute("aria-labelledby",name.id);
+        description.append(name,state,counts,selection);
+        const controls=element("div","source-drive-options"),checks={};
         for(const source of ["files","applications"]){
           const label=element("label"),check=element("input");
           check.type="checkbox";check.value=volume.id;check.dataset.source=source;
-          check.setAttribute("aria-label",title+" "+(source==="files"?"file indexing":"application discovery"));
-          check.checked=source==="applications"?(draft.volumes||[]).includes(volume.id):this.fileSelected(volume);
           check.onchange=source==="applications"?()=>this.edit():()=>{this.fileChoices.set(volume.id,check.checked);this.dirty=true;this.render();};
-          if(source==="files"&&(volume.available===false||!(volume.paths||[]).length))check.dataset.unavailable="true";
-          label.append(check,document.createTextNode(source==="files"?"Files":"Applications"));controls.append(label);
+          label.append(check,document.createTextNode(source==="files"?"Files":"Applications"));controls.append(label);checks[source]=check;
         }
-        row.append(controls);
-        const roots=(volume.paths||[]).map(path=>this.pathKey(path));
-        if(!(volume.paths||[]).some(path=>(info.folders||[]).some(folder=>this.pathKey(folder)===this.pathKey(path)))&&
-          (info.folders||[]).some(folder=>roots.some(root=>this.pathKey(folder).startsWith(root+"\\"))))
-          row.append(element("p","note","Some folders on this drive are already selected."));
-        box.append(row);
+        const actions=element("div","drive-actions"),activity=element("button","link","View activity");
+        activity.type="button";activity.onclick=()=>{
+          showTab("activity");
+          if(row.hasDriveDetails)activityView.focusDrive(volume.id);
+          else {activityView.setTab("overview");const heading=activityView.get("phase");heading.tabIndex=-1;heading.focus();}
+        };
+        actions.append(activity);root.append(description,controls,actions);
+        row={root,name,state,selection,counts,checks,activity};this.volumeRows.set(volume.id,row);
       }
-      if(!all.length)box.append(element("p","note",volumeState==="loading"?"Waiting for Windows to report mounted drives.":volumeState==="failed"?"The drive list is unavailable. Refresh the list to retry.":"No mounted drives were reported. Connect a drive, then refresh the list."));
-      if(focused)for(const check of box.querySelectorAll("input"))if(check.value===focused&&check.dataset.source===focusedSource)check.focus();
+      const title=[(volume.paths||[]).join(", "),volume.name,volume.filesystem,volume.available===false?"Unavailable":""].filter(Boolean).join(" · ")||"Disconnected volume";
+      if(row.name.textContent!==title)row.name.textContent=title;
+      const savedFiles=(volume.paths||[]).some(path=>(info.folders||[]).some(folder=>this.pathKey(folder)===this.pathKey(path)));
+      const savedApps=(d.options?.volumes||[]).includes(volume.id);
+      row.checks.files.checked=this.fileSelected(volume);row.checks.applications.checked=(draft.volumes||[]).includes(volume.id);
+      for(const source of ["files","applications"])row.checks[source].setAttribute("aria-label",title+" "+(source==="files"?"file indexing":"application discovery"));
+      if(volume.available===false||!(volume.paths||[]).length)row.checks.files.dataset.unavailable="true";
+      else delete row.checks.files.dataset.unavailable;
+      const progress=d.byVolume?.[volume.id]||(p.volume===volume.id?p:{});
+      const appPhase=savedApps?PipelineUI.phase(d,progress):"Application discovery not selected";
+      const fileRoots=(volume.paths||[]).map(path=>this.pathKey(path));
+      const partialFiles=!savedFiles&&(info.folders||[]).some(folder=>fileRoots.some(root=>this.pathKey(folder).startsWith(root+"\\")));
+      const fileState=savedFiles?"Whole drive selected for files":partialFiles?"Some folders on this drive are already selected.":"File indexing not selected";
+      const state=[fileState,appPhase].join(" · ");
+      if(row.state.textContent!==state)row.state.textContent=state;
+      row.counts.hidden=!savedApps||d.version!==2||(!d.options?.enabled&&!["records","candidates","accepted"].some(key=>Number.isFinite(progress[key])));
+      const counts=PipelineUI.metrics(progress);if(row.counts.textContent!==counts)row.counts.textContent=counts;
+      const changed=row.checks.files.checked!==savedFiles||row.checks.applications.checked!==savedApps;
+      const note=changed?"Unsaved choices for this drive.":volume.available===false?"Saved choices are kept while this drive is disconnected.":"Choices saved";
+      if(row.selection.textContent!==note)row.selection.textContent=note;
+      row.hasDriveDetails=savedApps&&d.version===2;
+      row.activity.textContent=row.hasDriveDetails?"View drive activity":"Open Activity";
+      row.activity.setAttribute("aria-label",row.hasDriveDetails?"View activity for "+title:"Open Activity");
     }
+    for(const[id,row]of this.volumeRows)if(!present.has(id)){row.root.remove();this.volumeRows.delete(id);}
+    let empty=box.querySelector(".drive-list-empty");
+    if(!all.length){
+      if(!empty){empty=element("p","note drive-list-empty");box.append(empty);}
+      empty.textContent=volumeState==="loading"?"Waiting for Windows to report mounted drives.":volumeState==="failed"?"The drive list is unavailable. Refresh the list to retry.":"No mounted drives were reported. Connect a drive, then refresh the list.";
+    }else empty?.remove();
+    for(let index=0;index<all.length;index++){
+      const row=this.volumeRows.get(all[index].id).root;
+      if(box.children[index]!==row)box.insertBefore(row,box.children[index]||null);
+    }
+    if(focusedInDrives&&focused.isConnected&&document.activeElement!==focused)focused.focus({preventScroll:true});
     for(const check of this.el("drive-volumes").querySelectorAll("input"))check.disabled=driveBusy||check.dataset.unavailable==="true";
     for(const id of ["drive-enabled","drive-paused","drive-install"])this.el(id).disabled=driveBusy;
     this.el("drive-save").disabled=driveBusy||!this.dirty;this.el("drive-revert").disabled=driveBusy||!this.dirty;
@@ -133,7 +166,7 @@ const DiscoverySettings = {
       ep.failedProducts?this.n(ep.failedProducts)+" sources failed.":"",ep.message||""].filter(Boolean).join(" "));
     const phases=JSON.stringify([p.phase,ep.state,s.state]);
     if(phases!==this.phases){this.phases=phases;this.text("sources-announcement","Drive discovery "+(p.phase||"waiting")+". Online descriptions "+(ep.state||"off")+".");}
-    if(!this.loaded&&!this.el("apps").hidden){this.loaded=true;this.candidates();}
+    if(!this.loaded&&!this.el("executable-review").hidden){this.loaded=true;this.candidates();}
   },
   pathKey(path){return String(path).replaceAll("/","\\").replace(/\\+$/,"").toLowerCase();},
   fileSelected(volume){
@@ -208,10 +241,10 @@ const DiscoverySettings = {
     const d=info.discovery||{};
     if(d.catalogEnabled===false)return "Application search is off. Open Apps and enable Include installed applications to resume application discovery.";
     if(q.trim())return "No executables match this name. Try another name or clear the search.";
-    if(!d.options?.enabled)return "Application discovery is off. Enable Discover applications on selected drives and save.";
-    if(!d.options?.volumes?.length)return "No drives are selected for application discovery. Select Applications beside a drive and save.";
+    if(!d.options?.enabled)return "Application discovery is off. Open Drives, enable Discover applications on selected drives, and save.";
+    if(!d.options?.volumes?.length)return "No drives are selected for application discovery. Open Drives, select Applications beside a drive, and save.";
     if(d.running)return "Discovery is running. Candidates will appear as executable details are prepared.";
-    if(d.progress?.phase==="failed")return "Discovery needs attention. Review the drive status above, then rescan.";
+    if(d.progress?.phase==="failed")return "Discovery needs attention. Open Drives to review its status, then rescan.";
     if(this.catalogTotal===0)return "No executable candidates were found on the selected drives.";
     if(classification==="review")return "No executables need review. Choose All to see included and excluded entries.";
     return "No executables match this filter. Choose All to browse the cached catalog.";
@@ -251,9 +284,9 @@ const DiscoverySettings = {
     this.candidatePending.add(id);this.renderCandidates();
     try{
       this.accept("discovery",await invoke("set_discovery_candidate",{candidateId:id,action}));
-      this.message("discovery",action==="include"?"Application included.":"Review choice saved.");
+      this.message("review",action==="include"?"Application included.":"Review choice saved.");
       this.render();await this.candidates();
-    }catch(error){this.message("discovery",error?.message||String(error));}
+    }catch(error){this.message("review",error?.message||String(error));}
     finally{this.candidatePending.delete(id);this.renderCandidates();}
   },
 };

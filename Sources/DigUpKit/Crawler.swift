@@ -11,12 +11,23 @@ public struct Candidate: Sendable {
 }
 
 public struct CrawlReport: Sendable {
+    public init() {}
     public var candidates: [Candidate] = []
+    public var candidateCount = 0
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
     /// Paths whose metadata or directory listing failed. Their cached rows must survive a partial scan.
     public var unreadable: Set<String> = []
+    private var unreadableLiterals:[Data:String]=[:]
+    /// Failure paths retain every byte spelling even when Swift's Set equates NFC and NFD.
+    public var unreadablePaths:[String] {
+        IndexStore.uniqueLiteralPaths(Array(unreadableLiterals.values)+Array(unreadable))
+    }
+    public mutating func recordUnreadable(_ path:String) {
+        unreadable.insert(path)
+        unreadableLiterals[Data(path.utf8)]=path
+    }
     public var visited = 0
 }
 
@@ -67,17 +78,17 @@ public enum Crawler {
             }.flatMap { [$0, FolderSelection.realPath($0)] }
             #if os(Windows)
             guard let walker = FileSystem.walk(root, keys: keys) else {
-                report.unreadable.insert(real)
+                report.recordUnreadable(real)
                 continue
             }
             #else
             guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                              options: [.skipsHiddenFiles, .skipsPackageDescendants],
                                              errorHandler: { url, _ in
-                                                 report.unreadable.insert(FolderSelection.realPath(url.path))
+                                                 report.recordUnreadable(FolderSelection.realPath(url.path))
                                                  return true
                                              }) else {
-                report.unreadable.insert(real)
+                report.recordUnreadable(real)
                 continue
             }
             #endif
@@ -93,7 +104,7 @@ public enum Crawler {
                 let values: URLResourceValues
                 do { values = try url.resourceValues(forKeys: Set(keys)) }
                 catch {
-                    report.unreadable.insert(url.path)
+                    report.recordUnreadable(url.path)
                     walker.skipDescendants()
                     return
                 }
@@ -119,7 +130,7 @@ public enum Crawler {
                 }
                 func localFileInfo() -> FileInfo? {
                     guard let info = FileSystem.info(of: url.path) else {
-                        report.unreadable.insert(url.path)
+                        report.recordUnreadable(url.path)
                         report.skipped["metadata unavailable", default: 0] += 1
                         return nil
                     }
@@ -174,7 +185,7 @@ public enum Crawler {
                 }
             }
             #if os(Windows)
-            report.unreadable.formUnion(walker.unreadable)
+            for path in walker.unreadable {report.recordUnreadable(path)}
             #endif
         }
 
@@ -214,6 +225,7 @@ public enum Crawler {
             }
         }
         report.candidates = kept
+        report.candidateCount = kept.count
         onProgress(CrawlProgress(stage: "complete", root: "", path: "", visited: report.visited, candidates: kept.count))
         return report
     }
@@ -230,11 +242,13 @@ struct GitRepos {
 
     /// A chosen folder: a repo itself, or inside one (a repo's subfolder chosen on its own).
     mutating func enterRoot(_ path: String) {
-        var folder = path
+        let canonical=FolderSelection.realPath(path)
+        var folder = canonical
         while true {
             if FileManager.default.fileExists(atPath: folder + "/.git") {
                 files[folder] = GitFiles.list(folder)
                 repoOf[path] = folder
+                repoOf[canonical] = folder
                 return
             }
             let parent = (folder as NSString).deletingLastPathComponent
@@ -242,6 +256,7 @@ struct GitRepos {
             folder = parent
         }
         repoOf[path] = .some(nil)
+        repoOf[canonical] = .some(nil)
     }
 
     /// A folder the walk goes into: a repo of its own when it has a .git folder (a submodule's or a worktree's .git

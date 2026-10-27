@@ -19,6 +19,7 @@ mod system_setting_commands;
 mod application_commands;
 mod clipboard;
 mod diagnostics;
+mod gpu_telemetry;
 mod code;
 mod editors;
 mod helper;
@@ -26,7 +27,10 @@ mod hotkey;
 mod hours;
 mod moments;
 mod options;
+mod personalization;
+mod result_open;
 mod settings;
+mod search_scope;
 mod panel_geometry;
 mod panel_native;
 mod status;
@@ -53,6 +57,8 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use watcher::FolderWatcher;
+mod watch_changes;
+use watch_changes::ChangeBatch;
 use application_commands::{search_apps, launch_app, app_icon, refresh_apps, set_app_options, set_app_override, prepare_apps};
 
 const PANEL_WIDTH: f64 = panel_geometry::WIDTH;
@@ -65,6 +71,7 @@ const WINDOW: &str = "main";
 
 /// What the commands and events share.
 struct Shell {
+    personalization: Arc<personalization::Personalization>,
     applications: Arc<applications::Catalog>,
     discovery: Arc<discovery_manager::Manager>,
     enrichment: Arc<enrichment_manager::Manager>,
@@ -130,6 +137,7 @@ struct Shell {
     prune: AtomicBool,
     logs: PathBuf,
     diagnostics: diagnostics::Diagnostics,
+    telemetry: gpu_telemetry::Monitor,
 }
 
 impl Shell {
@@ -147,6 +155,19 @@ impl Shell {
             return self.options.code_roots.iter().map(|root| root.display().to_string()).collect();
         }
         self.settings.lock().unwrap().code_folders.clone()
+    }
+
+    fn selected_search_scope(&self, code: bool) -> search_scope::Scope {
+        let settings = self.settings.lock().unwrap();
+        let overrides = if code { &self.options.code_roots } else { &self.options.roots };
+        let roots = if overrides.is_empty() {
+            if code { settings.code_folders.clone() } else { settings.folders.clone() }
+        } else { overrides.iter().map(|root| root.display().to_string()).collect() };
+        search_scope::Scope {
+            roots,
+            skipped: if code { settings.code_skipped.clone() } else { settings.skipped.clone() },
+            types: if code { vec![] } else { settings.skip_types.clone() },
+        }
     }
 
     fn is_set_up(&self) -> bool {
@@ -281,13 +302,33 @@ async fn ask(window: tauri::WebviewWindow, shell: State<'_, Arc<Shell>>, mut req
     if !["search", "cancel", "embed_ahead", "text", "render", "prewarm", "status", "summaries"].contains(&op.as_str()) {
         return Err(format!("not a question the panel asks: {op}"));
     }
-    request["session"] = json!(format!("{}:{}:files",window.label(),request["session_id"].as_u64().unwrap_or(0)));
+    let session = format!("{}:{}:files", window.label(), request["session_id"].as_u64().unwrap_or(0));
+    request["session"] = json!(session);
+    let generation = request["generation"].as_u64().unwrap_or(0);
+    let query = request["q"].as_str().unwrap_or_default().to_string();
     // A query while the model downloads must not permanently poison the helper's encoder state.
     if !shell.model_ready() {
         if op == "prewarm" || op == "embed_ahead" { return Ok(json!({"ok":true,"encoder":"stopped"})); }
         if op == "search" { request["meaning"] = json!(false); }
     }
-    shell.search.ask(request).await
+    let code = request["code"] == true;
+    let scope = shell.selected_search_scope(code);
+    let mut reply = search_scope::ask(request, scope, || shell.selected_search_scope(code), |request| shell.search.ask(request)).await?;
+    if op == "search" && reply["status"] != "superseded" && reply["hits"].as_array().is_some_and(|hits| !hits.is_empty()) {
+        let strong = reply["strong"].as_u64().unwrap_or(usize::MAX as u64) as usize;
+        if let Some(hits) = reply["hits"].as_array_mut() {
+            personalization::match_sources(hits, &query);
+            let split = strong.min(hits.len());
+            let (strong, weaker) = hits.split_at_mut(split);
+            for group in [strong, weaker] {
+                shell.personalization.rank(&session, generation, &query, group,
+                    |hit| personalization::result_key(hit).unwrap_or_default(),
+                    |hit| personalization::file_tier(hit, &query));
+                shell.personalization.decorate(&session, generation, group);
+            }
+        }
+    }
+    Ok(reply)
 }
 
 /// What indexing these folders would take, one answer per folder (`digup estimate --json`): files by kind, the first
@@ -417,27 +458,35 @@ fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Stri
 /// Opens a result in its default app: at `page` (a PDF's, from 1) or at `seconds` (a recording's or video's) when that
 /// app can be told where.
 #[tauri::command]
-fn open_path(app: AppHandle, path: String, page: Option<u32>, seconds: Option<f64>) -> Result<(), String> {
-    hide_panel(app.clone());
-    if (page.is_some() || seconds.is_some()) && moments::open_at(&path, page, seconds) {
-        return Ok(());
-    }
-    app.opener().open_path(path, None::<&str>).map_err(|error| error.to_string())
+async fn open_path(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, page: Option<u32>, seconds: Option<f64>) -> Result<(), String> {
+    let key = format!("file:{path}");
+    let opening = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        result_open::verify_file(Path::new(&path))?;
+        if (page.is_some() || seconds.is_some()) && moments::open_at(&path, page, seconds) { return Ok(()); }
+        opening.opener().open_path(path, None::<&str>).map_err(|error| error.to_string())
+    }).await.map_err(|error| error.to_string())??;
+    shell.personalization.accepted(&key);
+    hide_panel(app);
+    Ok(())
 }
 
-/// Opens a code result at its line in the editor chosen in Settings (or the first one installed), else in its default
-/// app.
+/// Opens a code result at its line in the selected editor.
 #[tauri::command]
-fn open_code(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, line: u32) -> Result<(), String> {
-    hide_panel(app.clone());
+async fn open_code(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, line: u32) -> Result<(), String> {
+    let key = format!("file:{path}");
     let choice = shell.settings.lock().unwrap().code_editor.clone();
-    if let Some((editor, program)) = editors::chosen(&choice) {
-        match editor.open(&program, &path, line.max(1)) {
-            Ok(()) => return Ok(()),
-            Err(error) => eprintln!("digup-shell: {} didn't start: {error}", program.display()),
+    let opening = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        result_open::verify_file(Path::new(&path))?;
+        if let Some((editor, program)) = editors::chosen(&choice) {
+            if editor.open(&program, &path, line.max(1)).is_ok() { return Ok(()); }
         }
-    }
-    app.opener().open_path(path, None::<&str>).map_err(|error| error.to_string())
+        opening.opener().open_path(path, None::<&str>).map_err(|error| error.to_string())
+    }).await.map_err(|error| error.to_string())??;
+    shell.personalization.accepted(&key);
+    hide_panel(app);
+    Ok(())
 }
 
 /// Ctrl+C on a result: the file on the clipboard, to paste in a file manager, a mail or a chat.
@@ -733,10 +782,11 @@ fn main() {
         )
         .setup(move |app| setup(app, options))
         .invoke_handler(tauri::generate_handler![
+            set_personalization, clear_personalization, useful_result,
             ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
             panel_area, panel_config, panel_ready, appearance, set_appearance, set_panel_material, settings_info, set_open_at_login, set_center_panel, debug_query, debug_report, window_info,
             app_state, activity_snapshot, record_search_timing, search_session, application_commands::cancel_app_search, export_diagnostics, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
-            remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
+            remove_folder, index_folder_first, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
             enrichment_commands::set_app_enrichment_options, enrichment_commands::refresh_app_descriptions,
@@ -821,7 +871,9 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     for root in &options.roots {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
-    let application_root = options.index_folder().unwrap_or_else(std::env::temp_dir).join("applications");
+    let base_index = options.index_folder().unwrap_or_else(std::env::temp_dir);
+    let personalization = Arc::new(personalization::Personalization::new(base_index.join("relevance-history.json"), settings.personalization.clone()));
+    let application_root = base_index.join("applications");
     let applications = applications::Catalog::new(application_root.clone(), settings.applications.clone(), {
         let app = handle.clone();
         move |info| { let _ = app.emit("applications", info); }
@@ -845,6 +897,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         }
     });
     let shell = Arc::new(Shell {
+        personalization,
         applications,
         discovery,
         enrichment,
@@ -888,6 +941,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         estimating: AtomicUsize::new(0),
         prune: AtomicBool::new(false),
         diagnostics: diagnostics::Diagnostics::new(&logs),
+        telemetry: gpu_telemetry::Monitor::default(),
         logs,
     });
     app.manage(shell.clone());
@@ -994,6 +1048,7 @@ fn apply_folders(app: &AppHandle) {
     args.extend(folder_arguments(&settings, &shell.code_folders()));
     args.extend(folders);
     shell.search.set_arguments(args);
+    let _ = app.emit("search-scope", json!({"folders": shell.folders(), "hasCode": !shell.code_folders().is_empty()}));
     let search = shell.clone();
     tauri::async_runtime::spawn(async move {
         let _ = search.search.ask(request).await;
@@ -1021,12 +1076,12 @@ fn watch_folders(app: &AppHandle) {
     let index = shell.index_folder();
     *shell.watcher.lock().unwrap() = (!folders.is_empty()).then(|| {
         let app = app.clone();
-        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::MAX, move || run_index(&app))
+        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::MAX, move |batch| changed_paths(&app, batch, false))
     });
     *shell.code_watcher.lock().unwrap() = (!code_folders.is_empty()).then(|| {
         let app = app.clone();
         FolderWatcher::start(&code_folders, code_skipped, index, Duration::from_secs(60), Duration::from_secs(600),
-                             move || sync_code(&app))
+                             move |batch| changed_paths(&app, batch, true))
     });
     if !folders.is_empty() || !code_folders.is_empty() {
         run_index(app);
@@ -1061,6 +1116,27 @@ fn run_index(app: &AppHandle) {
     shell.diagnostics.record("scheduler", json!({"event":"run_index","helper":launch.program,"args":launch.args}));
     if let Err(error) = shell.index.run(&launch) {
         index_event(app, json!({"event":"error","message":format!("Indexing couldn't start: {error}"),"fatal":true}));
+    }
+}
+
+#[tauri::command]
+async fn index_folder_first(app: AppHandle, path: String, code: bool) -> Result<Value,String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Value,String> {
+        let shell=app.state::<Arc<Shell>>();
+        let roots=if code {shell.code_folders()} else {shell.folders()};
+        if !roots.contains(&path) {return Err("Choose a folder that is selected for indexing.".into());}
+        shell.index.prioritize(path,code)?;
+        let active=may_index(&shell);
+        if active {run_index(&app);}
+        Ok(json!({"queued":true,"active":active}))
+    }).await.map_err(|error|error.to_string())?
+}
+
+fn changed_paths(app: &AppHandle, batch: ChangeBatch, code: bool) {
+    let shell = app.state::<Arc<Shell>>();
+    if !may_index(&shell) { return; }
+    if let Err(error) = shell.index.changes(&shell.index_launch(), batch, code) {
+        index_event(app,json!({"event":"error","message":format!("Indexing changes couldn't start: {error}"),"fatal":true}));
     }
 }
 
@@ -1376,7 +1452,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
-    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "drives" | "storage"));
+    let tab = tab.filter(|tab| matches!(*tab, "activity" | "general" | "folders" | "code" | "apps" | "drives" | "executable-review" | "windows-settings" | "storage"));
     if let Some(window) = app.get_webview_window("settings") {
         if let Some(tab) = tab { let _ = window.emit("settings-tab", tab); }
         let _ = window.show();
@@ -1402,6 +1478,7 @@ fn show_settings_at(app: &AppHandle, tab: Option<&str>) -> tauri::Result<()> {
 fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     let settings = shell.settings.lock().unwrap().clone();
     json!({
+        "personalization": shell.personalization.info(),
         "applications": shell.applications.info(),
         "applicationSemantic": shell.app_semantic.lock().unwrap().clone(),
         "windowsSettings":shell.windows_settings.info(),
@@ -1470,11 +1547,14 @@ async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String
         let has_folders = !shell.folders().is_empty();
         let blocked_by = indexing_blocker(&shell);
         let mut snapshot=activity::snapshot(activity::Input {
-            state, catalog, semantic, configured: serde_json::to_value(configured).unwrap_or_default(),
+            state, catalog, semantic, configured: serde_json::to_value(&configured).unwrap_or_default(),
             helpers: json!({"index":shell.index.snapshot(),"search":shell.search.snapshot()}),
             runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
             has_folders, blocked_by,
         });
+        snapshot["inference"]["configured"]["backgroundJobs"] = json!(configured.background_jobs());
+        let telemetry = shell.telemetry.snapshot(&snapshot["inference"]["configured"], &snapshot["inference"]["verified"]);
+        snapshot["inference"]["telemetry"] = telemetry;
         snapshot["windowsSettings"]=json!({"version":1,"catalog":shell.windows_settings.info(),"purpose":shell.settings_semantic.lock().unwrap().clone()});
         snapshot["discovery"]=shell.discovery.info();snapshot["enrichment"]=shell.enrichment.info();snapshot
     }).await.map_err(|error| error.to_string())
@@ -2043,7 +2123,10 @@ fn held_now(app: &AppHandle) {
     }
     if held.is_some() {
         let stopping = shell.clone();
-        std::thread::spawn(move || stopping.index.stop());
+        std::thread::spawn(move || {
+            stopping.index.stop();
+            stopping.search.refresh_names();
+        });
     }
     changed(app);
     if held.is_none() {
@@ -2059,7 +2142,10 @@ fn set_paused(app: &AppHandle, paused: bool) {
     if paused {
         // It may take a moment to leave (up to two seconds): not on the main thread.
         let stopping = shell.clone();
-        std::thread::spawn(move || stopping.index.stop());
+        std::thread::spawn(move || {
+            stopping.index.stop();
+            stopping.search.refresh_names();
+        });
     }
     changed(app);
     if !paused {
@@ -2184,6 +2270,10 @@ fn index_event(app: &AppHandle, event: Value) {
     }
     app.state::<Arc<Shell>>().status.lock().unwrap().apply(&event);
     match event["event"].as_str().unwrap_or_default() {
+        "scan_batch" => {
+            if event["namesChanged"] != false { refresh_search_names(app); }
+        }
+        "scanning" | "sync" | "scan_cancelled" | "error" => refresh_search_names(app),
         "file" | "rest" => reload(app, false),
         "idle" => {
             reload(app, true);
@@ -2197,7 +2287,10 @@ fn index_event(app: &AppHandle, event: Value) {
             }
         }
         "exit" => reload(app, true),
-        "ended" => index_ended(app, &event),
+        "ended" => {
+            refresh_search_names(app);
+            index_ended(app, &event);
+        }
         _ => {}
     }
     changed(app);
@@ -2333,6 +2426,12 @@ fn measure_then_index(app: &AppHandle) {
     });
 }
 
+/// Discovery coalesces metadata updates every half second, independently of vectors and the encoder.
+fn refresh_search_names(app: &AppHandle) {
+    let shell = app.state::<Arc<Shell>>();
+    if !shell.quitting.load(Ordering::SeqCst) { shell.search.refresh_names(); }
+}
+
 /// Has the search service read the index again: at once when indexing settles, else at most every three seconds.
 fn reload(app: &AppHandle, now: bool) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
@@ -2352,4 +2451,30 @@ fn reload(app: &AppHandle, now: bool) {
             println!("search: reload {reply:?}");
         }
     });
+}
+
+#[tauri::command]
+fn set_personalization(shell: State<'_, Arc<Shell>>, enabled: bool) -> Result<Value, String> {
+    let options = personalization::Options { enabled };
+    {
+        let mut current = shell.settings.lock().unwrap();
+        let mut next = current.clone();
+        next.personalization = options.clone();
+        next.save(&shell.settings_path).map_err(|error| error.to_string())?;
+        *current = next;
+    }
+    shell.personalization.configure(options);
+    Ok(shell.personalization.info())
+}
+
+#[tauri::command]
+async fn clear_personalization(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    let history = shell.personalization.clone();
+    tauri::async_runtime::spawn_blocking(move || history.clear()).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn useful_result(shell: State<'_, Arc<Shell>>, token: String) -> Result<Value, String> {
+    if token.len() != 64 { return Err("This result is no longer current. Search again before saving feedback.".into()); }
+    shell.personalization.useful(&token)
 }
