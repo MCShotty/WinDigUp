@@ -4,13 +4,22 @@ const WindowsSettings = {
   configure(info){if(!info)return;if(typeof info.enabled==="boolean")this.enabled=info.enabled;
     if(typeof info.supported==="boolean")this.supported=info.supported;
     if(typeof info.ordinarySearches==="boolean")this.ordinarySearches=info.ordinarySearches;},
-  icon(){const holder=element("span","app-icon");holder.setAttribute("aria-hidden","true");
-    const image=element("img");image.src="settings-generic.svg";image.alt="";holder.append(image);return holder;},
+  icons:new Map(),
+  icon(hit){const holder=element("span","app-icon");holder.setAttribute("aria-hidden","true");
+    const image=element("img");image.src="settings-generic.svg";image.alt="";holder.append(image);
+    if(hit?.source==="control_panel"){
+      if(!this.icons.has(hit.id)){
+        this.icons.set(hit.id,invoke("windows_setting_icon",{settingId:hit.id,size:64}).then(fileURL));
+        if(this.icons.size>256)this.icons.delete(this.icons.keys().next().value);
+      }
+      this.icons.get(hit.id).then(src=>{if(holder.isConnected)image.src=src;}).catch(()=>{});
+    }
+    return holder;},
   async open(hit){if(Apps.launching.has(hit.id))return;Apps.launching.add(hit.id);
     try{return await invoke("open_windows_setting",{settingId:hit.id});}
     finally{Apps.launching.delete(hit.id);}},
   details(hit,fail){const box=element("div","app-details");
-    box.append(this.icon(),element("div","app-name",hit.name),element("p","app-description","Windows settings"),
+    box.append(this.icon(hit),element("div","app-name",hit.name),element("p","app-description",hit.source==="control_panel"?"Control Panel":"Windows Settings"),
       element("p","",hit.description||"Open this Windows settings page."));
     if(hit.availability==="unknown")box.append(element("p","note","Availability depends on this PC's hardware and Windows configuration."));
     const button=element("button","primary","Open settings");button.onclick=async()=>{button.disabled=true;
@@ -23,7 +32,7 @@ class WindowsSettingsSearch {
     this.changed=changed;this.hits=[];this.total=0;this.epoch=0;this.semantic={state:"preparing"};this.catalog={};
     for(const name of ["windows-settings","windows-settings-progress"])tauri.event.listen(name,({payload})=>{
       if(name==="windows-settings"){WindowsSettings.configure(payload);this.catalog=payload;
-        if(this.requestedActive){this.begin(this.text,true,this.mode);this.changed();}else this.changed(true);return;}
+        if(this.requestedActive){this.begin(this.text,true,this.mode,true);this.changed();}else this.changed(true);return;}
       const changed=this.semantic.embedded!==payload.embedded||this.semantic.revision!==payload.revision;
       this.semantic=payload;this.changed(true);
       if(changed&&this.active&&this.text&&!this.refreshTimer&&!document.hidden)
@@ -31,11 +40,11 @@ class WindowsSettingsSearch {
     });
     tauri.event.listen("model",({payload})=>{if(payload.state==="ready"&&this.active&&this.text)this.request(true,true);});
   }
-  begin(text,active,mode="all"){
-    this.epoch++;this.requestedActive=active;this.text=text;this.mode=mode;this.hits=[];this.total=0;this.error=null;this.finalEpoch=-1;this.settledEpoch=-1;
+  begin(text,active,mode="all",preserve=false){
+    this.epoch++;this.requestedActive=active;this.text=text;this.mode=mode;if(!preserve){this.hits=[];this.total=0;}this.error=null;this.finalEpoch=-1;this.settledEpoch=-1;
     clearTimeout(this.timer);clearTimeout(this.refreshTimer);cancelAnimationFrame(this.frame);
     this.active=active&&WindowsSettings.supported&&WindowsSettings.enabled&&(mode==="settings"||WindowsSettings.ordinarySearches);
-    if(!this.active)return;
+    if(!this.active){this.hits=[];this.total=0;return;}
     this.frame=requestAnimationFrame(()=>this.request(false));
     if(text)this.timer=setTimeout(()=>this.request(true),120);
   }

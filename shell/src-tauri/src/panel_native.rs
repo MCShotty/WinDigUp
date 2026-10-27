@@ -42,6 +42,17 @@ pub fn apply(window: &WebviewWindow, appearance: &Appearance, preference: &Panel
     status
 }
 
+/// A queued focus-loss notification must not dismiss a panel that already regained foreground ownership.
+pub fn owns_foreground(window: &WebviewWindow) -> bool {
+    #[cfg(windows)] {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow,GetAncestor,GA_ROOTOWNER};
+        let Ok(hwnd)=window.hwnd() else{return false};
+        let foreground=unsafe{GetForegroundWindow()};
+        return foreground==hwnd.0 || (!foreground.is_null() && unsafe{GetAncestor(foreground,GA_ROOTOWNER)}==hwnd.0);
+    }
+    #[cfg(not(windows))] window.is_focused().unwrap_or(false)
+}
+
 pub fn shape(window: &WebviewWindow) {
     #[cfg(windows)]
     { windows::shape(window, false); }
@@ -113,7 +124,7 @@ mod windows {
             if !force && state.applied == Some(key) { return true; }
             state.applying = true;
         }
-        let radius = if size.height as f64 / scale <= crate::panel_geometry::FIELD_HEIGHT + 1.0 { 32.0 } else { 22.0 };
+        let radius=12.0;
         let diameter = (radius * 2.0 * scale).round() as i32;
         let applied = unsafe {
             let region = CreateRoundRectRgn(left, top, left + size.width as i32 + 1, top + size.height as i32 + 1, diameter, diameter);

@@ -13,15 +13,14 @@
 <body>
   <main id="panel" class="panel" data-state="empty">
     <header class="field" role="search" aria-label="Quick search">
-      <svg class="glass" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="10" cy="10" r="6.5"/><path d="M15 15 L20.5 20.5"/>
-      </svg>
+      <img class="launcher-brand" src="icon.png" alt="">
       <input id="query" type="text" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search files, apps and settings" role="combobox" aria-autocomplete="list" aria-controls="list" aria-expanded="false"
              placeholder="Search files, apps and settings">
       <button id="expand-search" class="expand-search" type="button" aria-label="Open full search" title="Open full search (Ctrl+O)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="13" height="13" rx="2"/><path d="M9 7V4h11v11h-3"/></svg>
       </button>
     </header>
+    <nav id="launcher-shortcuts" class="launcher-shortcuts" aria-label="Pinned and recent applications"></nav>
     <section id="body" class="body" hidden>
       <div id="results" class="results">
         <div id="list" class="list" role="listbox" aria-label="Results"></div>
@@ -46,6 +45,7 @@
   <script src="applications.js"></script>
   <script src="windows-settings.js"></script>
   <script src="mixed-results.js"></script>
+  <script src="launcher.js"></script>
   <script src="panel.js"></script>
 </body>
 </html>

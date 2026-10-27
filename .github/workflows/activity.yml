@@ -56,6 +56,7 @@ jobs:
           node tests/ui/lexical-refresh.cjs
           node --check shell/ui/windows-settings.js
           node tests/ui/windows-settings.cjs
+          node tests/ui/launcher-home.cjs
           node --check shell/ui/mixed-results.js
           node --check shell/ui/discovery-settings.js
           node tests/ui/discovery-settings.cjs
@@ -76,7 +77,8 @@ jobs:
       - name: Pinned Tauri CLI without npm PATH shims
         shell: bash
         run: bash scripts/tauri-cli.sh --version
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: shell-build-cache
         with:
           path: |
             ~/.cargo/registry
@@ -85,7 +87,33 @@ jobs:
       - name: Type check native Tauri commands, report export and Windows integration
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
       - name: Build the real native shell without model libraries
-        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
+        run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --features windows-gui --bins
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.shell-build-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            shell/src-tauri/target
+          key: floating-shell-${{ runner.os }}-${{ hashFiles('shell/src-tauri/Cargo.lock') }}
+      - name: Build and register the test-signed Copilot identity
+        shell: pwsh
+        env:
+          DIGUP_MSIX_TEST_SIGN: "1"
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'copilot-fixture'
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item shell/src-tauri/target/debug/digup-shell.exe (Join-Path $root 'DigUp.exe')
+          $headers=& dumpbin.exe /headers (Join-Path $root 'DigUp.exe')
+          if(!($headers | Select-String -SimpleMatch '(Windows GUI)')){throw 'Activation checks require the production Windows GUI subsystem'}
+          scripts/package-copilot.ps1 -Destination (Join-Path $root 'copilot')
+          scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath (Join-Path $root 'copilot/TEST-ONLY-WinDigUp.cer')
+          try {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root
+            if($LASTEXITCODE){throw 'Copilot identity registration failed'}
+            scripts/check-windows-copilot.ps1 -InstallRoot $root
+          } finally {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root -Uninstall
+          }
       - name: Build the disposable Shell shortcut fixture
         shell: pwsh
         run: |
@@ -109,6 +137,12 @@ jobs:
       - name: Real WebView2 portable-app discovery and launch (no inference)
         shell: pwsh
         run: scripts/check-windows-discovery.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe" -Component "$PWD/shell/src-tauri/target/debug/digup-discovery.exe"
+      - name: Real modern and Control Panel settings activation (no inference)
+        shell: pwsh
+        run: scripts/check-windows-settings.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe"
+      - name: Registered Control Panel applet and task fixture (no inference)
+        shell: pwsh
+        run: scripts/check-windows-control-panel.ps1 -InstalledApp "$PWD/shell/src-tauri/target/debug/digup-shell.exe"
       - name: Compile portable search-vector conversion for Windows x64
         run: clang-cl /nologo /c /O2 /W4 /std:c17 /I Sources/CSearchMath/include Sources/CSearchMath/conversion.c "/Fo$env:RUNNER_TEMP\search-math.obj"
 
@@ -141,6 +175,9 @@ jobs:
             ~/.cargo/registry
             tests/applications/native/target
           key: discovery-windows-2025-v1-${{ hashFiles('tests/applications/native/Cargo.lock') }}
+      - name: Real Control Panel enumeration and Shell activation (no inference)
+        shell: pwsh
+        run: cargo run --release --locked --manifest-path tests/applications/native/Cargo.toml --bin control-panel-provider-check -- "$env:RUNNER_TEMP/control-panel-catalog.json"
       - name: Disposable NTFS volume and standard-user permission boundary
         shell: pwsh
         run: scripts/check-windows-discovery.ps1 -Component "$PWD/tests/applications/native/target/release/digup-discovery-fixture.exe" -ComponentOnly

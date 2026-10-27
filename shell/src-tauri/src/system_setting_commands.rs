@@ -69,7 +69,11 @@ pub fn cancel_windows_settings_search(window:tauri::WebviewWindow,shell:State<'_
 pub async fn open_windows_setting(app:AppHandle,shell:State<'_,Arc<Shell>>,setting_id:String)->Result<(),String> {
     let shell=shell.inner().clone();
     let history=shell.personalization.clone();let key=setting_id.clone();
-    tauri::async_runtime::spawn_blocking(move||shell.windows_settings.launch(&setting_id)).await.map_err(|e|e.to_string())??;
+    tauri::async_runtime::spawn_blocking(move||{
+        let result=shell.windows_settings.launch(&setting_id);
+        if result.is_err(){shell.windows_settings.refresh();}
+        result
+    }).await.map_err(|e|e.to_string())??;
     history.accepted(&key);
     crate::hide_panel(app);
     Ok(())
@@ -103,6 +107,7 @@ pub async fn prepare_windows_settings(shell:State<'_,Arc<Shell>>)->Result<Value,
     Ok(state)
 }
 pub fn start(app:&AppHandle,shell:&Arc<Shell>) {
+    shell.windows_settings.start();
     let weak=Arc::downgrade(shell);let app=app.clone();
     std::thread::spawn(move||{
         let mut previous=Value::Null;let mut logged=Value::Null;
@@ -133,4 +138,16 @@ pub fn start(app:&AppHandle,shell:&Arc<Shell>) {
                 let _=app.emit("windows-settings-progress",state);}
         }
     });
+}
+
+#[tauri::command]
+pub fn refresh_windows_settings(shell:State<'_,Arc<Shell>>)->Value {shell.windows_settings.refresh();shell.windows_settings.info()}
+
+#[tauri::command]
+pub async fn windows_setting_icon(app:AppHandle,shell:State<'_,Arc<Shell>>,setting_id:String,size:Option<u32>)->Result<String,String>{
+    use tauri::Manager;
+    let catalog=shell.windows_settings.clone();
+    let path=tauri::async_runtime::spawn_blocking(move||catalog.icon_path(&setting_id,size.unwrap_or(64))).await.map_err(|e|e.to_string())??;
+    app.asset_protocol_scope().allow_file(&path).map_err(|e|e.to_string())?;
+    Ok(path.to_string_lossy().into())
 }

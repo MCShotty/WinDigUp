@@ -508,6 +508,12 @@ impl Catalog {
             (service.notify)(service.info());
         });
     }
+    /// Resolve bounded launcher IDs without lexical ranking or cloning the full catalog.
+    pub fn selected_hits(&self, ids: &HashSet<String>) -> Vec<Hit> {
+        if ids.is_empty() || !self.enabled() { return Vec::new(); }
+        self.snapshot.read().unwrap().hits.iter()
+            .filter(|hit| !hit.hidden && ids.contains(&hit.id)).cloned().collect()
+    }
     pub fn search(&self, query: &str, include_hidden: bool) -> Vec<Hit> {
         if !self.enabled() {
             return Vec::new();
@@ -740,6 +746,19 @@ mod tests {
                 path: format!("/{name}.lnk"),
             },
         )
+    }
+    #[test]
+    fn launcher_ids_use_current_visibility_without_model_or_name_ranking() {
+        let root=std::env::temp_dir().join(format!("digup-launcher-lookup-{}",std::process::id()));
+        let c=Catalog::new(root.clone(),Options{enabled:true,..Options::default()},|_|{});
+        let a=record("Editor","launcher-editor");let b=record("Photos","launcher-photos");
+        let ids=[a.id.clone(),b.id.clone(),"app:missing".into()].into_iter().collect();
+        c.publish_source("user",Ok(vec![a.clone(),b.clone()]));assert_eq!(c.selected_hits(&ids).len(),2);
+        let mut options=Options{enabled:true,..Options::default()};
+        options.overrides.insert(a.id.clone(),Override{hidden:true,..Override::default()});
+        c.configure(options.clone());assert_eq!(c.selected_hits(&ids).iter().map(|h|&h.id).collect::<Vec<_>>(),vec![&b.id]);
+        options.enabled=false;c.configure(options);assert!(c.selected_hits(&ids).is_empty());
+        let _=std::fs::remove_dir_all(root);
     }
     #[test]
     fn equivalent_identities_merge_but_argument_variants_survive() {
@@ -979,4 +998,9 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn shell_icon(parsing:&str,size:u32,path:&std::path::Path)->Result<(),String>{
+    windows::icon(&Target::Shell{parsing_name:parsing.into()},size,path)
 }

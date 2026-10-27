@@ -90,7 +90,9 @@ body.apps-mode .app-group-title { font-size:23px; font-weight:650; }
 .app-editor-message { font-size:13px; color:var(--secondary); overflow-wrap:anywhere; }
 @media (max-width:1100px) { .app-match-reason { display:none; } .app-purpose-tag { display:block; } .app-row-expanded { grid-template-columns:40px minmax(0,1fr) auto; gap:12px; } }
 @media (max-width:540px) { .apps-settings-layout { grid-template-columns:1fr; } #apps-list { max-height:220px; } #apps-editors { border-left:0; border-top:1px solid var(--line); padding:18px 0 0; } .app-purpose-state { width:100%; margin-left:0; } }
-@media (prefers-color-scheme:dark) { .app-generic { filter:invert(.75); } }
+:root[data-theme="dark"] .app-generic { filter:invert(.85); }
+:root[data-theme="light"] .app-generic { filter:none; }
+@media (prefers-color-scheme:dark) { :root:not([data-theme="light"]) .app-generic { filter:invert(.85); } }
 @media (forced-colors:active) { .app-row.selected, .app-settings-row[aria-selected=true] { outline:2px solid Highlight; } }
 
 .source-section {border-top:1px solid var(--border, #9a9a9a55);padding:16px 0;margin-top:14px}
