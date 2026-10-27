@@ -19,7 +19,10 @@ $packagePath=Join-Path $folder 'WinDigUp.Identity.msix'
 if(!(Test-Path $packagePath)){Write-Output 'Copilot-key identity is not included in this build.';exit 0}
 try {
  $stamp=Join-Path $folder 'registration.json'
- $hash=(Get-FileHash -Algorithm SHA256 $packagePath).Hash
+ # NSIS can launch Windows PowerShell with a reduced module search path.
+ $stream=[IO.File]::OpenRead($packagePath);$algorithm=[Security.Cryptography.SHA256]::Create()
+ try{$hash=[BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','')}
+ finally{$algorithm.Dispose();$stream.Dispose()}
  if($old.Count){
   $previous=if(Test-Path $stamp){Get-Content -Raw $stamp | ConvertFrom-Json}else{$null}
   if($old[0].Version -eq [Version]$metadata.version -and $previous.hash -eq $hash -and $previous.root -eq [IO.Path]::GetFullPath($InstallRoot)){

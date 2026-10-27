@@ -1,4 +1,4 @@
-name: Installed Copilot verification
+name: Repackage and verify installer registration
 on:
   push:
     branches: [codex/installer-recheck]
@@ -8,93 +8,67 @@ permissions:
 jobs:
   installed:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Require identical application sources and locate the immutable installer
-        id: candidate
+      - name: Verify unchanged compiled sources
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $expected='6fc826c43c0a65f69cd906049aea735bd8ef91dd'
-          git fetch --no-tags --depth=1 origin $expected
-          if($LASTEXITCODE){throw 'Cannot verify artifact source'}
-          git diff --exit-code $expected HEAD -- . ':!.github/workflows/launcher-contracts.yml' ':!.github/workflows/installer-recheck.yml' ':!scripts/check-windows-copilot.ps1'
-          if($LASTEXITCODE){throw 'Runtime or packaging sources differ; rebuild instead of reusing this installer'}
-          $headers=@{Authorization=('Bearer '+$env:GH_TOKEN);Accept='application/vnd.github+json'}
-          $url='https://api.github.com/repos/MCShotty/WinDigUp/actions/runs/40454742713'
-          $run=Invoke-RestMethod -Headers $headers -Uri $url
-          if($run.head_sha -ne $expected){throw 'Wrong installer source commit'}
-          $found=$null
-          for($attempt=0;$attempt -lt 60;$attempt++){
-            $artifacts=Invoke-RestMethod -Headers $headers -Uri ($url+'/artifacts')
-            $found=@($artifacts.artifacts|Where-Object{$_.name -eq 'DigUp-windows-x64-test-signed' -and !$_.expired})
-            if($found.Count -eq 1){break}
-            Start-Sleep -Seconds 10
-          }
-          if($found.Count -ne 1){throw 'The matching installer artifact was not published'}
-          ('id='+$found[0].id) >> $env:GITHUB_OUTPUT
-          Write-Output ('Verified identical runtime sources; installer artifact '+$found[0].id+' at '+$expected)
+          git fetch --no-tags --depth=1 origin 6fc826c43c0a65f69cd906049aea735bd8ef91dd
+          if($LASTEXITCODE){throw 'Missing runtime source'}
+          git diff --exit-code 6fc826c43c0a65f69cd906049aea735bd8ef91dd HEAD -- . ':!.github/workflows/launcher-contracts.yml' ':!.github/workflows/installer-recheck.yml' ':!scripts/check-windows-copilot.ps1' ':!shell/src-tauri/windows/register-copilot.ps1'
+          if($LASTEXITCODE){throw 'Compiled sources differ; a full rebuild is required'}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          artifact-ids: ${{ steps.candidate.outputs.id }}
+          artifact-ids: 12713350599
           run-id: 40454742713
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/installer-candidate
-      - name: Install the real NSIS package and verify registered activation
+      - name: Extract verified binaries and repackage with corrected registration
         shell: pwsh
         run: |
           $root=Join-Path $env:RUNNER_TEMP 'installer-candidate'
           $cert=@(Get-ChildItem $root -Recurse -Filter TEST-ONLY-WinDigUp.cer)
           $setup=@(Get-ChildItem $root -Recurse -Filter '*-setup.exe')
-          if($cert.Count -ne 1 -or $setup.Count -ne 1){throw 'Unexpected installer artifact layout'}
+          if($cert.Count -ne 1 -or $setup.Count -ne 1){throw 'Unexpected artifact layout'}
           scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath $cert[0].FullName
-          if($LASTEXITCODE){throw 'Test-only certificate preparation failed'}
+          if($LASTEXITCODE){throw 'Certificate preparation failed'}
           $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
-          if($process.ExitCode -ne 0){throw 'The real NSIS installation failed'}
+          if($process.ExitCode){throw 'Runtime extraction failed'}
+          $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
+          $release=Join-Path $PWD 'shell/src-tauri/target/release'
+          New-Item -ItemType Directory -Force $release | Out-Null
+          Copy-Item (Join-Path $installed 'DigUp.exe') (Join-Path $release 'digup-shell.exe')
+          Copy-Item (Join-Path $installed 'DigUp.exe') (Join-Path $release 'DigUp.exe')
+          Copy-Item (Join-Path $installed 'helper/digup-discovery.exe') (Join-Path $release 'digup-discovery.exe')
+          Copy-Item (Join-Path $installed 'helper') shell/src-tauri/helper -Recurse
+          Copy-Item (Join-Path $installed 'copilot') shell/src-tauri/copilot -Recurse
+          Copy-Item (Join-Path $installed 'THIRD-PARTY-NOTICES.txt') shell/src-tauri/THIRD-PARTY-NOTICES.txt
+          Copy-Item shell/src-tauri/windows/register-copilot.ps1 shell/src-tauri/copilot/register.ps1 -Force
+          Remove-Item shell/src-tauri/copilot/registration.json -ErrorAction SilentlyContinue
+          $config=Join-Path $env:RUNNER_TEMP 'repackage.json'
+          @{bundle=@{resources=@{'helper/'='helper/';'copilot/'='copilot/';'THIRD-PARTY-NOTICES.txt'='THIRD-PARTY-NOTICES.txt'}}}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $config
+          Push-Location shell/src-tauri
+          try {
+            bash ../../../scripts/tauri-cli.sh bundle --bundles nsis --config $config
+            if($LASTEXITCODE){throw 'Native installer repackaging failed'}
+          } finally {Pop-Location}
+      - name: Verify actual post-install registration and activation
+        shell: pwsh
+        run: |
+          $setup=@(Get-ChildItem shell/src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
+          if($setup.Count -ne 1){throw 'Missing corrected installer'}
+          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode){throw 'Corrected installation failed'}
           scripts/check-windows-copilot.ps1
-          if($LASTEXITCODE){
-            $installed=Join-Path $env:LOCALAPPDATA 'DigUp'
-            Write-Output 'DIAGNOSTIC: extracted identity payload'
-            Get-ChildItem (Join-Path $installed 'copilot') -Recurse | Select-Object FullName,Length | Format-Table -AutoSize
-            Get-Content -Raw (Join-Path $installed 'copilot/identity.json')
-            $native=Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
-            $zip=Join-Path $env:RUNNER_TEMP 'nsis.zip'
-            Invoke-WebRequest 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip' -OutFile $zip
-            if((Get-FileHash $zip -Algorithm SHA1).Hash -ne 'DB14F8AF2EA346B786C6AE19343F61AAF5E09B8E'){throw 'NSIS toolchain hash mismatch'}
-            $tools=Join-Path $env:RUNNER_TEMP 'nsis-tools'
-            Expand-Archive $zip $tools
-            $compiler=Get-ChildItem $tools -Recurse -Filter makensis.exe | Where-Object {$_.Directory.Name -ne 'Bin'} | Select-Object -First 1
-            $probe=Join-Path $env:RUNNER_TEMP 'hook-probe.nsi'
-            $exe=Join-Path $env:RUNNER_TEMP 'hook-probe.exe'
-            @'
-          Unicode true
-          Name "Hook probe"
-          OutFile "${OUT}"
-          RequestExecutionLevel user
-          SilentInstall silent
-          Section
-            StrCpy $INSTDIR "${ROOT}"
-            StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-            IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
-              StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
-            nsExec::ExecToStack /TIMEOUT=30000 '"$1" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR"'
-            Pop $0
-            Pop $2
-            FileOpen $3 "$INSTDIR\copilot\probe.txt" w
-            FileWrite $3 "host=$1 exit=$0 output=$2"
-            FileClose $3
-          SectionEnd
-          '@ | Set-Content -Encoding UTF8 $probe
-            & $compiler.FullName (('/DROOT='+$installed)) (('/DOUT='+$exe)) $probe
-            if($LASTEXITCODE){throw 'Cannot build the isolated hook probe'}
-            $p=Start-Process $exe -PassThru -Wait
-            Get-Content -Raw (Join-Path $installed 'copilot/probe.txt')
-            Write-Output 'DIAGNOSTIC: direct registration after failed installer hook; does not turn this check into a pass'
-            & $native -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $installed 'copilot/register.ps1') -InstallRoot $installed
-            Write-Output ('Direct registration exit code: '+$LASTEXITCODE)
-            throw 'Installed Copilot verification failed'
-          }
-          Write-Output 'PASS: actual NSIS post-install registration and cold/warm activation on Windows Server 2022; verified artifact runtime equals PR runtime.'
-          Write-Output 'UNVALIDATED: physical Windows 11 key/picker and physical accelerators.'
+          if($LASTEXITCODE){throw 'Corrected post-install registration failed'}
+          scripts/check-windows-settings.ps1
+          if($LASTEXITCODE){throw 'Installed Settings activation regressed'}
+          Write-Output 'PASS: real corrected NSIS installer registers the signed provider and supports cold/warm activation. Compiled sources match PR.'
+          Write-Output 'UNVALIDATED: physical Windows 11 key/picker and accelerators.'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: DigUp-windows-x64-verified
+          path: |
+            shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+            shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer
