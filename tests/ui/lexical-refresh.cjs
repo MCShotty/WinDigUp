@@ -97,6 +97,10 @@ let browser;
     await page.evaluate(()=>heldWords.splice(0).forEach(release=>release()));await page.waitForTimeout(80);
     assert.equal(await row("file:C:/docs/receipt-obsolete-refresh.txt").count(),0,"An older lexical completion replaced the current index publication");
     assert.equal(await row("file:C:/docs/receipt-latest-refresh.txt").count(),1);
+    await page.evaluate(()=>{window.published=2;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
+    await row("file:C:/docs/receipt-latest-refresh.txt").waitFor({state:"detached"});
+    assert.equal(await page.evaluate(()=>state.selection),oldKey,"A lexical removal moved an unaffected chosen file");
+    if(mode==="ready")assert.equal(await row("file:C:/docs/unrelated-title.txt").count(),1,"Removing a lexical-only row erased semantic content");
     const after=await page.evaluate(()=>({meaning:calls.filter(c=>c.command==="ask"&&c.args.request.op==="search"&&c.args.request.meaning).length,
       prewarm:calls.filter(c=>c.command==="ask"&&c.args.request.op==="prewarm").length,apps:calls.filter(c=>c.command==="search_apps").length,settings:calls.filter(c=>c.command==="search_windows_settings").length}));
     assert.deepEqual(after,before,"A words-only index publication woke inference or restarted a native provider");
