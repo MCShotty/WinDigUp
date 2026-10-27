@@ -58,7 +58,7 @@ def select_device(core, backend, requested=""):
         if len(matches) != 1:
             raise RuntimeError("The selected OpenVINO device is unavailable. Refresh devices and re-select it; no fallback was attempted.")
         selected = matches[0]
-        if requested == selected["id"] and len(eligible) > 1:
+        if requested != selected["stableID"] and len(eligible) > 1:
             raise RuntimeError("Select a stable OpenVINO identity when several devices are available.")
         return selected
     if len(eligible) != 1:

@@ -114,3 +114,15 @@ def test_primary_alias_never_identifies_a_secondary_device():
         def get_property(self, key): return ["GPU"]
     with pytest.raises(RuntimeError, match="Exclusive"):
         verify_selected(Compiled(), {"id":"GPU.1", "backend":"openvino-gpu"})
+
+
+def test_raw_primary_alias_does_not_bypass_multi_adapter_reselection():
+    class Integrated(Core):
+        def get_property(self, device, key):
+            if key == "DEVICE_TYPE": return "INTEGRATED"
+            return super().get_property(device, key)
+    core = Integrated(["GPU.0", "GPU.1"])
+    with pytest.raises(RuntimeError, match="stable OpenVINO identity"):
+        select_device(core, "openvino-gpu", "GPU")
+    identity = device_inventory(core, "openvino-gpu")[1]["stableID"]
+    assert select_device(core, "openvino-gpu", identity)["id"] == "GPU.1"
