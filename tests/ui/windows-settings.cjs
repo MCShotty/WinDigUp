@@ -105,12 +105,12 @@ let browser;
       const catalog={enabled:true,supported:true,semanticEnabled:false,ordinarySearches:true,revision:"debug-launch"};
       window.__TAURI__.core.invoke=async(command,args={})=>{
         if(command==="window_info")return {...await old(command,args),applications:{enabled:false,supported:true},
-          windowsSettings:catalog,debugQuery:"settings: display",debugLaunch:true};
+          windowsSettings:catalog,debugQuery:"settings: display",debugLaunch:true,debugSelected:"setting:display"};
         if(command==="search_windows_settings"){
           window.calls.push({command,args});
           await new Promise(resolve=>window.settingsLaunchWaiters.push(resolve));
           if(outcome==="error")throw new Error("Settings catalog request failed");
-          const hits=outcome==="match"?[{id:"setting:display",resultType:"windows_setting",kind:"windows_setting",
+          const hits=outcome==="match"?[{id:"setting:control-panel-display",resultType:"windows_setting",kind:"windows_setting",name:"Display",publisher:"Control Panel",description:"Classic display",source:"control_panel",reason:"exact",aliases:[]},{id:"setting:display",resultType:"windows_setting",kind:"windows_setting",
             name:"Display",publisher:"Windows",description:"Open display settings",reason:"exact",aliases:[]}]:[];
           return {hits,total:hits.length,generation:args.generation,catalog,semantic:{state:"disabled"}};
         }

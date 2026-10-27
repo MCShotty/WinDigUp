@@ -45,6 +45,8 @@ pub struct Options {
     pub debug_copy: bool,
     /// Installed-app check: launch the selected catalog application, then report the accepted request.
     pub debug_launch: bool,
+    /// Installed UI checks select a stable result ID without relying on ambiguous names.
+    pub debug_selected: Option<String>,
     /// A desktop shortcut's command (hotkey.rs): show or hide the panel of the DigUp already running, or start DigUp
     /// with the panel up.
     pub toggle: bool,
@@ -77,6 +79,7 @@ impl Options {
             debug_settings: false,
             debug_copy: false,
             debug_launch: false,
+            debug_selected: None,
             toggle: false,
             show_panel: false,
             at_login: false,
@@ -105,6 +108,7 @@ impl Options {
                 "--debug-settings" => options.debug_settings = true,
                 "--debug-copy" => options.debug_copy = true,
                 "--debug-launch" => options.debug_launch = true,
+                "--debug-selected" => options.debug_selected = Some(value()?),
                 "--toggle" => options.toggle = true,
                 "--show-panel" => options.show_panel = true,
                 "--at-login" => options.at_login = true,

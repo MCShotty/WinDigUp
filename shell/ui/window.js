@@ -1481,7 +1481,7 @@ async function start() {
   $query.focus();
   if (state.query || isAppsMode() || isSettingsMode()) run();
   if (!isAppsMode() && !isSettingsMode()) ask({ op: "prewarm" }).catch(() => {});
-  if (info.debugQuery != null) debugSearch(info.debugQuery);
+  if (info.debugQuery != null){if(info.debugSelected)state.nextSelection=info.debugSelected;debugSearch(info.debugQuery);}
 }
 
 // Debug runs (--debug-window): type the query in, and once the results and their pictures are in, report what the

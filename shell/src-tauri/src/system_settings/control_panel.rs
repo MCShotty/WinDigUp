@@ -40,6 +40,11 @@ pub fn discover(source:&str)->Result<Vec<Entry>,String>{
             let parsing=owned(item.GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING).map_err(|e|e.to_string())?);
             // Preserve Windows' opaque Shell target, never a command extracted from task metadata.
             if name.trim().is_empty()||!parsing.starts_with("::{")||parsing.len()>32768{continue}
+            let pidl=SHGetIDListFromObject(&item).ok().and_then(|pidl|{
+                let length=ILGetSize(Some(pidl))as usize;
+                let bytes=if (2..=65536).contains(&length){Some(std::slice::from_raw_parts(pidl.cast::<u8>(),length).to_vec())}else{None};
+                CoTaskMemFree(Some(pidl.cast()));bytes
+            });
             let info=item.cast::<IShellItem2>().ok();
             let description=info.as_ref().map(|i|property(i,"System.InfoTip")).unwrap_or_default();
             let canonical=info.as_ref().map(|i|property(i,"System.ApplicationName")).unwrap_or_default();
@@ -48,7 +53,7 @@ pub fn discover(source:&str)->Result<Vec<Entry>,String>{
                 .chain([format!("control panel {name}"),format!("classic {name}")]).collect();
             entries.push(Entry{key:format!("control-panel-{}",crate::applications::digest(&parsing)),name,
                 description,uri:String::new(),hardware:String::new(),aliases,min_build:19041,max_build:None,
-                translations:Default::default(),native:Some(NativeTarget::Shell{parsing}),source:source.into(),canonical});
+                translations:Default::default(),native:Some(NativeTarget::Shell{parsing,pidl}),source:source.into(),canonical});
             if entries.len()>8192{return Err("Windows returned too many Control Panel entries; retaining the previous catalog.".into())}
         }
         Ok(entries)
@@ -60,11 +65,20 @@ pub fn open(target:&NativeTarget)->Result<(),String>{
         let mut info=SHELLEXECUTEINFOW{cbSize:std::mem::size_of::<SHELLEXECUTEINFOW>()as u32,
             fMask:SEE_MASK_NOASYNC|SEE_MASK_FLAG_NO_UI,lpVerb:w!("open"),nShow:SW_SHOWNORMAL.0,..Default::default()};
         match target {
-            NativeTarget::Shell{parsing}=>{
+            NativeTarget::Shell{parsing,pidl:bytes}=>{
                 if !parsing.starts_with("::{")||parsing.contains('\0'){return Err("This Control Panel target is invalid.".into())}
-                let name=wide(parsing);let mut pidl=std::ptr::null_mut();
-                SHParseDisplayName(PCWSTR(name.as_ptr()),None,&mut pidl,0,None)
-                    .map_err(|e|format!("This Control Panel item is no longer available: {e}"))?;
+                let mut pidl=std::ptr::null_mut();
+                if let Some(bytes)=bytes {
+                    if !super::valid_pidl(bytes){return Err("This Control Panel identity is invalid. Refresh Windows settings.".into())}
+                    let memory=CoTaskMemAlloc(bytes.len());
+                    if memory.is_null(){return Err("Windows could not allocate the Control Panel identity.".into())}
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(),memory.cast::<u8>(),bytes.len());
+                    pidl=memory.cast();
+                } else {
+                    let name=wide(parsing);
+                    SHParseDisplayName(PCWSTR(name.as_ptr()),None,&mut pidl,0,None)
+                        .map_err(|e|format!("This Control Panel item is no longer available: {e}"))?;
+                }
                 info.fMask|=SEE_MASK_IDLIST;info.lpIDList=pidl.cast();
                 let result=ShellExecuteExW(&mut info).map_err(|e|format!("Windows could not open this Control Panel item: {e}"));
                 CoTaskMemFree(Some(pidl.cast()));result

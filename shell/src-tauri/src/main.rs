@@ -667,6 +667,7 @@ fn window_info(shell: State<'_, Arc<Shell>>) -> Value {
         "debugSettings": shell.options.debug_settings,
         "debugCopy": shell.options.debug_copy,
         "debugLaunch": shell.options.debug_launch,
+        "debugSelected": shell.options.debug_selected,
     })
 }
 

@@ -31,7 +31,18 @@ struct Entry {
 }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(tag="type",rename_all="snake_case")]
-enum NativeTarget { Shell{parsing:String}, Canonical{name:String,page:String} }
+enum NativeTarget { Shell{parsing:String,#[serde(default)]pidl:Option<Vec<u8>>}, Canonical{name:String,page:String} }
+fn valid_pidl(bytes:&[u8])->bool{
+    if !(4..=65536).contains(&bytes.len()){return false}
+    let mut offset=0usize;
+    while offset+2<=bytes.len(){
+        let size=u16::from_le_bytes([bytes[offset],bytes[offset+1]])as usize;
+        if size==0{return offset+2==bytes.len()}
+        if size<2||offset+size>bytes.len(){return false}
+        offset+=size;
+    }
+    false
+}
 #[derive(Clone,Debug,Default,Serialize,Deserialize)]
 struct Source { entries:Vec<Entry>, #[serde(default)]error:Option<String> }
 #[derive(Serialize,Deserialize)]
@@ -81,7 +92,7 @@ impl Catalog {
         let sources=self.sources.read().unwrap();
         let mut identities=HashSet::new();
         for source in sources.values(){for e in &source.entries {
-            let identity=serde_json::to_string(&e.native).unwrap_or_default();
+            let identity=match &e.native{Some(NativeTarget::Shell{parsing,..})=>format!("shell:{parsing}"),_=>serde_json::to_string(&e.native).unwrap_or_default()};
             if identities.insert(identity){entries.push(e.clone())}
         }}
         entries
@@ -202,7 +213,7 @@ impl Catalog {
     }
     pub fn icon_path(&self,id:&str,size:u32)->Result<PathBuf,String>{
         let e=self.all_entries().into_iter().find(|e|format!("setting:{}",e.key)==id&&self.available(e)).ok_or("This item is unavailable.")?;
-        let Some(NativeTarget::Shell{parsing})=e.native else{return Err("Use the generic settings icon.".into())};
+        let Some(NativeTarget::Shell{parsing,..})=e.native else{return Err("Use the generic settings icon.".into())};
         let base=self.cache.lock().unwrap().clone().ok_or("Icon cache is unavailable.")?;
         let folder=base.parent().ok_or("Icon cache is unavailable.")?.join("icons");
         std::fs::create_dir_all(&folder).map_err(|e|e.to_string())?;
@@ -281,7 +292,7 @@ impl Catalog {
     use super::*;
     fn entry(parsing:&str,name:&str)->Entry{Entry{key:format!("control-panel-{}",digest(parsing)),name:name.into(),description:"Classic sound devices".into(),uri:String::new(),hardware:String::new(),
         aliases:vec![format!("classic {name}")],min_build:19041,max_build:None,translations:Default::default(),source:"control_panel".into(),canonical:String::new(),
-        native:Some(NativeTarget::Shell{parsing:parsing.into()})}}
+        native:Some(NativeTarget::Shell{parsing:parsing.into(),pidl:None})}}
     fn catalog()->Catalog{Catalog::with_platform(Options{enabled:true,semantic_enabled:false,ordinary_searches:true},
         Platform{supported:true,build:22631,locale:"en".into(),wifi:None,bluetooth:None})}
     #[test]fn exact_modern_and_classic_names_are_distinct_and_partial_refresh_retains_entries(){
@@ -290,6 +301,11 @@ impl Catalog {
         c.publish("control_panel",Err("Temporary Shell failure".into()));assert_eq!(c.search("classic Sound").len(),1);
         assert!(c.info()["controlPanel"]["control_panel"]["stale"].as_bool().unwrap());
         c.publish("control_panel",Ok(vec![]));assert_eq!(c.search("Sound").iter().filter(|h|h.name=="Sound").count(),1);
+    }
+    #[test]fn cached_shell_id_lists_require_bounded_complete_elements(){
+        assert!(valid_pidl(&[4,0,1,2,0,0]));assert!(!valid_pidl(&[0,0]));
+        for bytes in [&[1,0,0,0][..],&[4,0,1][..],&[0,0,1][..],&[4,0,1,2][..]]{assert!(!valid_pidl(bytes));}
+        assert!(!valid_pidl(&vec![0;65537]));
     }
     #[test]fn native_cache_recovers_and_is_scoped_to_build_and_display_language(){
         let root=std::env::temp_dir().join(format!("digup-control-cache-{}",std::process::id()));
