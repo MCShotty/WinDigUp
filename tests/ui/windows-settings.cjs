@@ -83,6 +83,52 @@ let browser;
   await page.press("#query","Enter");
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_windows_setting").at(-1).args.settingId),"setting:bluetooth");
   assert.match(await page.locator("#keys").textContent(),/Windows settings/);
+  for (const outcome of ["match", "empty", "error"]) {
+    const matched=outcome==="match";
+    const launchPage = await browser.newPage({viewport:{width:1120,height:800}});
+    launchPage.on("pageerror",error=>errors.push(error.message));
+    await setup(launchPage);
+    await launchPage.addInitScript(({outcome})=>{
+      window.settingsLaunchWaiters=[];
+      window.releaseSettingsLaunch=()=>window.settingsLaunchWaiters.splice(0).forEach(resolve=>resolve());
+      const old=window.__TAURI__.core.invoke;
+      const catalog={enabled:true,supported:true,semanticEnabled:false,ordinarySearches:true,revision:"debug-launch"};
+      window.__TAURI__.core.invoke=async(command,args={})=>{
+        if(command==="window_info")return {...await old(command,args),applications:{enabled:false,supported:true},
+          windowsSettings:catalog,debugQuery:"settings: display",debugLaunch:true};
+        if(command==="search_windows_settings"){
+          window.calls.push({command,args});
+          await new Promise(resolve=>window.settingsLaunchWaiters.push(resolve));
+          if(outcome==="error")throw new Error("Settings catalog request failed");
+          const hits=outcome==="match"?[{id:"setting:display",resultType:"windows_setting",kind:"windows_setting",
+            name:"Display",publisher:"Windows",description:"Open display settings",reason:"exact",aliases:[]}]:[];
+          return {hits,total:hits.length,generation:args.generation,catalog,semantic:{state:"disabled"}};
+        }
+        return old(command,args);
+      };
+    },{outcome});
+    await launchPage.goto(base+"/window.html");
+    await launchPage.waitForFunction(()=>window.calls.some(call=>call.command==="search_windows_settings"));
+    await launchPage.evaluate(()=>window.emit("applications",{enabled:false,supported:true}));
+    await launchPage.waitForTimeout(150);
+    assert.deepEqual(await launchPage.evaluate(()=>window.calls.filter(call=>call.command==="debug_report")),[],
+      "An unrelated application update ended the settings launch check before its reply");
+    await launchPage.evaluate(()=>window.releaseSettingsLaunch());
+    await launchPage.waitForFunction(()=>window.calls.some(call=>call.command==="debug_report"));
+    const launchReports=await launchPage.evaluate(()=>window.calls.filter(call=>call.command==="debug_report").map(call=>call.args.report));
+    assert.equal(launchReports.length,1);
+    assert.equal(launchReports[0].launchAccepted,matched);
+    if(matched){
+      assert.equal(launchReports[0].applicationId,"setting:display");
+      assert.equal(await launchPage.locator('[data-result-key="setting:display"]').count(),1);
+      assert.equal(await launchPage.evaluate(()=>window.calls.filter(call=>call.command==="open_windows_setting").length),1);
+    }else{
+      assert.match(launchReports[0].error,/No matching catalog application/);
+      assert.equal(await launchPage.evaluate(()=>window.calls.filter(call=>call.command==="open_windows_setting").length),0);
+    }
+    assert.equal(await launchPage.evaluate(()=>window.calls.filter(call=>call.command==="search_apps").length),0);
+    await launchPage.close();
+  }
   assert.deepEqual(errors,[]);
-  await browser.close();console.log("PASS: Windows settings routing, native names, lexical/semantic separation, stale replies, shared best-match placement, stable file DOM, keyboard opening, dark/scaled views and panel handoff");
+  await browser.close();console.log("PASS: Windows settings routing, native names, lexical/semantic separation, stale replies, shared best-match placement, stable file DOM, keyboard opening, dark/scaled views, panel handoff and settings debug-launch readiness");
 })().catch(async error=>{console.error(error);if(browser)await browser.close();process.exit(1);});

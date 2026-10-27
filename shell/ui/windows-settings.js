@@ -32,7 +32,7 @@ class WindowsSettingsSearch {
     tauri.event.listen("model",({payload})=>{if(payload.state==="ready"&&this.active&&this.text)this.request(true,true);});
   }
   begin(text,active,mode="all"){
-    this.epoch++;this.requestedActive=active;this.text=text;this.mode=mode;this.hits=[];this.total=0;this.error=null;this.finalEpoch=-1;
+    this.epoch++;this.requestedActive=active;this.text=text;this.mode=mode;this.hits=[];this.total=0;this.error=null;this.finalEpoch=-1;this.settledEpoch=-1;
     clearTimeout(this.timer);clearTimeout(this.refreshTimer);cancelAnimationFrame(this.frame);
     this.active=active&&WindowsSettings.supported&&WindowsSettings.enabled&&(mode==="settings"||WindowsSettings.ordinarySearches);
     if(!this.active)return;
@@ -50,13 +50,14 @@ class WindowsSettingsSearch {
         q:text,meaning,generation:epoch,sessionId:await SearchTiming.session,limit:this.mode==="settings"?100:2,
         offset:append?this.hits.length:0,passive}),passive);
       if(epoch!==this.epoch||reply?.generation!==epoch||reply.status==="superseded")return;
+      this.settledEpoch=epoch;
       WindowsSettings.configure(reply.catalog);this.catalog=reply.catalog||{};
       if(!WindowsSettings.enabled||(this.mode==="all"&&!WindowsSettings.ordinarySearches)){this.hits=[];this.total=0;this.active=false;this.changed();return;}
       if(!meaning&&this.finalEpoch===epoch)return;
       if(meaning)this.finalEpoch=epoch;
       this.hits=append?[...this.hits,...(reply.hits||[]).filter(h=>!this.hits.some(old=>old.id===h.id))]:reply.hits||[];
       this.total=reply.total||0;this.semantic=reply.semantic||{};this.error=null;this.changed();
-    }catch(error){if(epoch===this.epoch){this.error=error?.message||String(error);this.changed();}}
+    }catch(error){if(epoch===this.epoch){this.settledEpoch=epoch;this.error=error?.message||String(error);this.changed();}}
     finally{if(meaning){this.semanticBusy=false;const pending=this.pending;this.pending=null;
       if(pending?.epoch===this.epoch)this.request(true,pending.passive,pending.append);}}
   }
