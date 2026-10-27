@@ -348,3 +348,4 @@ jobs:
           cd shell/src-tauri
           cargo test --release acceleration::tests --locked
           cargo test --release applications:: --locked
+          cargo test --release search_scope::tests --locked
