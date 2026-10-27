@@ -508,6 +508,44 @@ struct StreamingServiceTests {
     }
     #endif
 
+    @Test func failedUnicodeChildrenSurviveReportSetCollapseAndRemainHeld() throws {
+        let root=try temporary()
+        defer {try? FileManager.default.removeItem(at:root)}
+        let files=root.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        let composed=files.path+"/Caf\u{e9}",decomposed=files.path+"/Cafe\u{301}"
+        let store=try IndexStore(directory:root.appendingPathComponent("index"))
+        store.setLiteralScope([files.path])
+        for (index,path) in [composed,decomposed].enumerated() {
+            _=try store.insert(Candidate(path:path+"/note.txt",kind:.doc,size:10,mtime:1,inode:UInt64(index+1),device:1))
+        }
+        let shared=SharedEmbedder {Model()}
+        let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
+        let session=try indexer.beginScan([files])
+        defer {session.close()}
+        var report=CrawlReport()
+        report.recordUnreadable(composed)
+        report.recordUnreadable(decomposed)
+        #expect(report.unreadable.count==1)
+        #expect(report.unreadablePaths.count==2)
+        let summary=try session.finish(report)
+        #expect(summary.removed==0)
+        #expect(session.incompletePrefixes.contains {$0.utf8.elementsEqual(composed.utf8)})
+        #expect(session.incompletePrefixes.contains {$0.utf8.elementsEqual(decomposed.utf8)})
+        store.pendingExcludedPaths=session.incompletePrefixes
+        #expect(try store.pendingCount()==0)
+        #expect(try store.counts().byKindAndState["doc"]?["pending"]==2)
+        store.pendingExcludedPaths=IndexService.reconcilePendingHolds(store.pendingExcludedPaths,
+            completed:[composed],incomplete:[],verifiedRoots:[(chosen:files.path,resolved:files.path)])
+        #expect(try store.pendingCount()==1)
+        #expect(try store.pending(limit:nil).first?.path.utf8.elementsEqual((composed+"/note.txt").utf8)==true)
+        #expect(store.pendingExcludedPaths.contains {$0.utf8.elementsEqual(decomposed.utf8)})
+        store.pendingExcludedPaths=IndexService.reconcilePendingHolds(store.pendingExcludedPaths,
+            completed:[decomposed],incomplete:[],verifiedRoots:[(chosen:files.path,resolved:files.path)])
+        #expect(try store.pendingCount()==2)
+        #expect(try store.counts().vectors==0)
+    }
+
     @Test func successfulUnicodeSiblingCannotClearAnUnrelatedFailedRootHold() throws {
         let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}

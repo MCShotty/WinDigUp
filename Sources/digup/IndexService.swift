@@ -561,7 +561,7 @@ final class IndexService: @unchecked Sendable {
                                 "removed":summary.removed,"unchanged":summary.unchanged,
                                 "ms":Int(Date().timeIntervalSince(started)*1000),"started":started.timeIntervalSince1970,
                                 "visited":report.visited,"candidates":report.candidateCount,"skipped":report.skipped,
-                                "skippedFolders":report.skippedFolders,"unreadable":report.unreadable.sorted(),
+                                "skippedFolders":report.skippedFolders,"unreadable":report.unreadablePaths.sorted(),
                                 "discoveryActive":false])
                         }
                     case .failed(let message):
