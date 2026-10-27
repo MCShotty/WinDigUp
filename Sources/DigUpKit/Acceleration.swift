@@ -2,7 +2,19 @@ import Foundation
 
 /// Inference is always on a hardware accelerator. Host preprocessing and I/O are separate from model execution.
 public enum Acceleration: String, Sendable, CaseIterable {
-    case vulkan, amdVulkan = "amd-vulkan", nvidiaCUDA = "nvidia-cuda", openvinoNPU = "openvino-npu", metal
+    case vulkan, amdVulkan = "amd-vulkan", nvidiaCUDA = "nvidia-cuda", openvinoNPU = "openvino-npu", openvinoGPU = "openvino-gpu", metal
+
+    public var isOpenVINO: Bool { self == .openvinoNPU || self == .openvinoGPU }
+    public var openVINODeviceKind: String { self == .openvinoGPU ? "GPU" : "NPU" }
+
+    public func acceptsOpenVINOReceipt(_ info: WorkerInfo) -> Bool {
+        guard isOpenVINO, info.executionPolicy == "accelerator-only", info.dim == 768,
+              let device = info.device else { return false }
+        let prefix = openVINODeviceKind + "."
+        let suffix = device.hasPrefix(prefix) ? String(device.dropFirst(prefix.count)) : ""
+        guard device == openVINODeviceKind || (!suffix.isEmpty && suffix.utf8.allSatisfy({ (48...57).contains($0) })) else { return false }
+        return info.backend == rawValue || (self == .openvinoNPU && info.backend == nil)
+    }
 
     public static let cudaPrecision = "cuda-fp32-v1"
     /// Matches the shipped real-code targets; unknown future SMs require a new validated build.
@@ -24,7 +36,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
         switch self {
         case .nvidiaCUDA: "cuda"
         case .metal: "metal"
-        case .openvinoNPU: "openvino"
+        case .openvinoNPU, .openvinoGPU: "openvino"
         default: "vulkan"
         }
     }
@@ -32,7 +44,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
     /// --index is always the base directory, including when its last component resembles a backend name.
     public func indexDirectory(base: URL) -> URL {
         switch self {
-        case .nvidiaCUDA, .openvinoNPU: base.appendingPathComponent(rawValue).standardizedFileURL
+        case .nvidiaCUDA, .openvinoNPU, .openvinoGPU: base.appendingPathComponent(rawValue).standardizedFileURL
         default: base.standardizedFileURL
         }
     }
@@ -44,7 +56,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
         case .amdVulkan: return device.vendorID == 0x1002
         case .vulkan: return device.vendorID != 0x10de && device.vendorID != 0
         case .metal: return true
-        case .openvinoNPU: return false
+        case .openvinoNPU, .openvinoGPU: return false
         }
     }
 
@@ -74,7 +86,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
 
     public static func selected(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
         if environment["DIGUP_DEVICE"]?.lowercased() == "cpu" {
-            throw WorkerError.failed("CPU inference is disabled. Choose NVIDIA CUDA, AMD Vulkan or OpenVINO NPU.")
+            throw WorkerError.failed("CPU inference is disabled. Choose NVIDIA CUDA, AMD Vulkan or Intel OpenVINO GPU/NPU.")
         }
         if environment["DIGUP_WORKER_DIR"] != nil {
             throw WorkerError.failed("Unverified worker overrides are disabled by the accelerator-only policy.")

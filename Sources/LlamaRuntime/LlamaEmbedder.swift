@@ -61,7 +61,7 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
         LlamaLog.shared.send(to: log)
         let acceleration = try Acceleration.selected()
         try Acceleration.requireInferenceReady()
-        guard acceleration != .openvinoNPU else { throw WorkerError.failed("OpenVINO requires the NPU worker") }
+        guard !acceleration.isOpenVINO else { throw WorkerError.failed("OpenVINO requires the Intel worker") }
         _ = Self.backend
         guard ggml_backend_accelerator_only(), ggml_backend_accelerator_policy_version() == 2 else {
             throw WorkerError.failed("The loaded ggml library does not enforce accelerator-only execution")
@@ -464,7 +464,7 @@ public final class LlamaEmbedder: Embedder, InferenceReporting {
     public static func verifyDevice() throws -> AcceleratorDevice {
         let selected = try Acceleration.selected()
         try Acceleration.requireInferenceReady()
-        guard selected != .openvinoNPU else { throw WorkerError.failed("Probe NPU through its model worker") }
+        guard !selected.isOpenVINO else { throw WorkerError.failed("Probe Intel OpenVINO through its model worker") }
         _ = backend
         guard ggml_backend_accelerator_only(), ggml_backend_accelerator_policy_version() == 2 else {
             throw WorkerError.failed("Unverified native accelerator policy")

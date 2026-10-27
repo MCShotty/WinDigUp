@@ -45,6 +45,7 @@ jobs:
           DIGUP_ORDER_SCREENSHOT_LOG=1 node tests/ui/drive-picker.cjs
           DIGUP_EXPERIENCE_SCREENSHOT_LOG=1 node tests/ui/discovery-experience.cjs
           node tests/ui/acceleration.cjs
+          DIGUP_OPENVINO_SCREENSHOTS="$DIGUP_ACTIVITY_SCREENSHOTS/openvino" DIGUP_OPENVINO_SCREENSHOT_LOG=1 node tests/ui/openvino-setup.cjs
           node tests/ui/applications.cjs
           node tests/ui/activity.cjs
           node tests/ui/indexing-pipeline.cjs

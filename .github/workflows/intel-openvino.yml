@@ -1,0 +1,71 @@
+name: Intel OpenVINO runtime
+on:
+  pull_request:
+    paths:
+      - 'worker/openvino/**'
+      - 'scripts/package-openvino-runtime.py'
+      - 'scripts/check-windows-openvino.ps1'
+      - '.github/workflows/intel-openvino.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: intel-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  relocated:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          vsversion: '2022'
+          toolset: '14.44'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: intel-runtime
+        with:
+          path: Vendor/openvino
+          key: openvino-windows-python3.12.10-v1-${{ hashFiles('scripts/package-openvino-runtime.py', 'worker/openvino/requirements.txt') }}
+      - name: Build private Intel runtime and retain component identities
+        shell: pwsh
+        run: python scripts/package-openvino-runtime.py
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.intel-runtime.outputs.cache-hit != 'true'
+        with:
+          path: Vendor/openvino
+          key: openvino-windows-python3.12.10-v1-${{ hashFiles('scripts/package-openvino-runtime.py', 'worker/openvino/requirements.txt') }}
+      - name: Relocated runtime without developer paths or user Python settings
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'Intel runtime fixture'
+          Copy-Item Vendor/openvino $root -Recurse
+          Copy-Item worker/openvino/*.py $root
+          $python=Join-Path $root 'python/python.exe'
+          $env:PATH=Join-Path $env:WINDIR 'System32'
+          Remove-Item Env:PYTHONHOME,Env:PYTHONPATH -ErrorAction SilentlyContinue
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $python -I -c 'import sys,openvino,torch,transformers,numpy,PIL,soundfile; assert sys.version_info[:3]==(3,12,10); assert torch.version.cuda is None; print("PASS: private Intel runtime imports after relocation")'
+            if($LASTEXITCODE){throw 'Private runtime has unresolved dependencies'}
+            foreach($backend in @('openvino-npu','openvino-gpu')){
+              $output=& $python -I (Join-Path $root 'setup_probe.py') --backend $backend
+              if($LASTEXITCODE){throw 'Metadata discovery failed'}
+              $probe=($output|Select-Object -Last 1)|ConvertFrom-Json
+              if(!$probe.runtimeReady -or !$probe.probeOnly -or $probe.schemaVersion -ne 1){throw 'Intel runtime readiness is invalid'}
+              foreach($device in $probe.devices){if($device.id -notmatch '^(GPU|NPU)(\.\d+)?$'){throw 'Unapproved device in Intel inventory'}}
+              Write-Output ("PASS: "+$backend+" metadata discovery; no weights or neural inference")
+            }
+          } finally {Pop-Location}
+          Write-Output 'UNVALIDATED: full-model numerical execution and speed on physical Intel GPU/NPU.'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: intel-runtime-components
+          path: |
+            Vendor/openvino/runtime-manifest.json
+            Vendor/openvino/THIRD-PARTY-NOTICES.txt

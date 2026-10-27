@@ -14,12 +14,16 @@ import Foundation
 ///   {"event":"retry","message":…,"seconds":n}                               a failure it will try again after
 ///   {"event":"done","folder":…} | {"event":"error","message":…}             the end (exit 0 | 1)
 func downloadModel(_ args: Arguments) throws -> Int32 {
-    if try Acceleration.selected() == .openvinoNPU {
+    if (try Acceleration.selected()).isOpenVINO {
         do {
             emit(["event": "verifying"])
             let embedder = try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"))
             embedder.close()
-            emit(["event": "done", "device": "NPU", "execution_policy": "accelerator-only"])
+            var receipt = embedder.info.fields
+            receipt["event"] = "done"
+            receipt["inference_verified"] = true
+            receipt["verification_scope"] = "index-profile-reference-fixtures"
+            emit(receipt)
             return 0
         } catch {
             emit(["event": "error", "message": "\(error)"])

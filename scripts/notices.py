@@ -184,6 +184,9 @@ def main():
                 "PDFium's above)", need(pdfium / "licenses/icu.txt")),
     ]
     if windows:
+        intel = VENDOR / "openvino"
+        parts += [section("App-local Python/OpenVINO and explicit offline model preparation",
+                          need(intel / "THIRD-PARTY-NOTICES.txt"))]
         cuda = VENDOR / "cuda"
         record = json.loads(need(cuda / "redistribution.json"))
         if record["version"] != "12.9.1" or record["platform"] != "windows-x86_64":

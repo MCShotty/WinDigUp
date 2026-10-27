@@ -59,6 +59,8 @@ impl Default for Acceleration {
 }
 
 impl Acceleration {
+    pub fn is_openvino(&self) -> bool { matches!(self.backend.as_str(), "openvino-npu" | "openvino-gpu") }
+
     /// Only stored settings use migration. Explicit CLI/backend requests cannot execute the removed mode.
     pub fn migrate(&mut self) -> bool {
         if self.version >= SCHEMA { return false; }
@@ -96,14 +98,14 @@ impl Acceleration {
         if self.backend == "nvidia-vulkan" {
             return Err("NVIDIA Vulkan has been removed. Select NVIDIA CUDA for RTX 20-series and newer.".into());
         }
-        if !["vulkan", "amd-vulkan", "nvidia-cuda", "openvino-npu", "metal"].contains(&self.backend.as_str()) {
-            return Err("Choose NVIDIA CUDA, AMD Vulkan or Intel NPU. CPU inference is disabled.".into());
+        if !["vulkan", "amd-vulkan", "nvidia-cuda", "openvino-npu", "openvino-gpu", "metal"].contains(&self.backend.as_str()) {
+            return Err("Choose NVIDIA CUDA, AMD Vulkan, Intel OpenVINO GPU/NPU or Metal. CPU inference is disabled.".into());
         }
         if self.backend == "nvidia-cuda" && (self.gpu.starts_with("Vulkan") || self.gpu.starts_with("VK-"))
             || matches!(self.backend.as_str(), "vulkan" | "amd-vulkan") && (self.gpu.starts_with("CUDA") || self.gpu.starts_with("GPU-")) {
             return Err("The selected GPU identifier belongs to another backend. Re-select the GPU.".into());
         }
-        if self.backend == "openvino-npu" {
+        if self.is_openvino() {
             if !Path::new(&self.python).is_absolute() || !Path::new(&self.python).is_file() {
                 return Err("Choose the absolute path to the OpenVINO environment's python.exe.".into());
             }
@@ -116,12 +118,12 @@ impl Acceleration {
 
     /// Both the CLI and shell receive a base index; scoping is applied once, never guessed from its name.
     pub fn index_directory(&self, base: &Path) -> PathBuf {
-        if matches!(self.backend.as_str(), "nvidia-cuda" | "openvino-npu") { base.join(&self.backend) }
+        if matches!(self.backend.as_str(), "nvidia-cuda" | "openvino-npu" | "openvino-gpu") { base.join(&self.backend) }
         else { base.to_owned() }
     }
 
     pub fn background_jobs(&self) -> u8 {
-        if !self.resource_profile.is_supported() || self.resource_profile == ResourceProfile::Quiet || matches!(self.backend.as_str(), "openvino-npu" | "metal") { return 1; }
+        if !self.resource_profile.is_supported() || self.resource_profile == ResourceProfile::Quiet || matches!(self.backend.as_str(), "openvino-npu" | "openvino-gpu" | "metal") { return 1; }
         if self.jobs == 0 { 3 } else { self.jobs.min(3) }
     }
 

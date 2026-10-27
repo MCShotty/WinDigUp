@@ -1,4 +1,4 @@
-"""All neural-network stages run on Intel NPU. NumPy only transports tensors and checks results.
+"""All neural-network stages run on the explicitly selected Intel accelerator. NumPy only transports tensors and checks results.
 
 The tokenizer, image decoder/resizer and audio feature extractor are host preprocessing. No PyTorch model is
 loaded by this module. AUTO, HETERO, CPU and software inference are deliberately unavailable.
@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 import numpy as np
+from devices import compile_gpu, device_aliases, select_device, verify_selected
 
 
 def digest(path: Path) -> str:
@@ -36,15 +37,16 @@ def verify_execution(compiled) -> None:
         raise RuntimeError(f"Exclusive Intel NPU execution required, got {devices!r}; CPU fallback disabled")
 
 
-def compile_npu(core, model, name: str):
+def compile_npu(core, model, name: str, device="NPU"):
     # NPUW can partition an explicit NPU request between NPU and CPU. Do not enable that wrapper.
-    supported = core.query_model(model, "NPU", {"NPU_USE_NPUW": False})
+    supported = core.query_model(model, device, {"NPU_USE_NPUW": False})
+    allowed_ops = device_aliases(device, "NPU") | {"NPU"}
     unsupported = {op.get_type_name() for op in model.get_ops()
         if op.get_type_name() not in ("Parameter", "Result", "Constant")
-        and not only_npu([supported.get(op.get_friendly_name(), "")])}
+        and str(supported.get(op.get_friendly_name(), "")) not in allowed_ops}
     if unsupported:
         raise RuntimeError(f"NPU does not support {name}: {', '.join(sorted(unsupported))}; CPU fallback disabled")
-    compiled = core.compile_model(model, "NPU", {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,
+    compiled = core.compile_model(model, device, {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,
                                                "NPU_USE_NPUW": False})
     verify_execution(compiled)
     return compiled
@@ -73,13 +75,13 @@ def validate_bundle(folder: Path) -> dict:
     return manifest
 
 
-def check_parity(actual, reference, name: str) -> None:
+def check_parity(actual, reference, name: str, device="NPU") -> None:
     a, b = np.asarray(actual), np.asarray(reference)
     if a.shape != b.shape or not np.isfinite(a).all():
-        raise RuntimeError(f"NPU parity failed for {name}: invalid shape or non-finite values")
+        raise RuntimeError(f"{device} parity failed for {name}: invalid shape or non-finite values")
     if a.dtype == np.bool_ or b.dtype == np.bool_:
         if not np.array_equal(a, b):
-            raise RuntimeError(f"NPU parity failed for {name}: different mask")
+            raise RuntimeError(f"{device} parity failed for {name}: different mask")
         return
     a, b = a.astype(np.float64).ravel(), b.astype(np.float64).ravel()
     norm_a, norm_b = np.linalg.norm(a), np.linalg.norm(b)
@@ -89,16 +91,23 @@ def check_parity(actual, reference, name: str) -> None:
         cosine = np.dot(a, b) / (norm_a * norm_b) if norm_a else 0
         valid = cosine >= 0.999 and np.linalg.norm(a - b) / norm_b <= 0.02
     if not valid:
-        raise RuntimeError(f"NPU parity failed for {name}; this model/driver cannot run accurately without CPU fallback")
+        raise RuntimeError(f"{device} parity failed for {name}; this model/driver cannot run accurately without CPU fallback")
 
 
 class NPURuntime:
-    def __init__(self, folder: str | Path, text_only: bool = False, *, core=None):
+    def __init__(self, folder: str | Path, text_only: bool = False, *, core=None,
+                 backend="openvino-npu", device="", cache=None):
         if core is None:
             import openvino as ov
             core = ov.Core()
-        if not any(only_npu([device]) for device in core.available_devices):
+        self.backend = backend
+        if backend == "openvino-npu" and not any(only_npu([item]) for item in core.available_devices):
             raise RuntimeError("Intel NPU not found. Install the Intel NPU driver; CPU fallback is disabled")
+        self.selected = select_device(core, backend, device)
+        if cache:
+            cache = Path(cache).resolve()
+            cache.mkdir(parents=True, exist_ok=True)
+            core.set_property({"CACHE_DIR": str(cache)})
         self.folder = Path(folder).resolve()
         self.manifest = validate_bundle(self.folder)
         self.text_only = text_only
@@ -111,13 +120,15 @@ class NPURuntime:
         for name in names:
             entry = self.manifest["graphs"][name]
             model = core.read_model(str(self.folder / entry["file"]))
-            compiled = compile_npu(core, model, name)
+            compiled = (compile_npu(core, model, name, self.selected["id"]) if backend == "openvino-npu"
+                        else compile_gpu(core, model, name, self.selected))
+            verify_selected(compiled, self.selected)
             self.graphs[name] = compiled.create_infer_request()
             with np.load(self.folder / entry["fixture"], allow_pickle=False) as fixture:
                 inputs = {key: fixture[f"input-{key}"] for key in entry["inputs"]}
                 results = self.run(name, inputs)
                 for i, result in enumerate(results):
-                    check_parity(result, fixture[f"output-{i}"], f"{name}/{i}")
+                    check_parity(result, fixture[f"output-{i}"], f"{name}/{i}", self.selected["id"])
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(str(self.folder / "processor"), local_files_only=True,
                                                        trust_remote_code=False)
@@ -128,7 +139,7 @@ class NPURuntime:
     def run(self, name: str, inputs: dict) -> list[np.ndarray]:
         request = self.graphs[name]
         # Explicit NPU compilation is checked again for each request, including cached compiled models.
-        verify_execution(request.get_compiled_model())
+        verify_selected(request.get_compiled_model(), self.selected)
         result = request.infer(inputs)
         for item in request.profiling_info:
             if "CPU" in item.exec_type.upper():
@@ -144,14 +155,14 @@ class NPURuntime:
         rows = self.run(f"tokens-{self.role}", {"input_ids": ids})[0]
         if features is not None:
             if int(placeholders.sum()) != len(features):
-                raise ValueError("Media token count differs from NPU encoder output; input was truncated")
+                raise ValueError("Media token count differs from Intel encoder output; input was truncated")
             rows[placeholders] = features  # copy encoder rows, no host embedding/projection/normalization
         return {"inputs_embeds": rows, "attention_mask": mask}
 
     def _vector(self, encoded, features=None, token_id=None):
         vector = self.run(f"text-{self.role}", self._text_inputs(encoded, features, token_id))[0]
         if vector.shape != (1, 768) or not np.isfinite(vector).all() or abs(np.linalg.norm(vector) - 1) >= 0.005:
-            raise RuntimeError("NPU returned an invalid embedding")
+            raise RuntimeError("Intel accelerator returned an invalid embedding")
         return vector[0]
 
     def texts(self, texts: list[str]) -> list[np.ndarray]:

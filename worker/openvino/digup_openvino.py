@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DigUp JSON-lines embedding worker; Intel NPU only."""
+"""DigUp JSON-lines embedding worker; exclusive Intel NPU or integrated GPU."""
 import argparse
 import base64
 import json
@@ -23,14 +23,31 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", required=True)
     parser.add_argument("--text-only", action="store_true")
+    parser.add_argument("--backend", choices=("openvino-npu", "openvino-gpu"), default="openvino-npu")
+    parser.add_argument("--device", default="")
+    parser.add_argument("--cache")
     args = parser.parse_args()
     started = time.monotonic()
     try:
-        runtime = NPURuntime(args.models, args.text_only)
+        runtime = NPURuntime(args.models, args.text_only, backend=args.backend, device=args.device, cache=args.cache)
         info = {"model": runtime.manifest["model"], "revision": runtime.manifest["revision"],
                 "runtime": "openvino-npu-v1-" + runtime.manifest["bundle_id"], "dtype": "fp32-ir-npu-verified",
                 "dim": 768, "text_only": args.text_only, "load_seconds": time.monotonic() - started,
                 "device": "NPU", "execution_policy": "accelerator-only"}
+        import hashlib
+        import openvino as ov
+        info.update({"backend": args.backend, "device": runtime.selected["id"],
+                     "device_id": runtime.selected["stableID"], "device_name": runtime.selected["name"],
+                     "driver_description": runtime.selected["driverDescription"], "runtime_description": ov.__version__})
+        if args.backend == "openvino-gpu":
+            import importlib.metadata
+            versions = {name: importlib.metadata.version(name) for name in
+                        ("openvino", "transformers", "tokenizers", "numpy", "Pillow", "soundfile")}
+            identity = hashlib.sha256(json.dumps(versions, sort_keys=True).encode() + b"".join((Path(__file__).parent / name).read_bytes()
+                for name in ("devices.py", "npu_runtime.py", "digup_openvino.py"))).hexdigest()
+            info.update({"runtime": "openvino-gpu-v1-" + ov.__version__ + "-" + runtime.manifest["bundle_id"],
+                         "dtype": "fp32-ir-gpu-f32-verified", "precision_profile": "openvino-gpu-f32-v1",
+                         "build_identity": identity})
         reply({"ready": True, "info": info})
     except Exception as error:
         reply({"ready": False, "error": str(error)[:1500]})

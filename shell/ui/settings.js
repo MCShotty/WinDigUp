@@ -28,6 +28,15 @@ let deviceProbe = null;
 let deviceProbeStarted = false;
 let deviceProbeBusy = false;
 const gpuDrafts = new Map();
+const intelSetup = new OpenVINOSetup({
+  invoke,
+  read: () => accelerationDraft(),
+  changed: () => { accelerationDirty = true; },
+});
+function accelerationDraft() {
+  return { backend: $("accelerator").value, gpu: $("gpu-device").value.trim(), jobs: Number($("gpu-jobs").value),
+    resourceProfile: $("resource-profile").value, python: $("npu-python").value.trim(), models: $("npu-models").value.trim() };
+}
 const priorityPending = new Set();
 let summaries = null;        // what's indexed under each folder (search-service's summaries)
 let removing = null;         // the folder whose removal is being confirmed
@@ -131,12 +140,13 @@ function renderResourceProfile(value) {
 }
 
 function showAcceleratorOptions() {
-  const npu = $("accelerator").value === "openvino-npu";
+  const npu = ["openvino-npu", "openvino-gpu"].includes($("accelerator").value);
   $("npu-options").hidden = !npu;
   $("gpu-options").hidden = npu;
   $("gpu-jobs-control").hidden=npu||$("accelerator").value==="metal";
   $("resource-profile").disabled = (npu || $("accelerator").value === "metal") && !unsupportedResourceProfile($("resource-profile").value);
   $("gpu-device").placeholder = $("accelerator").value === "nvidia-cuda" ? "Automatic, CUDA0, or a discovered GPU UUID" : "Automatic, or a discovered non-NVIDIA GPU";
+  intelSetup.show($("accelerator").value);
   renderGPUDevices();
 }
 $("accelerator").onchange = () => {
@@ -182,17 +192,20 @@ window.__TAURI__.event.listen("acceleration", ({ payload }) => {
 for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs", "resource-profile"]) $(id).oninput = () => { accelerationDirty = true; };
 $("resource-profile").onchange = () => { accelerationDirty=true;renderResourceProfile($("resource-profile").value);showAcceleratorOptions(); };
 $("apply-accelerator").onclick = async () => {
-  $("problem").hidden = true;
+  const errorField = $("accelerator-problem");
+  $("problem").hidden = true; errorField.hidden = true;
+  const acceleration = accelerationDraft();
+  if (["openvino-npu", "openvino-gpu"].includes(acceleration.backend) && !acceleration.models) {
+    errorField.textContent = "Choose or prepare an exported OpenVINO model bundle under Intel setup before applying.";
+    errorField.hidden = false; $("npu-options").scrollIntoView({ block: "nearest" }); return;
+  }
   $("apply-accelerator").disabled = true;
-  try {
-    await invoke("set_acceleration", { acceleration: {
-      backend: $("accelerator").value, gpu: $("gpu-device").value.trim(), jobs:Number($("gpu-jobs").value),
-      resourceProfile: $("resource-profile").value,
-      python: $("npu-python").value.trim(), models: $("npu-models").value.trim(),
-    } });
-  } catch (error) {
-    fail(error);
-    $("apply-accelerator").disabled = false;
+  $("apply-accelerator").textContent = ["openvino-npu", "openvino-gpu"].includes(acceleration.backend) ? "Checking Intel setup…" : "Applying…";
+  try { await invoke("set_acceleration", { acceleration }); }
+  catch (error) {
+    fail(error); errorField.textContent = error?.message || String(error); errorField.hidden = false;
+    errorField.scrollIntoView({ block: "nearest" });
+    $("apply-accelerator").disabled = false; $("apply-accelerator").textContent = "Apply and Restart DigUp";
   }
 };
 
@@ -604,8 +617,9 @@ $("code-off-go").onclick = async () => {
 
 function renderStorage() {
   const storage = info.storage || {}, model = (info.state || {}).model || {};
-  const npu = info.acceleration?.backend === "openvino-npu";
-  const states = { ready: npu ? "Verified on Intel NPU" : "Downloaded", checking: npu ? "Verifying NPU execution…" : "Checking…",
+  const npu = ["openvino-npu", "openvino-gpu"].includes(info.acceleration?.backend);
+  $("model-format").textContent = npu ? "Google · OpenVINO model bundle" : "Google · Apache 2.0 · 865 MB";
+  const states = { ready: npu ? "Verified on the selected Intel device" : "Downloaded", checking: npu ? "Verifying Intel device execution…" : "Checking…",
     waiting: "Waiting for the network", failed: "Model unavailable" };
   $("model-status").textContent = model.state === "downloading"
     ? `Downloading · ${model.total ? Math.floor((100 * model.bytes) / model.total) : 0}%` : states[model.state] || "";
@@ -613,7 +627,7 @@ function renderStorage() {
   $("index-size").textContent = bytes(storage.indexBytes || 0) + (storage.codeBytes ? ` (code ${bytes(storage.codeBytes)})` : "");
   pathButton($("index-path"), storage.index);
   $("version").textContent = `DigUp ${info.version || ""} · EmbeddingGemma 2 by Google (Apache 2.0), `
-    + (npu ? "run by OpenVINO on NPU (Apache 2.0)." : "run by llama.cpp on GPU (MIT).");
+    + (npu ? "run by OpenVINO on the selected Intel accelerator (Apache 2.0)." : "run by llama.cpp on GPU (MIT).");
   $("licenses").hidden = !info.licenses;
 }
 

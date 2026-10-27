@@ -54,7 +54,7 @@ let usage = """
 
     The model: EmbeddingGemma 2 on llama.cpp, from $DIGUP_MODELS (only there, when set), else
     ~/Library/Application Support/DigUp/Models or the Hugging Face cache. DIGUP_ACCELERATOR chooses vulkan,
-    amd-vulkan, nvidia-cuda or openvino-npu. DIGUP_GPU_JOBS is 0 (automatic), 1, 2, or 3.
+    amd-vulkan, nvidia-cuda, openvino-npu or openvino-gpu. DIGUP_GPU_JOBS is 0 (automatic), 1, 2, or 3.
     DIGUP_RESOURCE_PROFILE is quiet, balanced (default), or faster; it never raises a saved GPU job limit.
     CPU inference and unverified worker overrides are disabled.
     """
@@ -233,10 +233,11 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
     if var config = try WorkerConfig.fromEnvironment() {
         config.log = log
         config.qos = qos
+        config.arguments += ["--cache", log.deletingLastPathComponent().appendingPathComponent("openvino-cache").path]
         let worker = try EmbeddingWorker(config, textOnly: textOnly)
-        guard worker.info.executionPolicy == "accelerator-only", worker.info.device?.hasPrefix("NPU") == true else {
+        guard (try Acceleration.selected()).acceptsOpenVINOReceipt(worker.info) else {
             worker.close()
-            throw WorkerError.failed("OpenVINO worker did not verify exclusive NPU execution")
+            throw WorkerError.failed("OpenVINO worker did not verify the selected Intel device")
         }
         return worker
     }
@@ -281,7 +282,7 @@ func makeEmbedder(textOnly: Bool, log: URL, qos: QualityOfService = .default) th
 
 /// `makeEmbedder`'s vector source when it's known without starting it: llama.cpp's always is.
 func embedderSource() -> String? {
-    (try? Acceleration.selected()) == .openvinoNPU ? nil : LlamaEmbedder.modelInfo.vectorSource
+    (try? Acceleration.selected())?.isOpenVINO == true ? nil : LlamaEmbedder.modelInfo.vectorSource
 }
 
 func estimate(_ args: Arguments) throws {
@@ -592,7 +593,7 @@ func modelSpeed(_ args: Arguments) throws {
         "load": load, "total": Date().timeIntervalSince(started), "measured": true, "device": model.info.device ?? key,
         "execution_policy": "accelerator-only", "tries": measured.tries, "others": measured.others,
         "waited": quiet.waited, "settled": quiet.settled, "doubtful": speed.doubtful ?? false, "checks": checks + 1]
-    for (name, value) in model.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity"].contains(name) { fields[name] = value }
+    for (name, value) in model.info.fields where ["backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity", "device_name", "driver_description", "runtime_description"].contains(name) { fields[name] = value }
     if json { emit(fields) } else { print("Accelerator: \(model.info.device ?? key); CPU inference disabled. \(measured.times.fields)") }
 }
 
@@ -704,11 +705,18 @@ do {
     switch command {
     case "accelerator":
         _ = try Acceleration.selected()
-        if args.flags.contains("--list") { emit(try LlamaEmbedder.deviceInventory()); break }
-        if try Acceleration.selected() == .openvinoNPU {
+        if args.flags.contains("--list") {
+            if (try Acceleration.selected()).isOpenVINO { emit(try openVINOInventory()) }
+            else { emit(try LlamaEmbedder.deviceInventory()) }
+            break
+        }
+        if (try Acceleration.selected()).isOpenVINO {
             let model = try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"))
             defer { model.close() }
-            emit(["device": model.info.device ?? "", "execution_policy": model.info.executionPolicy ?? ""])
+            var receipt = model.info.fields
+            receipt["inference_verified"] = true
+            receipt["verification_scope"] = "index-profile-reference-fixtures"
+            emit(receipt)
         } else {
             let value = try LlamaEmbedder.verifyDevice()
             var result = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]

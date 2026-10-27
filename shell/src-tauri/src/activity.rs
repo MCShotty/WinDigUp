@@ -52,7 +52,7 @@ pub fn snapshot(input: Input) -> Value {
     let verified = if semantic_verified { json!({"device":semantic["device"],"executionPolicy":"accelerator-only","source":"application_encoder","at":runtime["applicationUpdatedAt"] ,
         "backend":semantic["backend"],"device_id":semantic["device_id"],"driver_version":semantic["driver_version"],
         "runtime_version":semantic["runtime_version"],"precision_profile":semantic["precision_profile"],"build_identity":semantic["build_identity"],
-        "model":semantic["model"],"revision":semantic["revision"],"runtime":semantic["runtime"],"dtype":semantic["dtype"],"dim":semantic["dim"]}) }
+        "device_name":semantic["device_name"],"driver_description":semantic["driver_description"],"runtime_description":semantic["runtime_description"],"model":semantic["model"],"revision":semantic["revision"],"runtime":semantic["runtime"],"dtype":semantic["dtype"],"dim":semantic["dim"]}) }
         else { runtime["verified"].clone() };
     let encoder = if helpers["search"]["running"] == false { "stopped" }
         else { runtime["encoder"]["state"].as_str().or_else(|| semantic["encoder"].as_str()).unwrap_or("unknown") };

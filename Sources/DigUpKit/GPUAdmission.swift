@@ -50,7 +50,7 @@ public final class GPUAdmission: @unchecked Sendable {
     public static var backgroundMaximum: Int { maximumBackgroundJobs(environment: ProcessInfo.processInfo.environment) }
     public static func maximumBackgroundJobs(environment: [String: String]) -> Int {
         if environment["DIGUP_RESOURCE_PROFILE"] == "quiet"
-            || ["openvino-npu", "metal"].contains(environment["DIGUP_ACCELERATOR"] ?? "") { return 1 }
+            || ["openvino-npu", "openvino-gpu", "metal"].contains(environment["DIGUP_ACCELERATOR"] ?? "") { return 1 }
         return maximumJobs(environment: environment)
     }
     public init(identity: String, maximum: Int = GPUAdmission.configuredMaximum, root: URL? = nil) throws {

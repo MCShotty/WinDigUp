@@ -132,7 +132,9 @@ window.ActivityUI = (() => {
       f.error ? `File error: ${f.error}` : "", `Applications: ${number(apps.catalog.count)} available; discovery ${apps.catalog.enabled ? "on" : "off"}`,
       `Purpose matching: ${apps.purpose.state || "idle"}; ${number(apps.purpose.embedded)} of ${number(apps.purpose.total)} prepared`,
       `Configured accelerator: ${inference.configured.backend || "unknown"}`,
-      `Verified device: ${inference.verified?.device || "No runtime verification reported"}`,
+      `Verified device: ${inference.verified?.device_name || inference.verified?.device || "No runtime verification reported"}`,
+      inference.error || inference.model?.message ? `Inference status: ${inference.error || inference.model.message}` : "",
+      inference.preparation?.phase && inference.preparation.phase !== "idle" ? `Intel setup: ${inference.preparation.phase}; ${inference.preparation.message || ""}` : "",
       inference.verified?.backend ? `Verified backend: ${inference.verified.backend}; precision: ${inference.verified.precision_profile || "reported in runtime details"}` : "",
       inference.verified?.build_identity ? `Native build: ${inference.verified.build_identity}` : "",
       inference.verified?.runtime_version ? `CUDA runtime API: ${inference.verified.runtime_version}; driver API: ${inference.verified.driver_version || "unknown"}` : "",
@@ -193,7 +195,7 @@ window.ActivityUI = (() => {
           <section class="activity-section" data-key="gpu-work"></section><section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
             <p data-key="runtime" class="activity-muted" hidden></p>
-            <p data-key="verification" class="activity-verification"></p></section>
+            <p data-key="verification" class="activity-verification"></p><p data-key="intel-preparation" class="activity-muted" role="status"></p></section>
         </section>
         <section data-pane="diagnostics" role="tabpanel" aria-label="Activity diagnostics" hidden>
           <h3>Provider health</h3><dl class="activity-health"><div><dt>File indexing</dt><dd data-key="health-files"></dd></div>
@@ -315,8 +317,10 @@ window.ActivityUI = (() => {
         failed: "The last file operation failed. Review diagnostics for the error and recovery actions.",
         stopped: "Discovery stopped before the queue was prepared. Existing results remain searchable; choose Index now in Diagnostics to retry.",
         checking_accelerator: "Running the hardware speed check before file indexing starts.",
-        preparing_model: "File indexing is waiting for model files. Application names and launching remain available.",
-        unavailable: "The selected accelerator cannot run inference. Application names and launching remain available.",
+        preparing_model: ["openvino-npu", "openvino-gpu"].includes(inference.configured?.backend)
+          ? "OpenVINO is preparing or verifying the selected Intel device. First-use graph compilation can take time. Application names and launching remain available."
+          : "File indexing is waiting for model files. Application names and launching remain available.",
+        unavailable: inference.model?.message || inference.error || "The selected accelerator cannot run inference. Open Accelerator settings for its setup status.",
       };
       put("explanation", overlap ? "Discovery is still running while prepared files become searchable. The final eligible total is not known yet."
         : discovery && ["preparing_model", "unavailable", "checking_accelerator"].includes(f.phase)
@@ -369,13 +373,18 @@ window.ActivityUI = (() => {
       put("catalog", catalogState); put("purpose", purposeState);
       put("purpose-note", purpose.message || (sourceErrors.length ? `Some sources could not refresh: ${sourceErrors.join("; ")}` : "Names and launching use the Windows catalog."));
       const verified = inference.verified?.device;
-      put("device", verified || "Device not verified yet");
+      put("device", inference.verified?.device_name || verified || "Device not verified yet");
       put("backend", `Configured: ${inference.configured?.backend || "Unknown"}${inference.configured?.gpu ? ` · ${inference.configured.gpu}` : ""}${inference.verified?.backend ? ` · Verified: ${inference.verified.backend}` : ""}`);
       put("encoder", `${inference.model?.state === "ready" ? "Model files: available" : `Model status: ${inference.model?.state || "unknown"}`} · Encoder: ${inference.encoder}`);
       const receipt = inference.verified || {};
       const api = value => Number.isInteger(value) ? `${Math.floor(value / 1000)}.${Math.floor((value % 1000) / 10)}` : "unknown";
       const runtime = [receipt.backend === "nvidia-cuda" && receipt.runtime_version ? `CUDA runtime ${api(receipt.runtime_version)} · Driver API ${api(receipt.driver_version)}` : "",
+        receipt.runtime_description ? "OpenVINO " + receipt.runtime_description : "",
+        receipt.driver_description ? "Intel driver " + receipt.driver_description : "",
         receipt.precision_profile, receipt.build_identity ? `Build ${receipt.build_identity.slice(0, 12)}` : ""].filter(Boolean).join(" · ");
+      const preparation = inference.preparation;
+      put("intel-preparation", preparation && preparation.phase !== "idle" ? preparation.message || preparation.phase : "");
+      this.get("intel-preparation").hidden = !preparation || preparation.phase === "idle";
       put("runtime", runtime); this.get("runtime").hidden = !runtime;
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
       const drive=snapshot.discovery||{},dp=drive.progress||{},enrichment=snapshot.enrichment||{},ep=enrichment.progress||{},settings=snapshot.windowsSettings||{};

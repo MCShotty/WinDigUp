@@ -23,12 +23,16 @@ public struct WorkerInfo: Codable, Sendable {
     public let runtimeVersion: Int?
     public let precisionProfile: String?
     public let buildIdentity: String?
+    public let deviceName: String?
+    public let driverDescription: String?
+    public let runtimeDescription: String?
 
     public init(
         model: String, revision: String, runtime: String, dtype: String, dim: Int, textOnly: Bool,
         loadSeconds: Double?, device: String? = nil, executionPolicy: String? = nil,
         backend: String? = nil, deviceId: String? = nil, driverVersion: Int? = nil, runtimeVersion: Int? = nil,
-        precisionProfile: String? = nil, buildIdentity: String? = nil
+        precisionProfile: String? = nil, buildIdentity: String? = nil,
+        deviceName: String? = nil, driverDescription: String? = nil, runtimeDescription: String? = nil
     ) {
         self.model = model
         self.revision = revision
@@ -45,12 +49,15 @@ public struct WorkerInfo: Codable, Sendable {
         self.runtimeVersion = runtimeVersion
         self.precisionProfile = precisionProfile
         self.buildIdentity = buildIdentity
+        self.deviceName = deviceName
+        self.driverDescription = driverDescription
+        self.runtimeDescription = runtimeDescription
     }
 
     /// Vectors from different models, revisions, runtimes or precisions must never share an index.
     public var vectorSource: String {
-        if backend == "nvidia-cuda" {
-            return "cuda-v1:"
+        if backend == "nvidia-cuda" || backend == "openvino-gpu" {
+            return (backend == "openvino-gpu" ? "openvino-gpu-v1:" : "cuda-v1:")
                 + [
                     model, revision, runtime, dtype, String(dim), backend ?? "", precisionProfile ?? "",
                     buildIdentity ?? "",
@@ -74,6 +81,9 @@ public struct WorkerInfo: Codable, Sendable {
         value["runtime_version"] = runtimeVersion
         value["precision_profile"] = precisionProfile
         value["build_identity"] = buildIdentity
+        value["device_name"] = deviceName
+        value["driver_description"] = driverDescription
+        value["runtime_description"] = runtimeDescription
         return value
     }
 }
@@ -132,33 +142,38 @@ public struct WorkerConfig: Sendable {
         return config
     }
 
-    /// The verified OpenVINO NPU worker, when explicitly selected. Other production worker overrides are disabled.
+    /// Resolve app-local Python before requiring any developer environment.
+    public static func openVINOPaths(environment: [String: String] = ProcessInfo.processInfo.environment,
+                                     helper: URL? = Bundle.main.executableURL) throws -> (python: URL, script: URL) {
+        let folder = helper?.deletingLastPathComponent().appendingPathComponent("openvino")
+        let python = environment["DIGUP_OPENVINO_PYTHON"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? folder?.appendingPathComponent("python/python.exe")
+        let script = environment["DIGUP_OPENVINO_WORKER"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? folder?.appendingPathComponent("digup_openvino.py")
+        guard let python, FileManager.default.fileExists(atPath: python.path),
+              let script, FileManager.default.fileExists(atPath: script.path) else {
+            throw WorkerError.notFound("The OpenVINO runtime is missing. Install the Windows build with bundled Intel support, or choose an environment in Settings → General.")
+        }
+        return (python, script)
+    }
+
     public static func fromEnvironment() throws -> WorkerConfig? {
         let acceleration = try Acceleration.selected()
-        guard acceleration == .openvinoNPU else { return nil }
+        guard acceleration.isOpenVINO else { return nil }
         let env = ProcessInfo.processInfo.environment
-        guard let python = env["DIGUP_OPENVINO_PYTHON"], !python.isEmpty,
-            let models = env["DIGUP_OPENVINO_MODELS"], !models.isEmpty
-        else {
-            throw WorkerError.notFound(
-                "OpenVINO NPU needs a Python environment and exported model bundle in Settings → General.")
+        let paths = try openVINOPaths()
+        guard let models = env["DIGUP_OPENVINO_MODELS"], !models.isEmpty else {
+            throw WorkerError.notFound("Prepare or select an OpenVINO model bundle in Settings → General → Intel setup.")
         }
-        guard
-            let script = env["DIGUP_OPENVINO_WORKER"].map({ URL(fileURLWithPath: $0) })
-                ?? Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent(
-                    "openvino/digup_openvino.py")
-        else {
-            throw WorkerError.notFound("Cannot locate the bundled OpenVINO worker; set DIGUP_OPENVINO_WORKER")
-        }
-        guard FileManager.default.fileExists(atPath: script.path) else {
-            throw WorkerError.notFound("OpenVINO worker missing at \(script.path)")
-        }
-        var config = WorkerConfig(
-            executable: URL(fileURLWithPath: python),
-            arguments: ["-I", script.path, "--models", models])
+        var config = WorkerConfig(executable: paths.python, arguments: [
+            "-I", paths.script.path, "--models", models, "--backend", acceleration.rawValue,
+            "--device", env["DIGUP_GPU"] ?? ""])
+        config.startupTimeout = 1800
+        config.requestTimeout = 300
         config.environment = ["HF_HUB_OFFLINE": "1", "TOKENIZERS_PARALLELISM": "false", "PYTHONUTF8": "1"]
         return config
     }
+
 }
 
 public enum WorkerError: Error, CustomStringConvertible {

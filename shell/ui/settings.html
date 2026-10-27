@@ -86,6 +86,7 @@
         <option value="amd-vulkan">AMD Vulkan · RDNA1 / RX 5000 and newer</option>
         <option value="nvidia-cuda">NVIDIA CUDA · RTX 20-series and newer</option>
         <option value="openvino-npu">Intel NPU · OpenVINO</option>
+        <option value="openvino-gpu">Intel integrated GPU · OpenVINO</option>
         <option value="metal">Apple Metal</option>
       </select>
       <div id="gpu-options">
@@ -98,7 +99,7 @@
       <label for="resource-profile">Background GPU resource use</label>
       <select id="resource-profile" class="field" aria-describedby="resource-profile-note"><option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="faster">Faster</option></select>
       <p id="resource-profile-message" class="note problem" role="status" hidden></p>
-      <p id="resource-profile-note" class="note">Quiet uses one background GPU model owner. Balanced and Faster currently preserve the same GPU-job ceiling, subject to available memory. This GPU-only choice is kept when using NPU or Metal. Search keeps priority; it does not cap device power or clocks.</p>
+      <p id="resource-profile-note" class="note">Quiet uses one background CUDA/Vulkan model owner. Balanced and Faster preserve the selected GPU-job ceiling, subject to available memory. OpenVINO and Metal use one model owner; this preference is kept when switching back. Search keeps priority; this setting does not cap power or clocks.</p>
       <div id="gpu-jobs-control" class="gpu-jobs-control">
         <label for="gpu-jobs">Concurrent GPU jobs</label>
         <select id="gpu-jobs" class="field"><option value="0">Automatic, up to 3</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
@@ -106,17 +107,50 @@
       </div>
       <p id="accelerator-migration" class="note" role="status" hidden></p>
       <div id="npu-options" hidden>
-        <label for="npu-python">OpenVINO Python executable</label>
-        <input class="field" id="npu-python" placeholder="C:\DigUpNPU\.venv\Scripts\python.exe" spellcheck="false">
-        <label for="npu-models">Exported EmbeddingGemma 2 bundle folder</label>
-        <input class="field" id="npu-models" placeholder="C:\DigUpNPU\models" spellcheck="false">
-        <p class="note">Use an exported EmbeddingGemma 2 model bundle. Intel's NPU driver is required.
-          NPU vectors use a separate index.</p>
+        <h4>Intel setup</h4>
+        <p id="openvino-runtime" class="note" role="status">Checking the bundled OpenVINO runtime…</p>
+        <label for="openvino-device">Intel device</label>
+        <select id="openvino-device" class="field"><option value="">Automatic · one eligible device</option></select>
+        <button id="openvino-check" type="button">Check Intel setup</button>
+        <p id="openvino-device-status" class="note" role="status"></p>
+        <label for="npu-models">Exported OpenVINO model bundle</label>
+        <input class="field" id="npu-models" placeholder="Choose a bundle, or prepare one below" spellcheck="false">
+        <button id="openvino-choose-models" type="button">Choose bundle…</button>
+        <p id="openvino-model-status" class="note" role="status"></p>
+        <p class="note">Download and prepare uses several GB for the full model and exported profiles. It contacts only the model host, under the model's license. Offline preparation runs reference calculations on CPU once; application inference stays on the selected Intel device.</p>
+        <details id="openvino-access"><summary>Download access, if required by the model host</summary>
+          <button id="openvino-model-page" type="button">Open model and license page</button>
+          <label for="openvino-access-token">Hugging Face read-only access token</label>
+          <input id="openvino-access-token" class="field" type="password" autocomplete="off" spellcheck="false">
+          <p class="note">Used only for this model download. DigUp does not save the token or use an existing account token automatically.</p>
+        </details>
+        <button id="openvino-download" type="button" disabled>Download and prepare model</button>
+        <details id="openvino-prepare-details">
+          <summary>Prepare from a local model checkpoint</summary>
+          <p class="note">Use the complete Transformers EmbeddingGemma 2 checkpoint obtained under its model license. The normal GPU download contains GGUF weights and cannot be used here.</p>
+          <label for="openvino-source">Checkpoint folder</label>
+          <input id="openvino-source" class="field" readonly placeholder="Choose the downloaded checkpoint">
+          <button id="openvino-choose-source" type="button">Choose checkpoint…</button>
+          <label for="openvino-revision">Checkpoint revision</label>
+          <input id="openvino-revision" class="field" maxlength="40" spellcheck="false" placeholder="Full 40-character snapshot commit">
+          <p class="note">Preparation runs reference calculations on CPU once to export the model. Search and indexing inference stay on the selected Intel accelerator. Preparation is local and does not download weights.</p>
+          <button id="openvino-prepare" type="button" disabled>Prepare OpenVINO model</button>
+          <button id="openvino-cancel" type="button" disabled>Cancel preparation</button>
+        </details>
+        <p id="openvino-preparation-status" class="note" role="status" aria-live="polite"></p>
+        <button id="openvino-use-prepared" type="button" hidden>Use prepared bundle</button>
+        <details id="openvino-advanced">
+          <summary>Advanced: use a different Python environment</summary>
+          <label for="npu-python">OpenVINO Python executable</label>
+          <input class="field" id="npu-python" placeholder="Use the bundled runtime" spellcheck="false">
+          <button id="openvino-choose-python" type="button">Choose Python…</button>
+        </details>
       </div>
       <p class="note">Text, image and audio model inference stays on the selected accelerator, including pooling and
         normalization. Unsupported operations or missing hardware stop inference. CPU fallback is disabled.
         File reading, decoding, tokenization and the app still use the CPU.</p>
       <button id="apply-accelerator">Apply and Restart DigUp</button>
+      <p id="accelerator-problem" class="note problem" role="alert" hidden></p>
 
       <h3>Result order</h3>
       <label class="option"><input id="personalization-enabled" type="checkbox" checked disabled><span class="text"><span class="name">Personalize result order</span><span class="info">Uses successful opens and useful-result feedback stored only on this computer. Turn off for consistent ranking. Search text is not stored. Turning off stops collection and restores consistent ranking. Your history stays local until you clear it.</span></span></label>
@@ -292,7 +326,7 @@
     <section class="tab" id="storage" role="tabpanel" hidden>
       <h3>Model</h3>
       <div class="card facts">
-        <div class="fact"><span>EmbeddingGemma 2</span><span>Google · Apache 2.0 · 865 MB</span></div>
+        <div class="fact"><span>EmbeddingGemma 2</span><span id="model-format">Google · Apache 2.0 · 865 MB</span></div>
         <div class="fact"><span>Status</span><span id="model-status"></span></div>
         <div class="fact"><span>Location</span><button class="path-button" id="model-path"></button></div>
       </div>
@@ -315,6 +349,7 @@
   <script src="activity.js"></script>
   <script src="applications-settings.js"></script>
   <script src="discovery-settings.js"></script>
+  <script src="openvino-settings.js"></script>
   <script src="settings.js"></script>
   <script src="launcher.js"></script>
 </body>
