@@ -68,7 +68,7 @@ function queryChanged(filesOnly = false) {
   const generation = ++state.generation;
   SearchTiming.begin(generation);state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;
   state.finalGeneration=-1;state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;
-  let lexicalRequest=0,meaningRequest=0;
+  let lexicalRequest=0,lexicalPublished=0,meaningRequest=0,meaningPublished=0;
   state.exactFilenameKnown=false;state.exactFilename=false;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
@@ -106,8 +106,9 @@ function queryChanged(filesOnly = false) {
     const request=++lexicalRequest;
     return SearchTiming.measure("file_words",()=>ask({ op: "search", q: text, code, meaning: false, prefix_last: true, limit: 40,generation,passive }),passive)
       .then((reply) => {
-        if(generation!==state.generation||request!==lexicalRequest||reply.status==="superseded"||
+        if(generation!==state.generation||request<lexicalPublished||reply.status==="superseded"||
           (reply.generation!=null&&reply.generation!==generation))return;
+        lexicalPublished=request;
         state.lexicalReady=true;state.fileWords=reply.hits||[];state.fileWordsReply=reply;
         state.fileWordsRefresh ||= passive;
         state.categoryQuery=reply.category_query===true;
@@ -123,8 +124,9 @@ function queryChanged(filesOnly = false) {
     const request=++meaningRequest;
     SearchTiming.measure("file_meaning",()=>ask({ op: "search", q: text, code, meaning: true, limit: 40,generation,passive }),passive)
       .then((reply) => {
-        if (generation !== state.generation||request!==meaningRequest||reply.status==="superseded"||
+        if (generation !== state.generation||request<meaningPublished||reply.status==="superseded"||
           (reply.generation!=null&&reply.generation!==generation)) return;
+        meaningPublished=request;
         state.finalGeneration = generation;state.fileMeaning=reply;
         if(reply.semantic_error)state.error=reply.semantic_error;
         show(state.fileWordsRefresh&&state.fileWordsReply?mergeFileSearchReplies(reply,state.fileWordsReply,text):reply,

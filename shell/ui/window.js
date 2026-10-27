@@ -136,7 +136,7 @@ function run(filesOnly = false) {
   state.exactFilenameKnown=false;state.exactFilename=false;
   state.lexicalReady=false;state.fileWords=[];state.categoryQuery=false;state.finalGeneration=-1;
   state.fileMeaning=null;state.fileWordsReply=null;state.fileWordsRefresh=false;
-  let lexicalRequest=0,meaningRequest=0;
+  let lexicalRequest=0,lexicalPublished=0,meaningRequest=0,meaningPublished=0;
   clearTimeout(state.timer);
   cancelAnimationFrame(state.frame);
   state.refine=null;
@@ -183,8 +183,9 @@ function run(filesOnly = false) {
     try {
       let shown=await SearchTiming.measure(meaning?"file_meaning":"file_words",()=>ask({op:"search",q:text,code,meaning,
         prefix_last:!meaning,limit:LIMIT,kinds:filter&&!code?filter.kinds:null,facets:!code,generation,passive,phase:meaning?"meaning":"words"}),passive);
-      if(generation!==state.generation||request!==(meaning?meaningRequest:lexicalRequest)||shown.status==="superseded"||
+      if(generation!==state.generation||request<(meaning?meaningPublished:lexicalPublished)||shown.status==="superseded"||
         (shown.generation!=null&&shown.generation!==generation))return;
+      if(meaning)meaningPublished=request;else lexicalPublished=request;
       if(meaning){
         state.finalGeneration=generation;state.fileMeaning=shown;
         if(state.fileWordsRefresh&&state.fileWordsReply)shown=mergeFileSearchReplies(shown,state.fileWordsReply,text);
