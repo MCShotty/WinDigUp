@@ -11,6 +11,7 @@ on:
       - 'Tests/DigUpServiceTests/SearchAvailabilityTests.swift'
       - 'Tests/DigUpServiceTests/SearchNameRefreshTests.swift'
       - 'Tests/DigUpServiceTests/SearchServiceFixture.swift'
+      - 'Tests/DigUpServiceTests/SearchDiscoveryIntegrationTests.swift'
       - 'scripts/benchmark-search-scale.py'
       - '.github/workflows/search-storage.yml'
   workflow_dispatch:
@@ -77,11 +78,11 @@ jobs:
       - name: Delayed availability evidence without model inference
         env:
           DIGUP_TEST_BLOCKING_WAITS: "0"
-        run: swift test --filter 'SearchAvailabilityTests|SearchNameRefreshTests'
+        run: swift test --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchDiscoveryIntegrationTests'
       - name: Optimized availability and search contracts
         env:
           DIGUP_TEST_BLOCKING_WAITS: "0"
-        run: swift test -c release --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchReadersTests|MixedSearchRankingTests'
+        run: swift test -c release --filter 'SearchAvailabilityTests|SearchNameRefreshTests|SearchDiscoveryIntegrationTests|SearchReadersTests|MixedSearchRankingTests'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
