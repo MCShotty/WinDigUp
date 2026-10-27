@@ -343,7 +343,7 @@ function mergeFileSearchReplies(semantic, lexical, text) {
     return [ranked,weaker];
   };
   const currentWords=new Set((lexical.hits || []).map(resultKey));
-  const [ranked,weaker]=split(semantic,hit=>currentWords.has(resultKey(hit))||Number.isFinite(hit.z)||Number.isFinite(hit.cosine));
+  const [ranked,weaker]=split(semantic,hit=>currentWords.has(resultKey(hit))||matchedMeaning(hit));
   const [words,weakWords]=split(lexical);
   const known=new Map([...ranked,...weaker].map(hit=>[resultKey(hit),hit]));
   const strongKeys=new Set(ranked.map(resultKey));

@@ -23,6 +23,7 @@ let browser;
       const words=(request,publication)=>{
         if(request.q!=="receipt")return [file("new-query.txt")];
         const hits=[file("receipt-plan.txt",publication>=2?{segment_id:11}:{})];
+        if(publication===0)hits.push(file("receipt-initial-word.txt"));
         if(publication>=1)hits.push(file("receipt.txt",{score:4000}));
         if(publication>=2)hits.push(file("receipt-notes.txt"));
         if(publication===3)hits.push(file("receipt-obsolete-refresh.txt"));
@@ -42,7 +43,7 @@ let browser;
           const lexical=words(request,publication);
           const hits=request.meaning&&mode==="ready"&&request.q==="receipt"
             ? [file("unrelated-title.txt",{segment:"chunk",segment_id:8,keyword_rank:undefined,z:3.2,cosine:0.8}),
-               file("receipt-plan.txt",{z:0.4,cosine:0.2})]
+               file("receipt-plan.txt",{z:0.4,cosine:0.2}),file("receipt-initial-word.txt",{z:0.4,cosine:0.2})]
             : request.meaning?words(request,0):lexical;
           const reply={hits,strong:hits.length,meaning:request.meaning&&mode==="ready",generation:request.generation,
             facets:{doc:hits.length},count_scope:"ranked_candidates",exact_filename_known:true,exact_filename:publication>=1,
@@ -67,6 +68,7 @@ let browser;
     await page.evaluate(view=>{window.savedFocus=document.activeElement;window.savedPreview=document.querySelector(view==="window.html"?"#side":"#result-preview").firstChild;
       window.published=1;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});},view);
     await row(exactKey).waitFor({state:"visible"});
+    assert.equal(await row("file:C:/docs/receipt-initial-word.txt").count(),0,"A former keyword-only vector hit survived after its lexical match was removed");
     assert.equal(await page.evaluate(()=>state.generation),generation,"A name refresh started a new generation");
     assert.equal(await page.evaluate(()=>state.selection),selected,"A new exact filename replaced the chosen app");
     assert.equal(await page.evaluate(()=>savedFocus===document.activeElement),true,"Name publication lost focused app/details control");
