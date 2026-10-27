@@ -86,7 +86,7 @@ def compile_gpu(core, model, name, selected):
     supported = core.query_model(model, device)
     unsupported = {op.get_type_name() for op in model.get_ops()
                    if op.get_type_name() not in ("Parameter", "Result", "Constant")
-                   and not re.fullmatch(r"GPU(?:\.\d+)?", str(supported.get(op.get_friendly_name(), "")))}
+                   and str(supported.get(op.get_friendly_name(), "")) not in (device, "GPU")}
     if unsupported:
         raise RuntimeError("Intel GPU does not support " + name + ": " + ", ".join(sorted(unsupported)) + "; CPU fallback disabled")
     compiled = core.compile_model(model, device, {

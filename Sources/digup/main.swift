@@ -713,7 +713,10 @@ do {
         if (try Acceleration.selected()).isOpenVINO {
             let model = try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"))
             defer { model.close() }
-            emit(["device": model.info.device ?? "", "execution_policy": model.info.executionPolicy ?? ""])
+            var receipt = model.info.fields
+            receipt["inference_verified"] = true
+            receipt["verification_scope"] = "index-profile-reference-fixtures"
+            emit(receipt)
         } else {
             let value = try LlamaEmbedder.verifyDevice()
             var result = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]

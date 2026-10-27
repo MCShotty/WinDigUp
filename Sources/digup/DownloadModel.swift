@@ -19,7 +19,11 @@ func downloadModel(_ args: Arguments) throws -> Int32 {
             emit(["event": "verifying"])
             let embedder = try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"))
             embedder.close()
-            emit(["event": "done", "device": embedder.info.device ?? "", "execution_policy": "accelerator-only"])
+            var receipt = embedder.info.fields
+            receipt["event"] = "done"
+            receipt["inference_verified"] = true
+            receipt["verification_scope"] = "index-profile-reference-fixtures"
+            emit(receipt)
             return 0
         } catch {
             emit(["event": "error", "message": "\(error)"])

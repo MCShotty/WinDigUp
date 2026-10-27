@@ -42,7 +42,7 @@ def compile_npu(core, model, name: str, device="NPU"):
     supported = core.query_model(model, device, {"NPU_USE_NPUW": False})
     unsupported = {op.get_type_name() for op in model.get_ops()
         if op.get_type_name() not in ("Parameter", "Result", "Constant")
-        and not only_npu([supported.get(op.get_friendly_name(), "")])}
+        and str(supported.get(op.get_friendly_name(), "")) not in (device, "NPU")}
     if unsupported:
         raise RuntimeError(f"NPU does not support {name}: {', '.join(sorted(unsupported))}; CPU fallback disabled")
     compiled = core.compile_model(model, device, {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,

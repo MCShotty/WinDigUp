@@ -11,7 +11,7 @@ permissions:
   contents: read
 concurrency:
   group: intel-runtime-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   relocated:
     runs-on: windows-2022

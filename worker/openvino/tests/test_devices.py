@@ -81,6 +81,10 @@ def test_compile_retains_fp32_and_rejects_host_operations_before_submission():
     with pytest.raises(RuntimeError, match="CPU fallback disabled"):
         compile_gpu(core, Model(), "text", selected)
     assert not core.compiled
+    core.mapped = "GPU.1"
+    with pytest.raises(RuntimeError, match="CPU fallback disabled"):
+        compile_gpu(core, Model(), "text", selected)
+    assert not core.compiled
     core.mapped = "GPU.0"
     compile_gpu(core, Model(), "text", selected)
     assert core.compiled

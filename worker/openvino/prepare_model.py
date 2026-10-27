@@ -20,6 +20,7 @@ def prepare(args):
     access_token = os.environ.pop("DIGUP_HF_DOWNLOAD_TOKEN", "")
     authorization = access_token or False
     if args.download:
+        os.environ["HF_ENDPOINT"] = "https://huggingface.co"
         from huggingface_hub import HfApi, snapshot_download
         report("downloading", "Resolving the model checkpoint revision. No search queries or private files are sent.")
         try:

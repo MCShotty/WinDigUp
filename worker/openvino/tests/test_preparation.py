@@ -38,7 +38,7 @@ def test_local_preparation_never_contacts_a_model_host(tmp_path, monkeypatch):
     class API:
         def __init__(self, **kwargs):
             raise AssertionError("Local preparation attempted network work")
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=API))
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=API, snapshot_download=None))
     monkeypatch.setitem(sys.modules, "export_model", SimpleNamespace(export_bundle=lambda *args: exported.append(args)))
     args = SimpleNamespace(source=tmp_path, revision="b"*40, download=False, output=tmp_path / "bundle")
     prepare(args)
@@ -50,7 +50,7 @@ def test_gated_download_has_a_readable_local_checkpoint_recovery(tmp_path, monke
         def __init__(self, **kwargs): pass
         def model_info(self, model):
             raise RuntimeError("401: access requires license acceptance")
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=API))
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=API, snapshot_download=None))
     args = SimpleNamespace(source=None, revision=None, download=True, cache_root=tmp_path, output=tmp_path / "bundle")
     with pytest.raises(RuntimeError, match="local snapshot folder"):
         prepare(args)
@@ -63,7 +63,7 @@ def test_explicit_token_is_scoped_to_download_and_redacted_on_failure(tmp_path, 
             assert kwargs == {"endpoint": "https://huggingface.co", "token": token}
         def model_info(self, model):
             raise RuntimeError("401: token " + token)
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=API))
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=API, snapshot_download=None))
     args = SimpleNamespace(source=None, revision=None, download=True, cache_root=tmp_path, output=tmp_path / "bundle")
     with pytest.raises(RuntimeError) as result:
         prepare(args)
