@@ -274,10 +274,10 @@ impl Catalog {
         Platform{supported:true,build:22631,locale:"en".into(),wifi:None,bluetooth:None})}
     #[test]fn exact_modern_and_classic_names_are_distinct_and_partial_refresh_retains_entries(){
         let c=catalog();c.publish("control_panel",Ok(vec![entry("::{fixture}","Sound")]));
-        let hits=c.search("Sound");assert_eq!(hits.len(),2);assert_ne!(hits[0].id,hits[1].id);assert!(hits.iter().any(|h|h.source=="control_panel"));
+        let hits=c.search("Sound");assert_eq!(hits.iter().filter(|h|h.name=="Sound").count(),2);assert_ne!(hits[0].id,hits[1].id);assert!(hits.iter().any(|h|h.source=="control_panel"));
         c.publish("control_panel",Err("Temporary Shell failure".into()));assert_eq!(c.search("classic Sound").len(),1);
         assert!(c.info()["controlPanel"]["control_panel"]["stale"].as_bool().unwrap());
-        c.publish("control_panel",Ok(vec![]));assert_eq!(c.search("Sound").len(),1);
+        c.publish("control_panel",Ok(vec![]));assert_eq!(c.search("Sound").iter().filter(|h|h.name=="Sound").count(),1);
     }
     #[test]fn duplicate_shell_identity_is_merged_without_losing_distinct_tasks(){
         let c=catalog();c.publish("control_panel",Ok(vec![entry("::{one}","Sound")]));

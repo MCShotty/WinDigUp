@@ -1,5 +1,5 @@
 use super::{Entry,NativeTarget};
-use windows::{core::{Interface,PCWSTR,PWSTR,w},Win32::{Foundation::PROPERTYKEY,System::Com::*,UI::{Shell::*,WindowsAndMessaging::*}}};
+use windows::{core::{Interface,PCWSTR,PWSTR,w},Win32::{Foundation::PROPERTYKEY,System::{Com::*,SystemServices::SFGAO_HIDDEN},UI::{Shell::*,WindowsAndMessaging::*}}};
 struct Apartment;
 impl Apartment {fn new()->Result<Self,String>{unsafe{CoInitializeEx(None,COINIT_APARTMENTTHREADED).ok().map_err(|e|e.to_string())?;}Ok(Self)}}
 impl Drop for Apartment {fn drop(&mut self){unsafe{CoUninitialize()}}}

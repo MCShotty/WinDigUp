@@ -87,6 +87,23 @@ jobs:
         run: cargo check --manifest-path shell/src-tauri/Cargo.toml --locked
       - name: Build the real native shell without model libraries
         run: cargo build --manifest-path shell/src-tauri/Cargo.toml --locked --bins
+      - name: Build and register the test-signed Copilot identity
+        shell: pwsh
+        env:
+          DIGUP_MSIX_TEST_SIGN: "1"
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'copilot-fixture'
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item shell/src-tauri/target/debug/digup-shell.exe (Join-Path $root 'DigUp.exe')
+          scripts/package-copilot.ps1 -Destination (Join-Path $root 'copilot')
+          scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath (Join-Path $root 'copilot/TEST-ONLY-WinDigUp.cer')
+          try {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root
+            if($LASTEXITCODE){throw 'Copilot identity registration failed'}
+            scripts/check-windows-copilot.ps1 -InstallRoot $root
+          } finally {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root -Uninstall
+          }
       - name: Build the disposable Shell shortcut fixture
         shell: pwsh
         run: |
