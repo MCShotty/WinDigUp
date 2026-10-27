@@ -1028,7 +1028,7 @@ final class SearchService: @unchecked Sendable {
         while !stateLock.withLock({ stopping }) {
             Thread.sleep(forTimeInterval: 1)
             inference.submit(key: "idle-check", foreground: false) { [self] in
-                guard encoder != nil || stateLock.withLock({ snapshotBytes > 0 }), Self.now - lastQuery > idleSeconds
+                guard encoder != nil || stateLock.withLock({ snapshotBytes > 0 || vectorCacheWanted }), Self.now - lastQuery > idleSeconds
                 else { return }
                 let epoch = cancelIdleVectors()
                 stopEncoder()
