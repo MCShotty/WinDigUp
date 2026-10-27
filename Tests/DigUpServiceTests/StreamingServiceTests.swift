@@ -381,13 +381,13 @@ struct StreamingServiceTests {
     }
     #endif
 
-    func runFolders(_ roots:[URL],index:URL,prune:Bool=true) throws -> (events:[[String:Any]],vectors:Int,rows:[FileRecord]) {
+    func runFolders(_ roots:[URL],index:URL,prune:Bool=true,modelReady:Bool=true) throws -> (events:[[String:Any]],vectors:Int,rows:[FileRecord]) {
         let store=try IndexStore(directory:index)
         let shared=SharedEmbedder{Model()}
         let indexer=try Indexer(store:store,options:IndexOptions(),makeEmbedder:{try shared.embedder()})
         var events:[[String:Any]]=[]
         let service=IndexService(main:.init(store:store,indexer:indexer,roots:roots,keepOnly:prune ? roots : nil),
-            code:nil,folder:index,model:shared,modelReady:{true},backfill:true,newFilesLimit:50,linger:0,
+            code:nil,folder:index,model:shared,modelReady:{modelReady},backfill:true,newFilesLimit:50,linger:0,
             output:{events.append($0)})
         #expect(service.serve(commandInput:false)==0)
         return (events,try store.counts().vectors,try store.files(under:roots.flatMap {[$0.path,$0.resolvingSymlinksInPath().path]}))
@@ -441,6 +441,36 @@ struct StreamingServiceTests {
     }
 
     #if !os(Windows)
+    #if os(macOS)
+    @Test func damagedAliasCachePreservesPrivateVarVectorsForAReadableVarRoot() throws {
+        let chosenRoot=URL(fileURLWithPath:"/var/tmp",isDirectory:true)
+            .appendingPathComponent("digup-namespace-\(UUID().uuidString)",isDirectory:true)
+        try FileManager.default.createDirectory(at:chosenRoot,withIntermediateDirectories:true)
+        let root=URL(fileURLWithPath:FolderSelection.realPath(chosenRoot.path),isDirectory:true)
+        defer {try? FileManager.default.removeItem(at:root)}
+        #expect(chosenRoot.path.hasPrefix("/var/tmp/"))
+        #expect(root.path.hasPrefix("/private/var/tmp/"))
+        let chosen=chosenRoot.appendingPathComponent("files"),files=root.appendingPathComponent("files")
+        let index=root.appendingPathComponent("index")
+        try FileManager.default.createDirectory(at:files,withIntermediateDirectories:true)
+        try "A retained railway document.".write(to:files.appendingPathComponent("note.txt"),atomically:false,encoding:.utf8)
+        #expect(try runFolders([chosen],index:index).vectors==1)
+        let store=try IndexStore(directory:index)
+        try store.setMeta("scan_root_aliases_v1","{damaged")
+        let after=try runFolders([chosen],index:index,modelReady:false)
+        #expect(after.vectors==1)
+        #expect(after.rows.count==1)
+        #expect(after.rows.first?.state=="done")
+        #expect(after.events.allSatisfy{!["file","inference_verified"].contains($0["event"] as? String ?? "")})
+        let counts=try #require(after.events.last{$0["event"] as? String=="waiting"})
+        #expect(counts["files"] as? Int==1)
+        #expect(counts["searchable"] as? Int==1)
+        #expect(counts["pending"] as? Int==0)
+        #expect(counts["known_counts_complete"] as? Bool==true)
+        #expect(try store.counts().vectors==1)
+    }
+    #endif
+
     @Test func rootAliasCacheIsIsolatedVersionedAndRecoversFromCorruption() throws {
         let root=try temporary()
         defer {try? FileManager.default.removeItem(at:root)}

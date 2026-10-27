@@ -302,7 +302,12 @@ final class IndexService: @unchecked Sendable {
             return [path]
             #else
             if let resolved=cached[IndexService.aliasID(path)] {return [path,resolved]}
-            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {return [path]}
+            if invalidAliasCache.contains(part.code) || uncertainAliasCache.contains(part.code) {
+                let resolved=FolderSelection.realPath(path)
+                let literal=URL(fileURLWithPath:resolved).standardizedFileURL.path==root.standardizedFileURL.path
+                if literal && Arguments.isFolder(root) && Arguments.isReadable(root) {return [path,resolved]}
+                return [path]
+            }
             return [path,FolderSelection.realPath(path)]
             #endif
         })).sorted()
