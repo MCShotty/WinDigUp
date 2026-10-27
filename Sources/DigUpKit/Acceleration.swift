@@ -8,8 +8,11 @@ public enum Acceleration: String, Sendable, CaseIterable {
     public var openVINODeviceKind: String { self == .openvinoGPU ? "GPU" : "NPU" }
 
     public func acceptsOpenVINOReceipt(_ info: WorkerInfo) -> Bool {
-        guard isOpenVINO, info.executionPolicy == "accelerator-only",
-              let device = info.device, device == openVINODeviceKind || device.hasPrefix(openVINODeviceKind + ".") else { return false }
+        guard isOpenVINO, info.executionPolicy == "accelerator-only", info.dim == 768,
+              let device = info.device else { return false }
+        let prefix = openVINODeviceKind + "."
+        let suffix = device.hasPrefix(prefix) ? String(device.dropFirst(prefix.count)) : ""
+        guard device == openVINODeviceKind || (!suffix.isEmpty && suffix.utf8.allSatisfy({ (48...57).contains($0) })) else { return false }
         return info.backend == rawValue || (self == .openvinoNPU && info.backend == nil)
     }
 

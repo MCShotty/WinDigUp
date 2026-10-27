@@ -800,7 +800,7 @@ fn main() {
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
             openvino_commands::openvino_status, openvino_commands::openvino_preparation, openvino_commands::prepare_openvino,
-            openvino_commands::cancel_openvino_preparation, openvino_commands::pick_openvino_path,
+            openvino_commands::cancel_openvino_preparation, openvino_commands::download_openvino, openvino_commands::open_openvino_model_page, openvino_commands::pick_openvino_path,
             enrichment_commands::set_app_enrichment_options, enrichment_commands::refresh_app_descriptions,
             enrichment_commands::clear_app_descriptions, enrichment_commands::open_app_description_source,
             discovery_commands::discovery_status, discovery_commands::discovery_volumes, discovery_commands::refresh_discovery_volumes,

@@ -50,6 +50,10 @@ PYDISCOVERY
 "$python" scripts/package-cuda-runtime.py --helper "$helper"
 mkdir -p "$helper/openvino"
 cp worker/openvino/*.py worker/openvino/requirements.txt "$helper/openvino/"
+test -f Vendor/openvino/python/python.exe || { echo "Bundled Intel runtime missing: run scripts/package-openvino-runtime.py with Python 3.12.10" >&2; exit 1; }
+cp -r Vendor/openvino/python "$helper/openvino/"
+cp Vendor/openvino/runtime-manifest.json Vendor/openvino/THIRD-PARTY-NOTICES.txt "$helper/openvino/"
+
 
 # With the release's signing key (TAURI_SIGNING_PRIVATE_KEY, and its password) the packages that update themselves are
 # signed for in-app updates (a .sig beside each). Installed copies check those signatures with the public key in

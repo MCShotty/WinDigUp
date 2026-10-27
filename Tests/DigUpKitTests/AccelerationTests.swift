@@ -114,4 +114,25 @@ struct AccelerationTests {
         }
     }
 
+    @Test func intelGpuUsesExclusiveWorkerAndIndependentFullFingerprints() throws {
+        let backend = try Acceleration.selected(environment: ["DIGUP_ACCELERATOR":"openvino-gpu"])
+        #expect(backend.isOpenVINO)
+        let base = URL(fileURLWithPath: "/fixtures/openvino-gpu")
+        #expect(backend.indexDirectory(base: base) == base.appendingPathComponent("openvino-gpu"))
+        func info(_ revision: String, _ build: String = "build-a", device: String = "GPU.0",
+                  backend: String = "openvino-gpu") -> WorkerInfo {
+            WorkerInfo(model:"model", revision:revision, runtime:"openvino-gpu-v1-bundle", dtype:"fp32-ir",
+                       dim:768, textOnly:true, loadSeconds:nil, device:device, executionPolicy:"accelerator-only",
+                       backend:backend, precisionProfile:"openvino-gpu-f32-v1", buildIdentity:build)
+        }
+        let reference = info("abcdefg1111111111111111111111111111111111")
+        #expect(backend.acceptsOpenVINOReceipt(reference))
+        #expect(!backend.acceptsOpenVINOReceipt(info(reference.revision, device:"CPU")))
+        #expect(!backend.acceptsOpenVINOReceipt(info(reference.revision, device:"GPU.fake")))
+        #expect(!backend.acceptsOpenVINOReceipt(info(reference.revision, device:"NPU", backend:"openvino-npu")))
+        #expect(reference.vectorSource != info("abcdefg2222222222222222222222222222222222").vectorSource)
+        #expect(reference.vectorSource != info(reference.revision, "build-b").vectorSource)
+        #expect(GPUAdmission.maximumBackgroundJobs(environment:["DIGUP_ACCELERATOR":"openvino-gpu","DIGUP_GPU_JOBS":"3"]) == 1)
+    }
+
 }

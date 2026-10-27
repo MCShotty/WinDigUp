@@ -31,7 +31,8 @@ def device_inventory(core, backend):
         try:
             uuid = bytes(uuid).hex() if uuid is not None else ""
         except (TypeError, ValueError):
-            uuid = str(uuid or "")
+            text = str(uuid or "").replace("-", "")
+            uuid = text.lower() if re.fullmatch(r"[0-9a-fA-F]{32}", text) else ""
         if uuid and not uuid.strip("0"):
             uuid = ""
         hardware = "|".join(str(property_value(core, device, key) or "") for key in

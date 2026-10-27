@@ -40,7 +40,10 @@ def main():
                      "device_id": runtime.selected["stableID"], "device_name": runtime.selected["name"],
                      "driver_description": runtime.selected["driverDescription"], "runtime_description": ov.__version__})
         if args.backend == "openvino-gpu":
-            identity = hashlib.sha256(b"".join((Path(__file__).parent / name).read_bytes()
+            import importlib.metadata
+            versions = {name: importlib.metadata.version(name) for name in
+                        ("openvino", "transformers", "tokenizers", "numpy", "Pillow", "soundfile")}
+            identity = hashlib.sha256(json.dumps(versions, sort_keys=True).encode() + b"".join((Path(__file__).parent / name).read_bytes()
                 for name in ("devices.py", "npu_runtime.py", "digup_openvino.py"))).hexdigest()
             info.update({"runtime": "openvino-gpu-v1-" + ov.__version__ + "-" + runtime.manifest["bundle_id"],
                          "dtype": "fp32-ir-gpu-f32-verified", "precision_profile": "openvino-gpu-f32-v1",

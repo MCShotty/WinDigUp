@@ -197,6 +197,23 @@ jobs:
         with:
           vsversion: '2022'
           toolset: '14.44'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: intel-runtime
+        with:
+          path: Vendor/openvino
+          key: openvino-windows-python3.12.10-v1-${{ hashFiles('scripts/package-openvino-runtime.py', 'worker/openvino/requirements.txt') }}
+      - name: Build relocatable Intel OpenVINO runtime and offline preparation tools
+        shell: pwsh
+        run: python scripts/package-openvino-runtime.py
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.intel-runtime.outputs.cache-hit != 'true'
+        with:
+          path: Vendor/openvino
+          key: openvino-windows-python3.12.10-v1-${{ hashFiles('scripts/package-openvino-runtime.py', 'worker/openvino/requirements.txt') }}
       - name: Pinned CUDA Toolkit and CMake
         shell: bash
         run: |
@@ -283,6 +300,10 @@ jobs:
         id: installer
         shell: bash
         run: scripts/check-windows-accelerators.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+      - name: Installed Intel OpenVINO runtime without developer dependencies
+        if: ${{ !cancelled() && steps.package_build.outcome == 'success' }}
+        shell: pwsh
+        run: scripts/check-windows-openvino.ps1
       - name: Application launch fixture
         shell: bash
         run: |

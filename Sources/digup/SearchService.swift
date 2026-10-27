@@ -874,7 +874,7 @@ final class SearchService: @unchecked Sendable {
             for (key, value) in encoder.info.fields
             where [
                 "backend", "device_id", "driver_version", "runtime_version", "precision_profile", "build_identity",
-                "model", "revision", "runtime", "dtype", "dim",
+                "model", "revision", "runtime", "dtype", "dim", "device_name", "driver_description", "runtime_description",
             ]
             .contains(key) { reply[key] = value }
         }

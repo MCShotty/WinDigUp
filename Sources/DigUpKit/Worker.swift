@@ -23,12 +23,16 @@ public struct WorkerInfo: Codable, Sendable {
     public let runtimeVersion: Int?
     public let precisionProfile: String?
     public let buildIdentity: String?
+    public let deviceName: String?
+    public let driverDescription: String?
+    public let runtimeDescription: String?
 
     public init(
         model: String, revision: String, runtime: String, dtype: String, dim: Int, textOnly: Bool,
         loadSeconds: Double?, device: String? = nil, executionPolicy: String? = nil,
         backend: String? = nil, deviceId: String? = nil, driverVersion: Int? = nil, runtimeVersion: Int? = nil,
-        precisionProfile: String? = nil, buildIdentity: String? = nil
+        precisionProfile: String? = nil, buildIdentity: String? = nil,
+        deviceName: String? = nil, driverDescription: String? = nil, runtimeDescription: String? = nil
     ) {
         self.model = model
         self.revision = revision
@@ -45,6 +49,9 @@ public struct WorkerInfo: Codable, Sendable {
         self.runtimeVersion = runtimeVersion
         self.precisionProfile = precisionProfile
         self.buildIdentity = buildIdentity
+        self.deviceName = deviceName
+        self.driverDescription = driverDescription
+        self.runtimeDescription = runtimeDescription
     }
 
     /// Vectors from different models, revisions, runtimes or precisions must never share an index.
@@ -74,6 +81,9 @@ public struct WorkerInfo: Codable, Sendable {
         value["runtime_version"] = runtimeVersion
         value["precision_profile"] = precisionProfile
         value["build_identity"] = buildIdentity
+        value["device_name"] = deviceName
+        value["driver_description"] = driverDescription
+        value["runtime_description"] = runtimeDescription
         return value
     }
 }
@@ -140,7 +150,7 @@ public struct WorkerConfig: Sendable {
             ?? folder?.appendingPathComponent("python/python.exe")
         let script = environment["DIGUP_OPENVINO_WORKER"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             ?? folder?.appendingPathComponent("digup_openvino.py")
-        guard let python, FileManager.default.isExecutableFile(atPath: python.path),
+        guard let python, FileManager.default.fileExists(atPath: python.path),
               let script, FileManager.default.fileExists(atPath: script.path) else {
             throw WorkerError.notFound("The OpenVINO runtime is missing. Install the Windows build with bundled Intel support, or choose an environment in Settings → General.")
         }

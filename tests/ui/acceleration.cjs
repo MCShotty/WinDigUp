@@ -43,6 +43,7 @@ let browser;
  await page.evaluate(()=>document.querySelector('#apply-accelerator').disabled=false);
  await page.selectOption('#accelerator','openvino-npu');
  assert.equal(await page.locator('#npu-options').isVisible(),true);
+ await page.locator("#openvino-advanced summary").click();
  await page.fill('#npu-python','C:\\DigUpNPU\\.venv\\Scripts\\python.exe');
  await page.fill('#npu-models','C:\\DigUpNPU\\models');
  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));

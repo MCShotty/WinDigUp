@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 pub async fn openvino_status(shell: State<'_,Arc<Shell>>, acceleration: Acceleration) -> Result<Value,String> {
@@ -16,6 +17,16 @@ pub fn openvino_preparation(shell: State<'_,Arc<Shell>>) -> Value { shell.intel_
 #[tauri::command]
 pub fn prepare_openvino(shell: State<'_,Arc<Shell>>, acceleration: Acceleration, source:String, revision:String) -> Result<Value,String> {
     shell.intel_setup.start(acceleration,source,revision)
+}
+
+#[tauri::command]
+pub fn download_openvino(shell: State<'_,Arc<Shell>>, acceleration: Acceleration, access_token: Option<String>) -> Result<Value,String> {
+    shell.intel_setup.download(acceleration,access_token.unwrap_or_default())
+}
+
+#[tauri::command]
+pub fn open_openvino_model_page(app:AppHandle) -> Result<(),String> {
+    app.opener().open_url("https://huggingface.co/google/embeddinggemma-2",None::<&str>).map_err(|error|error.to_string())
 }
 
 #[tauri::command]

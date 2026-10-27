@@ -62,44 +62,64 @@ $env:DIGUP_ACCELERATOR = 'nvidia-cuda' # AMD: amd-vulkan; NPU: openvino-npu
 An explicit `DIGUP_ACCELERATOR=nvidia-vulkan` request is rejected with migration guidance. CUDA failures never
 activate Vulkan or CPU. Older NVIDIA architectures are unsupported; native application launching still works.
 
-## Intel NPU (OpenVINO)
+## Intel NPU and integrated GPU (OpenVINO)
 
-The Core Ultra 7 258V has an Intel NPU. Install Intel's current Windows NPU driver and use 64-bit Python 3.12.
-NPU mode requires the complete Transformers **google/embeddinggemma-2** checkpoint, including its vision/audio
-weights and processor. The application's GGUF files are for CUDA/Vulkan and cannot be loaded by OpenVINO.
-Obtain the checkpoint through your own Hugging Face account under its model license, with a pinned full snapshot
-commit. Preparation is offline once those files and the Python packages have been downloaded.
+Windows builds bundle a private x64 Python 3.12.10 environment with OpenVINO 2026.4.1 and the model-preparation
+dependencies. Installing a system Python environment is unnecessary. The normal GGUF download is for CUDA/Vulkan;
+OpenVINO uses separately exported IR and processor files.
 
-From a checkout of this fork, in PowerShell:
+1. In Settings → General → Model acceleration, choose **Intel NPU · OpenVINO** or **Intel integrated GPU · OpenVINO**.
+2. Choose **Check Intel setup**. This checks runtime imports and driver device metadata without running model inference.
+   NPU mode needs Intel's NPU driver; integrated GPU mode needs a compatible Intel graphics driver.
+3. Choose **Download and prepare model**, **Choose bundle**, or expand **Prepare from a local model checkpoint**.
+   Downloads are user initiated and pinned to the full revision returned by the fixed model repository. The downloader
+   does not use cached account credentials. If access requires a Hugging Face account or license acceptance, open the
+   model page and provide a read-only token under Download access, or choose a local snapshot folder. Tokens are scoped
+   to the download process, cleared from the field on submission, redacted from download errors and never saved in settings. Local preparation never downloads.
+4. Apply and Restart after the bundle and selected device pass preflight. The application then compiles and verifies
+   every required graph on that device before content indexing starts. Activity shows the preparation, verification,
+   or actual failure reason; a device listing alone never establishes inference readiness.
+
+The Core Ultra 7 258V contains an Intel NPU and integrated graphics. Eligibility depends on what the installed drivers
+and OpenVINO plugins expose. GPU mode requires an Intel device reported as integrated; discrete or software adapters
+are excluded. Stable identities pin the chosen adapter. Missing, ambiguous or unsupported devices stop with a readable
+error. CPU, AUTO, HETERO and switching between GPU and NPU after a failure are unavailable.
+
+**Preparation is a separate, explicit offline export action.** It uses PyTorch on CPU to write full-precision IR and
+reference fixtures; it is never an application inference fallback. It needs several GB for the checkpoint and static
+profiles. Cancellation, failure or interrupted preparation retains existing bundles, indexes and settings. The export
+does not overwrite a bundle in use. Complete local snapshots need vision/audio weights, processor files and a full
+40-character checkpoint revision. Snapshot folder names are recognized automatically.
+
+OpenVINO IR can be shared between Intel GPU and NPU. Their vectors cannot: effective stores are
+`<base-index>/openvino-gpu/` and `<base-index>/openvino-npu/`. Managed source downloads and exported bundles live under
+`<base-index>/openvino-models/`; custom index/settings scopes remain isolated. Existing GPU vectors and annotations stay
+in place. Advanced settings retain support for an explicitly chosen Python environment and exported bundle.
+
+The query/app-document profile remains 512 tokens; indexing uses 2048 tokens, five image budgets and 30-second audio.
+Token lookup, all backbones/projections, pooling and normalization execute on the chosen device. Intel GPU requests
+FP32 computation and checks the compiled precision. NPUW stays disabled for NPU. Both paths reject unsupported operations,
+CPU profiling entries and wrong/mixed execution devices; all exported stages must pass reference parity before readiness.
+GPU fingerprints include the full revision, bundle, runtime/package versions, precision policy, code identity,
+dimension, prompts and text profiles. The existing NPU numerical profile remains compatible.
+
+The private environment includes CPU PyTorch solely for the named preparation action. Runtime workers load processor
+and transport code, then execute neural graphs through explicit OpenVINO GPU/NPU compilation. They do not instantiate
+a PyTorch model or fall back to it when a graph fails. Compilation caches are backend scoped.
+
+Development CLI setup remains explicit:
 
 ```powershell
-py -3.12 -m venv C:\DigUpNPU\.venv
-$python = 'C:\DigUpNPU\.venv\Scripts\python.exe'
-& $python -m pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
-& $python -m pip install -r worker\openvino\requirements.txt
-& $python worker\openvino\export_model.py --source C:\DigUpNPU\source --output C:\DigUpNPU\models --revision FULL_40_CHARACTER_SNAPSHOT_COMMIT
-```
-
-Allow several GB for the static profiles: queries (512 tokens), indexing (2048 tokens), five image budgets and
-30-second audio. The exporter writes full-precision IR, checksums, processor files and per-stage reference fixtures.
-The source model and PyTorch forward passes are used only during this explicit preparation step.
-
-Choose **Intel NPU — OpenVINO** in Settings, enter the Python executable and exported bundle folder, and apply.
-Every required graph is queried and compiled explicitly for `NPU`, with the NPUW wrapper disabled. The worker checks `EXECUTION_DEVICES`, profiling
-and reference parity for every stage before reporting ready. `CPU`, `AUTO`, `HETERO` and mixed-device execution are
-rejected. A driver that cannot compile a stage or reproduce its reference output produces an error, never a partial
-CPU pipeline. NPU vectors have a bundle fingerprint and a separate `index/openvino-npu` store, including code search.
-Changing the model bundle requires restarting DigUp.
-
-For a development checkout, point the helper to the worker:
-
-```powershell
-$env:DIGUP_ACCELERATOR = 'openvino-npu'
+$env:DIGUP_ACCELERATOR = 'openvino-gpu' # or openvino-npu
 $env:DIGUP_OPENVINO_PYTHON = 'C:\DigUpNPU\.venv\Scripts\python.exe'
 $env:DIGUP_OPENVINO_MODELS = 'C:\DigUpNPU\models'
 $env:DIGUP_OPENVINO_WORKER = "$PWD\worker\openvino\digup_openvino.py"
-& .build\release\digup.exe accelerator # verifies all NPU stages
+& .build\release\digup.exe accelerator --list --json # metadata only
+& .build\release\digup.exe accelerator # verifies the required model stages
 ```
+
+The existing command-line exporter is also supported. Its requirements are in `worker/openvino/requirements.txt`.
+See [Intel setup validation](intel-openvino.md) for hosted evidence and the physical-device gates.
 
 ## Validation and hardware limits
 

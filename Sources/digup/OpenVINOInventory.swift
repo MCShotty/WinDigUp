@@ -33,7 +33,7 @@ func openVINOInventory() throws -> [String: Any] {
         guard let value else { throw CLIError("Invalid OpenVINO discovery response.") }
         return value
     } catch {
-        return ["schemaVersion": 1, "probeOnly": true, "devices": [],
+        return ["schemaVersion": 1, "probeOnly": true, "devices": [], "runtimeReady": false,
                 "backends": [["backend": backend.rawValue, "state": "unavailable", "message": "\(error)"]]]
     }
 }
