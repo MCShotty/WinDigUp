@@ -99,3 +99,18 @@ def test_stable_identity_follows_a_device_when_ordinal_changes():
     first = Reordered(["GPU.0"])
     identity = select_device(first, "openvino-gpu")["stableID"]
     assert select_device(Reordered(["GPU.2"]), "openvino-gpu", identity)["id"] == "GPU.2"
+
+
+@pytest.mark.parametrize("kind", ["GPU", "NPU"])
+@pytest.mark.parametrize("selected,reported", [("", ".0"), (".0", ""), (".0", ".0"), ("", "")])
+def test_primary_device_aliases_do_not_reject_valid_openvino_receipts(kind, selected, reported):
+    class Compiled:
+        def get_property(self, key): return [kind + reported]
+    verify_selected(Compiled(), {"id":kind+selected, "backend":"openvino-gpu" if kind=="GPU" else "openvino-npu"})
+
+
+def test_primary_alias_never_identifies_a_secondary_device():
+    class Compiled:
+        def get_property(self, key): return ["GPU"]
+    with pytest.raises(RuntimeError, match="Exclusive"):
+        verify_selected(Compiled(), {"id":"GPU.1", "backend":"openvino-gpu"})

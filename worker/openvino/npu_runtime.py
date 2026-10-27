@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 import numpy as np
-from devices import compile_gpu, select_device, verify_selected
+from devices import compile_gpu, device_aliases, select_device, verify_selected
 
 
 def digest(path: Path) -> str:
@@ -40,9 +40,10 @@ def verify_execution(compiled) -> None:
 def compile_npu(core, model, name: str, device="NPU"):
     # NPUW can partition an explicit NPU request between NPU and CPU. Do not enable that wrapper.
     supported = core.query_model(model, device, {"NPU_USE_NPUW": False})
+    allowed_ops = device_aliases(device, "NPU") | {"NPU"}
     unsupported = {op.get_type_name() for op in model.get_ops()
         if op.get_type_name() not in ("Parameter", "Result", "Constant")
-        and str(supported.get(op.get_friendly_name(), "")) not in (device, "NPU")}
+        and str(supported.get(op.get_friendly_name(), "")) not in allowed_ops}
     if unsupported:
         raise RuntimeError(f"NPU does not support {name}: {', '.join(sorted(unsupported))}; CPU fallback disabled")
     compiled = core.compile_model(model, device, {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,

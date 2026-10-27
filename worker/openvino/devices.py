@@ -54,7 +54,7 @@ def select_device(core, backend, requested=""):
     devices = device_inventory(core, backend)
     eligible = [d for d in devices if d["available"]]
     if requested:
-        matches = [d for d in eligible if requested in (d["id"], d["stableID"])]
+        matches = [d for d in eligible if requested == d["stableID"] or requested in device_aliases(d["id"], kind_for(backend))]
         if len(matches) != 1:
             raise RuntimeError("The selected OpenVINO device is unavailable. Refresh devices and re-select it; no fallback was attempted.")
         selected = matches[0]
@@ -69,14 +69,16 @@ def select_device(core, backend, requested=""):
     return eligible[0]
 
 
+def device_aliases(device, kind):
+    return {kind, kind + ".0"} if device in (kind, kind + ".0") else {device}
+
+
 def verify_selected(compiled, selected):
     devices = list(compiled.get_property("EXECUTION_DEVICES"))
     expected = selected["id"]
     kind = kind_for(selected["backend"])
-    # A bare plugin name is an alias only for the one device selected by that plugin.
-    allowed = {expected}
-    if expected == kind + ".0":
-        allowed.add(kind)
+    # OpenVINO uses both spellings for the same primary device.
+    allowed = device_aliases(expected, kind)
     if not devices or any(str(device) not in allowed for device in devices):
         raise RuntimeError("Exclusive " + expected + " execution required, got " + repr(devices) + "; CPU fallback disabled")
 
@@ -84,9 +86,10 @@ def verify_selected(compiled, selected):
 def compile_gpu(core, model, name, selected):
     device = selected["id"]
     supported = core.query_model(model, device)
+    allowed_ops = device_aliases(device, "GPU") | {"GPU"}
     unsupported = {op.get_type_name() for op in model.get_ops()
                    if op.get_type_name() not in ("Parameter", "Result", "Constant")
-                   and str(supported.get(op.get_friendly_name(), "")) not in (device, "GPU")}
+                   and str(supported.get(op.get_friendly_name(), "")) not in allowed_ops}
     if unsupported:
         raise RuntimeError("Intel GPU does not support " + name + ": " + ", ".join(sorted(unsupported)) + "; CPU fallback disabled")
     compiled = core.compile_model(model, device, {
