@@ -850,7 +850,7 @@ final class SearchService: @unchecked Sendable {
         let backend = try Acceleration.selected()
         return ApplicationStore.fingerprint(
             info: worker.info, backend: backend.rawValue,
-            runtimeBuild: backend == .openvinoNPU
+            runtimeBuild: backend.isOpenVINO
                 ? "" : backend == .nvidiaCUDA ? LlamaEmbedder.buildIdentity : LlamaEmbedder.buildTag,
             documentPromptVersion: settings ? WindowsSettingsStore.promptVersion : ApplicationStore.promptVersion)
     }
@@ -941,7 +941,9 @@ final class SearchService: @unchecked Sendable {
             var config =
                 try WorkerConfig.fromEnvironment()
                 ?? WorkerConfig.helper(URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL)
-            if backend != .openvinoNPU { config.arguments += ["--index", baseDirectory.path] }
+            if backend.isOpenVINO {
+                config.arguments += ["--cache", directory.appendingPathComponent("openvino-cache").path]
+            } else { config.arguments += ["--index", baseDirectory.path] }
             config.environment["DIGUP_INFERENCE_PRIORITY"]="foreground"
             config.onInferenceActivity={ [self] activity in
                 guard let data=try? JSONEncoder().encode(activity),let fields=try? JSONSerialization.jsonObject(with:data) else{return}
@@ -949,8 +951,8 @@ final class SearchService: @unchecked Sendable {
             }
             config.log = log
             config.qos = .userInitiated
-            config.startupTimeout = 180
-            config.requestTimeout = 60
+            config.startupTimeout = backend.isOpenVINO ? 1800 : 180
+            config.requestTimeout = backend.isOpenVINO ? 300 : 60
             config.onStart = { [self] process in
                 stateLock.withLock {
                     loadingProcess = process
@@ -963,7 +965,7 @@ final class SearchService: @unchecked Sendable {
             }
             let worker = try EmbeddingWorker(config, textOnly: true)
             guard worker.info.executionPolicy == "accelerator-only", worker.info.dim == 768,
-                backend != .openvinoNPU || worker.info.device?.hasPrefix("NPU") == true
+                !backend.isOpenVINO || backend.acceptsOpenVINOReceipt(worker.info)
             else {
                 worker.close()
                 throw CLIError("Query worker did not verify the selected accelerator-only execution")

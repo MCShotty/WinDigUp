@@ -2,7 +2,16 @@ import Foundation
 
 /// Inference is always on a hardware accelerator. Host preprocessing and I/O are separate from model execution.
 public enum Acceleration: String, Sendable, CaseIterable {
-    case vulkan, amdVulkan = "amd-vulkan", nvidiaCUDA = "nvidia-cuda", openvinoNPU = "openvino-npu", metal
+    case vulkan, amdVulkan = "amd-vulkan", nvidiaCUDA = "nvidia-cuda", openvinoNPU = "openvino-npu", openvinoGPU = "openvino-gpu", metal
+
+    public var isOpenVINO: Bool { self == .openvinoNPU || self == .openvinoGPU }
+    public var openVINODeviceKind: String { self == .openvinoGPU ? "GPU" : "NPU" }
+
+    public func acceptsOpenVINOReceipt(_ info: WorkerInfo) -> Bool {
+        guard isOpenVINO, info.executionPolicy == "accelerator-only",
+              let device = info.device, device == openVINODeviceKind || device.hasPrefix(openVINODeviceKind + ".") else { return false }
+        return info.backend == rawValue || (self == .openvinoNPU && info.backend == nil)
+    }
 
     public static let cudaPrecision = "cuda-fp32-v1"
     /// Matches the shipped real-code targets; unknown future SMs require a new validated build.
@@ -24,7 +33,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
         switch self {
         case .nvidiaCUDA: "cuda"
         case .metal: "metal"
-        case .openvinoNPU: "openvino"
+        case .openvinoNPU, .openvinoGPU: "openvino"
         default: "vulkan"
         }
     }
@@ -32,7 +41,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
     /// --index is always the base directory, including when its last component resembles a backend name.
     public func indexDirectory(base: URL) -> URL {
         switch self {
-        case .nvidiaCUDA, .openvinoNPU: base.appendingPathComponent(rawValue).standardizedFileURL
+        case .nvidiaCUDA, .openvinoNPU, .openvinoGPU: base.appendingPathComponent(rawValue).standardizedFileURL
         default: base.standardizedFileURL
         }
     }
@@ -44,7 +53,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
         case .amdVulkan: return device.vendorID == 0x1002
         case .vulkan: return device.vendorID != 0x10de && device.vendorID != 0
         case .metal: return true
-        case .openvinoNPU: return false
+        case .openvinoNPU, .openvinoGPU: return false
         }
     }
 

@@ -2,7 +2,7 @@
 """Offline preparation, not an application inference path.
 
 Export a local, licensed Transformers EmbeddingGemma 2 snapshot to static OpenVINO graphs. PyTorch runs only here,
-to convert and write reference fixtures. Production inference uses digup_openvino.py and exclusively Intel NPU.
+to convert and write reference fixtures. Production inference uses digup_openvino.py on the selected Intel NPU or integrated GPU.
 """
 from __future__ import annotations
 
@@ -115,7 +115,9 @@ def export_graph(module, example: dict[str, torch.Tensor], folder: Path, name: s
     return {"file": path.name, "fixture": fixture.name, "inputs": list(example)}
 
 
-def export_bundle(source: Path, folder: Path, revision: str):
+def export_bundle(source: Path, folder: Path, revision: str, progress=None):
+    progress = progress or (lambda phase, message: None)
+    progress("loading", "Reading the local model checkpoint for offline preparation.")
     from PIL import Image
     from transformers import AutoModel, AutoProcessor
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -141,6 +143,7 @@ def export_bundle(source: Path, folder: Path, revision: str):
         text = "task: search result | query: lemon cake" if role == "query" else "title: recipe.txt | text: Lemon cake recipe."
         encoded = processor.tokenizer(text, padding="max_length", max_length=length, truncation=True, return_tensors="pt")
         ids, mask = encoded["input_ids"], encoded["attention_mask"]
+        progress("exporting", f"Preparing the {length}-token text profile.")
         graphs[f"tokens-{role}"] = export_graph(Tokens(model), {"input_ids": ids}, folder, f"tokens-{role}")
         with torch.inference_mode():
             rows = Tokens(model)(ids)
@@ -150,14 +153,17 @@ def export_bundle(source: Path, folder: Path, revision: str):
     for budget in (70, 140, 280, 560, 1120):
         encoded = processor(images=image, images_kwargs={"max_soft_tokens": budget}, return_tensors="pt")
         name = f"vision-{budget}"
+        progress("exporting", f"Preparing image profile {budget}.")
         graphs[name] = export_graph(Vision(model, budget), {"pixel_values": encoded["pixel_values"],
             "pixel_position_ids": encoded["image_position_ids"]}, folder, name)
     # Thirty seconds including padded silence, exactly matching runtime feature preparation.
     sound = np.random.default_rng(7).normal(0, 0.1, 16_000).astype(np.float32)
     encoded = processor(audio=sound, sampling_rate=16_000, return_tensors="pt",
                         audio_kwargs={"padding": "max_length", "max_length": 480_000, "truncation": True})
+    progress("exporting", "Preparing the audio profile.")
     graphs["audio"] = export_graph(Audio(model), {"input_features": encoded["input_features"],
         "input_features_mask": encoded["input_features_mask"].bool()}, folder, "audio")
+    progress("checksumming", "Checking exported graphs and writing the model fingerprint.")
     manifest = {"format": 1, "model": "google/embeddinggemma-2", "revision": revision, "dim": 768,
                 "lengths": {"query": 512, "index": 2048}, "graphs": graphs,
                 "files": {str(path.relative_to(folder).as_posix()): digest(path)
@@ -165,7 +171,7 @@ def export_bundle(source: Path, folder: Path, revision: str):
     manifest["bundle_id"] = bundle_id(manifest)
     import json
     (folder / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Exported {folder}. Runtime will verify every stage on the Intel NPU before use.")
+    progress("ready", str(folder))
 
 
 if __name__ == "__main__":
@@ -173,5 +179,16 @@ if __name__ == "__main__":
     parser.add_argument("--source", required=True, type=Path, help="Local, complete Transformers model snapshot")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    export_bundle(args.source, args.output, args.revision)
+    def progress(phase, message):
+        import json
+        if args.json:
+            print(json.dumps({"event": "preparation", "phase": phase, "message": message}), flush=True)
+        else:
+            print(message, flush=True)
+    try:
+        export_bundle(args.source, args.output, args.revision, progress)
+    except Exception as error:
+        progress("failed", str(error)[:1500])
+        raise

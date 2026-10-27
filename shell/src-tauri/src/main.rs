@@ -6,6 +6,8 @@
 #![cfg_attr(any(not(debug_assertions), feature = "windows-gui"), windows_subsystem = "windows")]
 
 mod acceleration;
+mod openvino_setup;
+mod openvino_commands;
 mod accelerator_probe;
 mod activity;
 mod applications;
@@ -99,6 +101,7 @@ struct Shell {
     search: SearchService,
     index: IndexService,
     model: ModelDownload,
+    intel_setup: Arc<openvino_setup::Setup>,
     /// The model for the setup window and the tray: {"state": "checking|downloading|waiting|ready|failed", …}.
     model_state: Mutex<Value>,
     /// What indexing is doing, from the index helper's events (status.rs).
@@ -214,7 +217,7 @@ impl Shell {
     }
 
     fn helper_environment(&self) -> Vec<(String, String)> {
-        let mut env = self.settings.lock().unwrap().acceleration.environment();
+        let mut env = self.intel_setup.resolve(self.settings.lock().unwrap().acceleration.clone()).environment();
         env.extend(self.options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())));
         env
     }
@@ -796,6 +799,8 @@ fn main() {
             remove_folder, index_folder_first, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses, set_acceleration, accelerator_devices,
+            openvino_commands::openvino_status, openvino_commands::openvino_preparation, openvino_commands::prepare_openvino,
+            openvino_commands::cancel_openvino_preparation, openvino_commands::pick_openvino_path,
             enrichment_commands::set_app_enrichment_options, enrichment_commands::refresh_app_descriptions,
             enrichment_commands::clear_app_descriptions, enrichment_commands::open_app_description_source,
             discovery_commands::discovery_status, discovery_commands::discovery_volumes, discovery_commands::refresh_discovery_volumes,
@@ -853,11 +858,14 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     search_args.extend(options.index.iter().flat_map(|index| ["--index".to_string(), index.display().to_string()]));
     search_args.extend(folder_arguments(&settings, &code_folders));
     search_args.extend(roots);
+    let base_index = options.index_folder().unwrap_or_else(std::env::temp_dir);
+    let intel_setup = openvino_setup::Setup::new(base_index.clone(), &options.helper, logs.join("openvino-setup.log"));
+    let initial_acceleration = intel_setup.resolve(settings.acceleration.clone());
     let search = SearchService::new(
         Launch {
             program: options.helper.clone(),
             args: search_args,
-            env: settings.acceleration.environment().into_iter().chain(options.models.iter().map(|models|
+            env: initial_acceleration.environment().into_iter().chain(options.models.iter().map(|models|
                 ("DIGUP_MODELS".to_string(), models.display().to_string()))).collect(),
             log: Some(logs.join("search.log")),
             background: false,   // it answers typing
@@ -882,7 +890,6 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     for root in &options.roots {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
-    let base_index = options.index_folder().unwrap_or_else(std::env::temp_dir);
     let personalization = Arc::new(personalization::Personalization::new(base_index.join("relevance-history.json"), settings.personalization.clone()));
     let application_root = base_index.join("applications");
     let applications = applications::Catalog::new(application_root.clone(), settings.applications.clone(), {
@@ -913,6 +920,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     });
     let launcher_history=Arc::new(launcher::History::new(base_index.join("launcher-recent.json")));
     let shell = Arc::new(Shell {
+        intel_setup,
         personalization,
         launcher_history,
         applications,
@@ -1570,6 +1578,7 @@ async fn activity_snapshot(shell: State<'_, Arc<Shell>>) -> Result<Value, String
             runtime: shell.diagnostics.runtime(), events: shell.diagnostics.significant(),
             has_folders, blocked_by,
         });
+        snapshot["inference"]["preparation"] = shell.intel_setup.snapshot();
         snapshot["inference"]["configured"]["backgroundJobs"] = json!(configured.background_jobs());
         let telemetry = shell.telemetry.snapshot(&snapshot["inference"]["configured"], &snapshot["inference"]["verified"]);
         snapshot["inference"]["telemetry"] = telemetry;
@@ -1632,7 +1641,7 @@ fn storage(shell: &Shell) -> Value {
         ["", "-wal", "-shm"].iter().filter_map(|end| std::fs::metadata(index.join(format!("{name}{end}"))).ok()).map(|file| file.len()).sum()
     };
     let acceleration = shell.settings.lock().unwrap().acceleration.clone();
-    let models = if acceleration.backend == "openvino-npu" {
+    let models = if acceleration.is_openvino() {
         (!acceleration.models.is_empty()).then(|| PathBuf::from(acceleration.models))
     } else {
         shell.options.models.clone().or_else(|| {
@@ -1931,9 +1940,10 @@ fn set_panel_material(app: AppHandle, shell: State<'_, Arc<Shell>>, material: se
 
 /// Applying an inference configuration restarts all helpers together so query and index vectors cannot mix runtimes.
 #[tauri::command]
-fn set_acceleration(app: AppHandle, shell: State<'_, Arc<Shell>>, acceleration: acceleration::Acceleration) -> Result<(), String> {
-    let acceleration = acceleration.confirmed();
-    acceleration.validate()?;
+async fn set_acceleration(app: AppHandle, shell: State<'_, Arc<Shell>>, acceleration: acceleration::Acceleration) -> Result<(), String> {
+    let setup = shell.intel_setup.clone();
+    let acceleration = tauri::async_runtime::spawn_blocking(move || setup.ready_config(acceleration.confirmed()))
+        .await.map_err(|error| error.to_string())??;
     {
         let mut settings = shell.settings.lock().unwrap();
         let mut updated = settings.clone();

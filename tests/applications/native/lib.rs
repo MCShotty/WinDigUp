@@ -1,3 +1,5 @@
+#[path = "../../../shell/src-tauri/src/openvino_setup.rs"]
+pub mod openvino_setup;
 #[path = "../../../shell/src-tauri/src/launcher.rs"]
 pub mod launcher;
 #[path = "../../../shell/src-tauri/src/watch_changes.rs"]

@@ -1,4 +1,4 @@
-"""All neural-network stages run on Intel NPU. NumPy only transports tensors and checks results.
+"""All neural-network stages run on the explicitly selected Intel accelerator. NumPy only transports tensors and checks results.
 
 The tokenizer, image decoder/resizer and audio feature extractor are host preprocessing. No PyTorch model is
 loaded by this module. AUTO, HETERO, CPU and software inference are deliberately unavailable.
@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 import numpy as np
+from devices import compile_gpu, select_device, verify_selected
 
 
 def digest(path: Path) -> str:
@@ -36,15 +37,15 @@ def verify_execution(compiled) -> None:
         raise RuntimeError(f"Exclusive Intel NPU execution required, got {devices!r}; CPU fallback disabled")
 
 
-def compile_npu(core, model, name: str):
+def compile_npu(core, model, name: str, device="NPU"):
     # NPUW can partition an explicit NPU request between NPU and CPU. Do not enable that wrapper.
-    supported = core.query_model(model, "NPU", {"NPU_USE_NPUW": False})
+    supported = core.query_model(model, device, {"NPU_USE_NPUW": False})
     unsupported = {op.get_type_name() for op in model.get_ops()
         if op.get_type_name() not in ("Parameter", "Result", "Constant")
         and not only_npu([supported.get(op.get_friendly_name(), "")])}
     if unsupported:
         raise RuntimeError(f"NPU does not support {name}: {', '.join(sorted(unsupported))}; CPU fallback disabled")
-    compiled = core.compile_model(model, "NPU", {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,
+    compiled = core.compile_model(model, device, {"PERFORMANCE_HINT": "LATENCY", "ENABLE_PROFILING": True,
                                                "NPU_USE_NPUW": False})
     verify_execution(compiled)
     return compiled
@@ -93,12 +94,19 @@ def check_parity(actual, reference, name: str) -> None:
 
 
 class NPURuntime:
-    def __init__(self, folder: str | Path, text_only: bool = False, *, core=None):
+    def __init__(self, folder: str | Path, text_only: bool = False, *, core=None,
+                 backend="openvino-npu", device="", cache=None):
         if core is None:
             import openvino as ov
             core = ov.Core()
-        if not any(only_npu([device]) for device in core.available_devices):
+        self.backend = backend
+        if backend == "openvino-npu" and not any(only_npu([item]) for item in core.available_devices):
             raise RuntimeError("Intel NPU not found. Install the Intel NPU driver; CPU fallback is disabled")
+        self.selected = select_device(core, backend, device)
+        if cache:
+            cache = Path(cache).resolve()
+            cache.mkdir(parents=True, exist_ok=True)
+            core.set_property({"CACHE_DIR": str(cache)})
         self.folder = Path(folder).resolve()
         self.manifest = validate_bundle(self.folder)
         self.text_only = text_only
@@ -111,7 +119,9 @@ class NPURuntime:
         for name in names:
             entry = self.manifest["graphs"][name]
             model = core.read_model(str(self.folder / entry["file"]))
-            compiled = compile_npu(core, model, name)
+            compiled = (compile_npu(core, model, name, self.selected["id"]) if backend == "openvino-npu"
+                        else compile_gpu(core, model, name, self.selected))
+            verify_selected(compiled, self.selected)
             self.graphs[name] = compiled.create_infer_request()
             with np.load(self.folder / entry["fixture"], allow_pickle=False) as fixture:
                 inputs = {key: fixture[f"input-{key}"] for key in entry["inputs"]}
@@ -128,7 +138,7 @@ class NPURuntime:
     def run(self, name: str, inputs: dict) -> list[np.ndarray]:
         request = self.graphs[name]
         # Explicit NPU compilation is checked again for each request, including cached compiled models.
-        verify_execution(request.get_compiled_model())
+        verify_selected(request.get_compiled_model(), self.selected)
         result = request.infer(inputs)
         for item in request.profiling_info:
             if "CPU" in item.exec_type.upper():
@@ -151,7 +161,7 @@ class NPURuntime:
     def _vector(self, encoded, features=None, token_id=None):
         vector = self.run(f"text-{self.role}", self._text_inputs(encoded, features, token_id))[0]
         if vector.shape != (1, 768) or not np.isfinite(vector).all() or abs(np.linalg.norm(vector) - 1) >= 0.005:
-            raise RuntimeError("NPU returned an invalid embedding")
+            raise RuntimeError("Intel accelerator returned an invalid embedding")
         return vector[0]
 
     def texts(self, texts: list[str]) -> list[np.ndarray]:
