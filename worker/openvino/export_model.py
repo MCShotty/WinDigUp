@@ -58,7 +58,7 @@ class Vision(nn.Module):
         self.output_length = int(budget)
 
     def forward(self, pixel_values, pixel_position_ids):
-        # Keep padded rows static; stripping them is a host tensor copy after NPU inference.
+        # Keep padded rows static; stripping them is a host tensor copy after accelerator inference.
         padding = (pixel_position_ids == -1).all(dim=-1)
         inputs = self.tower.patch_embedder(pixel_values, pixel_position_ids, padding)
         length = pixel_values.shape[1]
@@ -119,12 +119,16 @@ def export_bundle(source: Path, folder: Path, revision: str, progress=None):
     progress = progress or (lambda phase, message: None)
     progress("loading", "Reading the local model checkpoint for offline preparation.")
     from PIL import Image
-    from transformers import AutoModel, AutoProcessor
+    from transformers import AutoConfig, AutoModel, AutoProcessor
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("--revision must be the full Hugging Face snapshot commit")
     if folder.exists() and any(folder.iterdir()):
         raise ValueError("Output folder must be empty; export cannot overwrite a bundle in use")
     folder.mkdir(parents=True, exist_ok=True)
+    # Reject another model before allocating its weights.
+    config = AutoConfig.from_pretrained(str(source), local_files_only=True, trust_remote_code=False)
+    if config.model_type != "embedding_gemma2" or config.text_config.embedding_dim != 768:
+        raise ValueError("Expected a full EmbeddingGemma 2 checkpoint with 768-dimensional output")
     # No remote code, downloads, quantization or silent precision conversion.
     model = AutoModel.from_pretrained(str(source), local_files_only=True, trust_remote_code=False,
                                      dtype=torch.float32, attn_implementation="eager").eval()

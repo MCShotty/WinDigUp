@@ -74,13 +74,13 @@ def validate_bundle(folder: Path) -> dict:
     return manifest
 
 
-def check_parity(actual, reference, name: str) -> None:
+def check_parity(actual, reference, name: str, device="NPU") -> None:
     a, b = np.asarray(actual), np.asarray(reference)
     if a.shape != b.shape or not np.isfinite(a).all():
-        raise RuntimeError(f"NPU parity failed for {name}: invalid shape or non-finite values")
+        raise RuntimeError(f"{device} parity failed for {name}: invalid shape or non-finite values")
     if a.dtype == np.bool_ or b.dtype == np.bool_:
         if not np.array_equal(a, b):
-            raise RuntimeError(f"NPU parity failed for {name}: different mask")
+            raise RuntimeError(f"{device} parity failed for {name}: different mask")
         return
     a, b = a.astype(np.float64).ravel(), b.astype(np.float64).ravel()
     norm_a, norm_b = np.linalg.norm(a), np.linalg.norm(b)
@@ -90,7 +90,7 @@ def check_parity(actual, reference, name: str) -> None:
         cosine = np.dot(a, b) / (norm_a * norm_b) if norm_a else 0
         valid = cosine >= 0.999 and np.linalg.norm(a - b) / norm_b <= 0.02
     if not valid:
-        raise RuntimeError(f"NPU parity failed for {name}; this model/driver cannot run accurately without CPU fallback")
+        raise RuntimeError(f"{device} parity failed for {name}; this model/driver cannot run accurately without CPU fallback")
 
 
 class NPURuntime:
@@ -127,7 +127,7 @@ class NPURuntime:
                 inputs = {key: fixture[f"input-{key}"] for key in entry["inputs"]}
                 results = self.run(name, inputs)
                 for i, result in enumerate(results):
-                    check_parity(result, fixture[f"output-{i}"], f"{name}/{i}")
+                    check_parity(result, fixture[f"output-{i}"], f"{name}/{i}", self.selected["id"])
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(str(self.folder / "processor"), local_files_only=True,
                                                        trust_remote_code=False)
@@ -154,7 +154,7 @@ class NPURuntime:
         rows = self.run(f"tokens-{self.role}", {"input_ids": ids})[0]
         if features is not None:
             if int(placeholders.sum()) != len(features):
-                raise ValueError("Media token count differs from NPU encoder output; input was truncated")
+                raise ValueError("Media token count differs from Intel encoder output; input was truncated")
             rows[placeholders] = features  # copy encoder rows, no host embedding/projection/normalization
         return {"inputs_embeds": rows, "attention_mask": mask}
 

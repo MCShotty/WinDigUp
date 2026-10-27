@@ -86,7 +86,7 @@ public enum Acceleration: String, Sendable, CaseIterable {
 
     public static func selected(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> Self {
         if environment["DIGUP_DEVICE"]?.lowercased() == "cpu" {
-            throw WorkerError.failed("CPU inference is disabled. Choose NVIDIA CUDA, AMD Vulkan or OpenVINO NPU.")
+            throw WorkerError.failed("CPU inference is disabled. Choose NVIDIA CUDA, AMD Vulkan or Intel OpenVINO GPU/NPU.")
         }
         if environment["DIGUP_WORKER_DIR"] != nil {
             throw WorkerError.failed("Unverified worker overrides are disabled by the accelerator-only policy.")

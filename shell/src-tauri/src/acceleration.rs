@@ -99,7 +99,7 @@ impl Acceleration {
             return Err("NVIDIA Vulkan has been removed. Select NVIDIA CUDA for RTX 20-series and newer.".into());
         }
         if !["vulkan", "amd-vulkan", "nvidia-cuda", "openvino-npu", "openvino-gpu", "metal"].contains(&self.backend.as_str()) {
-            return Err("Choose NVIDIA CUDA, AMD Vulkan or Intel NPU. CPU inference is disabled.".into());
+            return Err("Choose NVIDIA CUDA, AMD Vulkan, Intel OpenVINO GPU/NPU or Metal. CPU inference is disabled.".into());
         }
         if self.backend == "nvidia-cuda" && (self.gpu.starts_with("Vulkan") || self.gpu.starts_with("VK-"))
             || matches!(self.backend.as_str(), "vulkan" | "amd-vulkan") && (self.gpu.starts_with("CUDA") || self.gpu.starts_with("GPU-")) {
