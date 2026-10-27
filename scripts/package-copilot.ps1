@@ -63,13 +63,14 @@ try {
   <uap:VisualElements DisplayName="WinDigUp" Description="Search apps, files and Windows settings" BackgroundColor="transparent" Square150x150Logo="copilot/Assets/Logo150.png" Square44x44Logo="copilot/Assets/Logo44.png" AppListEntry="none"/>
   <Extensions><uap3:Extension Category="windows.appExtension"><uap3:AppExtension Name="com.microsoft.windows.copilotkeyprovider" Id="WinDigUpLauncher" DisplayName="WinDigUp" Description="Open WinDigUp quick search" PublicFolder="Public"/></uap3:Extension></Extensions>
  </Application></Applications>
- <Capabilities><rescap:Capability Name="runFullTrust"/></Capabilities>
+ <Capabilities><rescap:Capability Name="runFullTrust"/><rescap:Capability Name="unvirtualizedResources"/></Capabilities>
 </Package>
 "@
  $packageManifest | Set-Content -Encoding UTF8 (Join-Path $layout 'AppxManifest.xml')
  Copy-Item (Join-Path $layout 'AppxManifest.xml') (Join-Path $Destination 'AppxManifest.xml')
  $msix=Join-Path $Destination 'WinDigUp.Identity.msix'
- & makeappx.exe pack /o /d $layout /p $msix
+ # External-location packages require /nv because their executable is installed by NSIS.
+ & makeappx.exe pack /o /d $layout /nv /p $msix
  if($LASTEXITCODE){throw 'Identity package validation failed.'}
  $sign=@('sign','/fd','SHA256','/f',$pfx,'/p',$password)
  if($env:DIGUP_MSIX_TEST_SIGN -ne '1'){

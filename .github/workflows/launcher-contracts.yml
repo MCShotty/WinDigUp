@@ -29,4 +29,14 @@ jobs:
           $manifest=[xml](Get-Content -Raw shell/src-tauri/copilot/AppxManifest.xml)
           if($manifest.Package.Identity.Name -ne 'MCShotty.WinDigUp.Launcher'){throw 'Unexpected package identity'}
           if($manifest.Package.Applications.Application.Extensions.Extension.AppExtension.Name -ne 'com.microsoft.windows.copilotkeyprovider'){throw 'Provider registration missing'}
+          scripts/check-windows-copilot.ps1 -PrepareTrust
+          $root=[IO.Path]::GetFullPath((Join-Path $PWD 'shell/src-tauri'))
+          try {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root
+            if($LASTEXITCODE){throw 'Windows rejected the signed package manifest'}
+            $registered=Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher'
+            if(!$registered){throw 'Signed package was not registered'}
+          } finally {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root -Uninstall
+          }
           Write-Output 'PASS: native activation shim, valid manifest and signed identity package; no physical picker claim.'

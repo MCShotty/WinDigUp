@@ -4,9 +4,16 @@ const WindowsSettings = {
   configure(info){if(!info)return;if(typeof info.enabled==="boolean")this.enabled=info.enabled;
     if(typeof info.supported==="boolean")this.supported=info.supported;
     if(typeof info.ordinarySearches==="boolean")this.ordinarySearches=info.ordinarySearches;},
+  icons:new Map(),
   icon(hit){const holder=element("span","app-icon");holder.setAttribute("aria-hidden","true");
     const image=element("img");image.src="settings-generic.svg";image.alt="";holder.append(image);
-    if(hit?.source==="control_panel")invoke("windows_setting_icon",{settingId:hit.id,size:64}).then(fileURL).then(src=>{if(holder.isConnected)image.src=src;}).catch(()=>{});
+    if(hit?.source==="control_panel"){
+      if(!this.icons.has(hit.id)){
+        this.icons.set(hit.id,invoke("windows_setting_icon",{settingId:hit.id,size:64}).then(fileURL));
+        if(this.icons.size>256)this.icons.delete(this.icons.keys().next().value);
+      }
+      this.icons.get(hit.id).then(src=>{if(holder.isConnected)image.src=src;}).catch(()=>{});
+    }
     return holder;},
   async open(hit){if(Apps.launching.has(hit.id))return;Apps.launching.add(hit.id);
     try{return await invoke("open_windows_setting",{settingId:hit.id});}

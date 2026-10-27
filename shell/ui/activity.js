@@ -379,7 +379,8 @@ window.ActivityUI = (() => {
       put("runtime", runtime); this.get("runtime").hidden = !runtime;
       put("verification", inference.checking ? "Checking accelerator execution…" : verified ? `Accelerator-only execution verified${inference.verified.at ? ` · ${ago(inference.verified.at)}` : ""}` : "Waiting for a verified runtime receipt");
       const drive=snapshot.discovery||{},dp=drive.progress||{},enrichment=snapshot.enrichment||{},ep=enrichment.progress||{},settings=snapshot.windowsSettings||{};
-      const settingsStatus=settings.catalog?.enabled ? `${number(settings.catalog.count)} Windows destinations · ${settings.purpose?.message||settings.purpose?.state||"Names ready"}` : "Windows settings search off";
+      const controlPanel=settings.catalog?.controlPanel||{},controlErrors=Object.values(controlPanel).map(source=>source.error).filter(Boolean);
+      const settingsStatus=settings.catalog?.enabled ? `${number(settings.catalog.count)} Windows destinations · ${settings.catalog.refreshing?"Refreshing Control Panel":controlErrors.length?"Control Panel refresh incomplete":settings.purpose?.message||settings.purpose?.state||"Names ready"}` : "Windows settings search off";
       const driveStatus=!drive.options?.enabled?"Drive discovery off":`${dp.phase||"Waiting"}${dp.records!=null?` · ${number(dp.records)} records checked`:""}${dp.candidates!=null?` · ${number(dp.candidates)} executable candidates`:""}${dp.accepted!=null?` · ${number(dp.accepted)} accepted`:""}`;
       const descriptionStatus=`${enrichment.options?.enabled?(ep.state||"Waiting"):"Online descriptions off"}${ep.enriched!=null?` · ${number(ep.enriched)} apps enhanced`:""}`;
       this.get("discovery-section").hidden=this.get("discovery-health").hidden=!drive.supported;
@@ -391,7 +392,7 @@ window.ActivityUI = (() => {
         PipelineUI.entries(drive).length+" selected drives"+(drive.running?" · Discovery running":"")) : driveStatus;
       put("settings-status",settingsStatus);put("drive-status",driveSummary);put("description-status",descriptionStatus);
       put("health-settings",settingsStatus);put("health-drives",driveSummary);put("health-descriptions",descriptionStatus);
-      put("discovery-note",[dp.message,ep.message,settings.purpose?.message,dp.mode==="directory"?"Using directory fallback. Fast NTFS discovery is optional in Drives settings.":""].filter(Boolean).join(" · "));
+      put("discovery-note",[dp.message,ep.message,settings.purpose?.message,...controlErrors,dp.mode==="directory"?"Using directory fallback. Fast NTFS discovery is optional in Drives settings.":""].filter(Boolean).join(" · "));
       put("health-files", title); put("health-catalog", catalogState); put("health-purpose", purposeState); put("health-inference", inference.encoder);
       put("health-detail", [f.error, ...(f.missing || []).map(path=>`Folder unavailable: ${shortPath(path)}`),
         ...(f.unreadable || []).map(path=>`Folder unreadable: ${shortPath(path)}`), ...sourceErrors, purpose.message, inference.error, dp.message, ep.message, settings.purpose?.message].filter(Boolean).join("\n"));
