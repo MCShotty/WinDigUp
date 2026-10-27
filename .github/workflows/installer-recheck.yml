@@ -1,0 +1,59 @@
+name: Installed Copilot verification
+on:
+  push:
+    branches: [codex/installer-recheck]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Require identical application sources and locate the immutable installer
+        id: candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $expected='6fc826c43c0a65f69cd906049aea735bd8ef91dd'
+          git fetch --no-tags --depth=1 origin $expected
+          if($LASTEXITCODE){throw 'Cannot verify artifact source'}
+          git diff --exit-code $expected HEAD -- . ':!.github/workflows/launcher-contracts.yml' ':!.github/workflows/installer-recheck.yml' ':!scripts/check-windows-copilot.ps1'
+          if($LASTEXITCODE){throw 'Runtime or packaging sources differ; rebuild instead of reusing this installer'}
+          $headers=@{Authorization=('Bearer '+$env:GH_TOKEN);Accept='application/vnd.github+json'}
+          $url='https://api.github.com/repos/MCShotty/WinDigUp/actions/runs/40454742713'
+          $run=Invoke-RestMethod -Headers $headers -Uri $url
+          if($run.head_sha -ne $expected){throw 'Wrong installer source commit'}
+          $found=$null
+          for($attempt=0;$attempt -lt 60;$attempt++){
+            $artifacts=Invoke-RestMethod -Headers $headers -Uri ($url+'/artifacts')
+            $found=@($artifacts.artifacts|Where-Object{$_.name -eq 'DigUp-windows-x64-test-signed' -and !$_.expired})
+            if($found.Count -eq 1){break}
+            Start-Sleep -Seconds 10
+          }
+          if($found.Count -ne 1){throw 'The matching installer artifact was not published'}
+          ('id='+$found[0].id) >> $env:GITHUB_OUTPUT
+          Write-Output ('Verified identical runtime sources; installer artifact '+$found[0].id+' at '+$expected)
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ steps.candidate.outputs.id }}
+          run-id: 40454742713
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/installer-candidate
+      - name: Install the real NSIS package and verify registered activation
+        shell: pwsh
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'installer-candidate'
+          $cert=@(Get-ChildItem $root -Recurse -Filter TEST-ONLY-WinDigUp.cer)
+          $setup=@(Get-ChildItem $root -Recurse -Filter '*-setup.exe')
+          if($cert.Count -ne 1 -or $setup.Count -ne 1){throw 'Unexpected installer artifact layout'}
+          scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath $cert[0].FullName
+          if($LASTEXITCODE){throw 'Test-only certificate preparation failed'}
+          $process=Start-Process $setup[0].FullName -ArgumentList '/S' -PassThru -Wait
+          if($process.ExitCode -ne 0){throw 'The real NSIS installation failed'}
+          scripts/check-windows-copilot.ps1
+          if($LASTEXITCODE){throw 'Installed Copilot verification failed'}
+          Write-Output 'PASS: actual NSIS post-install registration and cold/warm activation on Windows Server 2022; verified artifact runtime equals PR runtime.'
+          Write-Output 'UNVALIDATED: physical Windows 11 key/picker and physical accelerators.'
