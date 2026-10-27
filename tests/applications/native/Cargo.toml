@@ -38,3 +38,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [[bin]]
 name = "digup-discovery-fixture"
 path = "../../../shell/src-tauri/src/bin/discovery.rs"
+
+[[bin]]
+name="control-panel-provider-check"
+path="control-panel-check.rs"

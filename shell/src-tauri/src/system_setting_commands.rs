@@ -69,7 +69,11 @@ pub fn cancel_windows_settings_search(window:tauri::WebviewWindow,shell:State<'_
 pub async fn open_windows_setting(app:AppHandle,shell:State<'_,Arc<Shell>>,setting_id:String)->Result<(),String> {
     let shell=shell.inner().clone();
     let history=shell.personalization.clone();let key=setting_id.clone();
-    tauri::async_runtime::spawn_blocking(move||shell.windows_settings.launch(&setting_id)).await.map_err(|e|e.to_string())??;
+    tauri::async_runtime::spawn_blocking(move||{
+        let result=shell.windows_settings.launch(&setting_id);
+        if result.is_err(){shell.windows_settings.refresh();}
+        result
+    }).await.map_err(|e|e.to_string())??;
     history.accepted(&key);
     crate::hide_panel(app);
     Ok(())

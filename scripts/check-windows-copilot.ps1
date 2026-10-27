@@ -46,12 +46,12 @@ function OwnedProcesses { @(Get-Process -ErrorAction SilentlyContinue | Where-Ob
 OwnedProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
 try {
  $aumid=$package.PackageFamilyName+'!Launcher'
- Start-Process ('shell:AppsFolder\\'+$aumid)
+ Start-Process ('shell:AppsFolder\'+$aumid)
  $deadline=[DateTime]::UtcNow.AddSeconds(45)
  do {$owners=@(OwnedProcesses);$visible=@($owners|Where-Object{[DigUpCopilotProbe]::HasLauncher([uint32]$_.Id)});if($visible.Count){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
  if($owners.Count -ne 1 -or !$visible.Count){throw 'Registered cold activation did not open one compact launcher.'}
  $first=$owners[0].Id
- Start-Process ('shell:AppsFolder\\'+$aumid)
+ Start-Process ('shell:AppsFolder\'+$aumid)
  Start-Sleep -Seconds 2
  $owners=@(OwnedProcesses)
  if($owners.Count -ne 1 -or $owners[0].Id -ne $first -or ![DigUpCopilotProbe]::HasLauncher([uint32]$first)){

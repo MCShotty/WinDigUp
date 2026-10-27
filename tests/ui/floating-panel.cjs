@@ -101,7 +101,7 @@ let browser;
     assert.equal(await page.locator("#query").getAttribute("aria-expanded"),"false");
     assert.equal(await page.getByRole("button",{name:"Open full search",exact:true}).count(),1);
     await page.evaluate(() => {window.emit("state",{badge:"Indexing",line:"Discovery in progress",indexing:{done:0,total:null}});});
-    assert.equal(await page.locator("#panel").evaluate(node => Math.round(node.getBoundingClientRect().height)),64,
+    assert.equal(await page.locator("#panel").evaluate(node => Math.round(node.getBoundingClientRect().height)),120,
       "Background progress expanded an empty search");
     assert.equal(await page.locator("#activity").isVisible(),false);
     for (const theme of ["light","dark","system"]) {

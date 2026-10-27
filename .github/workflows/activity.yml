@@ -162,6 +162,9 @@ jobs:
             ~/.cargo/registry
             tests/applications/native/target
           key: discovery-windows-2025-v1-${{ hashFiles('tests/applications/native/Cargo.lock') }}
+      - name: Real Control Panel enumeration and Shell activation (no inference)
+        shell: pwsh
+        run: cargo run --release --locked --manifest-path tests/applications/native/Cargo.toml --bin control-panel-provider-check -- "$env:RUNNER_TEMP/control-panel-catalog.json"
       - name: Disposable NTFS volume and standard-user permission boundary
         shell: pwsh
         run: scripts/check-windows-discovery.ps1 -Component "$PWD/tests/applications/native/target/release/digup-discovery-fixture.exe" -ComponentOnly

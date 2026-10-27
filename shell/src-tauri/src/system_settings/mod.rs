@@ -184,19 +184,21 @@ impl Catalog {
     pub fn revision(&self)->String {digest(&serde_json::to_string(&self.search("")).unwrap())}
     pub fn info(&self)->Value {
         let o=self.options.read().unwrap().clone();
+        let hits=self.search("");let revision=digest(&serde_json::to_string(&hits).unwrap());
         json!({"version":1,"supported":self.platform.supported,"enabled":o.enabled,
             "semanticEnabled":o.semantic_enabled,"ordinarySearches":o.ordinary_searches,
-            "count":self.search("").len(),"total":self.search("").len(),"revision":self.revision(),
+            "count":hits.len(),"total":hits.len(),"revision":revision,
             "locale":self.platform.locale,"windowsBuild":self.platform.build,
             "refreshing":self.refreshing.load(Ordering::SeqCst),
             "controlPanel":self.sources.read().unwrap().iter().map(|(name,source)|(name.clone(),json!({"count":source.entries.len(),"error":source.error,"stale":source.error.is_some()}))).collect::<BTreeMap<_,_>>()})
     }
     pub fn documents(&self)->Value {
-        let documents:Vec<Value>=if self.semantic_enabled(){self.search("").into_iter().map(|h|{
+        let hits=self.search("");let revision=digest(&serde_json::to_string(&hits).unwrap());
+        let documents:Vec<Value>=if self.semantic_enabled(){hits.into_iter().map(|h|{
             let text=format!("Windows settings: {}\nPurpose: {}\nAliases: {}",h.name,h.description,h.aliases.join(", "));
             json!({"id":h.id,"name":h.name,"hash":digest(&text),"text":text})
         }).collect()}else{vec![]};
-        json!({"revision":self.revision(),"documents":documents})
+        json!({"revision":revision,"documents":documents})
     }
     pub fn icon_path(&self,id:&str,size:u32)->Result<PathBuf,String>{
         let e=self.all_entries().into_iter().find(|e|format!("setting:{}",e.key)==id&&self.available(e)).ok_or("This item is unavailable.")?;

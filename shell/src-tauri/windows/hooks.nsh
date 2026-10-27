@@ -26,7 +26,7 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  IfFileExists "$INSTDIR\copilot\WinDigUp.Identity.msix" 0 digup_identity_done
+  IfFileExists "$INSTDIR\copilot\register.ps1" 0 digup_identity_done
     nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR"'
     Pop $0
   digup_identity_done:

@@ -5,7 +5,7 @@ Remove-Item $Destination -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $Destination | Out-Null
 $publisher=if($env:DIGUP_MSIX_PUBLISHER){$env:DIGUP_MSIX_PUBLISHER}else{'CN=WinDigUp'}
 $name='MCShotty.WinDigUp.Launcher'
-@{publisher=$publisher;name=$name;testSigned=($env:DIGUP_MSIX_TEST_SIGN -eq '1')} | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $Destination 'identity.json')
+@{publisher=$publisher;name=$name;enabled=[bool]($env:DIGUP_MSIX_PFX_BASE64 -or $env:DIGUP_MSIX_TEST_SIGN -eq '1');version=$(if($env:DIGUP_MSIX_VERSION){$env:DIGUP_MSIX_VERSION}else{'0.7.0.0'});testSigned=($env:DIGUP_MSIX_TEST_SIGN -eq '1')} | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $Destination 'identity.json')
 Copy-Item "$PSScriptRoot/../shell/src-tauri/windows/register-copilot.ps1" (Join-Path $Destination 'register.ps1')
 if(!$env:DIGUP_MSIX_PFX_BASE64 -and $env:DIGUP_MSIX_TEST_SIGN -ne '1'){
  Write-Output 'No Windows signing certificate configured; regular installer will remain available without Copilot-key registration.'
