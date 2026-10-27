@@ -14,9 +14,9 @@ jobs:
       - name: Verify production source and unchanged native ABI inputs
         shell: pwsh
         run: |
-          git fetch --no-tags --depth=1 origin 30f9eb20b902b68cf9e0dd9938ada85737ac2be8 6fc826c43c0a65f69cd906049aea735bd8ef91dd f17a290204df226865280921fd831caa2d493b58
+          git fetch --no-tags --depth=1 origin 54e5a9a3209e6aaea6e087af3fa8f4a358352703 6fc826c43c0a65f69cd906049aea735bd8ef91dd f17a290204df226865280921fd831caa2d493b58
           if($LASTEXITCODE){throw 'Missing source provenance'}
-          git diff --exit-code 30f9eb20b902b68cf9e0dd9938ada85737ac2be8 HEAD -- . ':!.github/workflows/intel-installer-check.yml'
+          git diff --exit-code 54e5a9a3209e6aaea6e087af3fa8f4a358352703 HEAD -- . ':!.github/workflows/intel-installer-check.yml'
           if($LASTEXITCODE){throw 'Production sources differ from the PR'}
           git diff --exit-code 6fc826c43c0a65f69cd906049aea735bd8ef91dd HEAD -- Package.swift Sources/CLlamaWindows Sources/CLlamaShared Sources/CPDFium Sources/CSQLite Sources/CStb Sources/CMiniz scripts/build-llama.sh scripts/fetch-vendor.sh scripts/build-ffmpeg.sh 'scripts/llama.cpp-*.patch' shell/src-tauri/Cargo.lock
           if($LASTEXITCODE){throw 'Native ABI inputs changed; a fresh native build is required'}
@@ -100,6 +100,7 @@ jobs:
       - name: Build private Intel runtime and package current application
         shell: bash
         run: |
+          export PATH="$(dirname "$(command -v cl)"):$PATH"
           python scripts/package-openvino-runtime.py
           cp -r Vendor/openvino/python shell/src-tauri/helper/openvino/
           cp worker/openvino/*.py worker/openvino/requirements.txt Vendor/openvino/runtime-manifest.json Vendor/openvino/THIRD-PARTY-NOTICES.txt shell/src-tauri/helper/openvino/
@@ -132,7 +133,7 @@ jobs:
           if($LASTEXITCODE){throw 'Installed indexing protocol regressed'}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: DigUp-Intel-OpenVINO-windows-x64-test-signed
+          name: DigUp-Intel-OpenVINO-windows-x64-verified-test
           path: |
             shell/src-tauri/target/release/bundle/nsis/*-setup.exe
             shell/src-tauri/copilot/TEST-ONLY-WinDigUp.cer
