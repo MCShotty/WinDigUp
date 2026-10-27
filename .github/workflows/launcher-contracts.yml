@@ -32,8 +32,17 @@ jobs:
           scripts/check-windows-copilot.ps1 -PrepareTrust
           $root=[IO.Path]::GetFullPath((Join-Path $PWD 'shell/src-tauri'))
           try {
-            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root
-            if($LASTEXITCODE){throw 'Windows rejected the signed package manifest'}
+            # Match the WOW64 context of NSIS, then cross through Sysnative to Appx's 64-bit host.
+            $wowScript=Join-Path $env:RUNNER_TEMP 'register-from-wow64.ps1'
+            @'
+          param([string]$Root)
+          if([Environment]::Is64BitProcess){throw 'The installer-context fixture must be 32-bit.'}
+          $native=Join-Path $env:WINDIR 'Sysnative/WindowsPowerShell/v1.0/powershell.exe'
+          & $native -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $Root 'copilot/register.ps1') -InstallRoot $Root
+          exit $LASTEXITCODE
+          '@ | Set-Content -Encoding UTF8 $wowScript
+            & (Join-Path $env:WINDIR 'SysWOW64/WindowsPowerShell/v1.0/powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wowScript -Root $root
+            if($LASTEXITCODE){throw 'Windows rejected registration from the 32-bit installer context'}
             $registered=Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher'
             if(!$registered){throw 'Signed package was not registered'}
             $original=$registered.PackageFullName
