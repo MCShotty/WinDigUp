@@ -50,7 +50,7 @@ jobs:
           @{bundle=@{resources=@{'helper/'='helper/';'copilot/'='copilot/';'THIRD-PARTY-NOTICES.txt'='THIRD-PARTY-NOTICES.txt'}}}|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 $config
           Push-Location shell/src-tauri
           try {
-            bash ../../../scripts/tauri-cli.sh bundle --bundles nsis --config $config
+            bash ../../scripts/tauri-cli.sh bundle --bundles nsis --config $config
             if($LASTEXITCODE){throw 'Native installer repackaging failed'}
           } finally {Pop-Location}
       - name: Verify actual post-install registration and activation
