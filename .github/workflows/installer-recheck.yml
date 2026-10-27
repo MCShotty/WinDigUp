@@ -60,6 +60,37 @@ jobs:
             Get-ChildItem (Join-Path $installed 'copilot') -Recurse | Select-Object FullName,Length | Format-Table -AutoSize
             Get-Content -Raw (Join-Path $installed 'copilot/identity.json')
             $native=Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+            $zip=Join-Path $env:RUNNER_TEMP 'nsis.zip'
+            Invoke-WebRequest 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip' -OutFile $zip
+            if((Get-FileHash $zip -Algorithm SHA1).Hash -ne 'DB14F8AF2EA346B786C6AE19343F61AAF5E09B8E'){throw 'NSIS toolchain hash mismatch'}
+            $tools=Join-Path $env:RUNNER_TEMP 'nsis-tools'
+            Expand-Archive $zip $tools
+            $compiler=Get-ChildItem $tools -Recurse -Filter makensis.exe | Where-Object {$_.Directory.Name -ne 'Bin'} | Select-Object -First 1
+            $probe=Join-Path $env:RUNNER_TEMP 'hook-probe.nsi'
+            $exe=Join-Path $env:RUNNER_TEMP 'hook-probe.exe'
+            @'
+          Unicode true
+          Name "Hook probe"
+          OutFile "${OUT}"
+          RequestExecutionLevel user
+          SilentInstall silent
+          Section
+            StrCpy $INSTDIR "${ROOT}"
+            StrCpy $1 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+            IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+              StrCpy $1 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+            nsExec::ExecToStack /TIMEOUT=30000 '"$1" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\copilot\register.ps1" -InstallRoot "$INSTDIR"'
+            Pop $0
+            Pop $2
+            FileOpen $3 "$INSTDIR\copilot\probe.txt" w
+            FileWrite $3 "host=$1 exit=$0 output=$2"
+            FileClose $3
+          SectionEnd
+          '@ | Set-Content -Encoding UTF8 $probe
+            & $compiler.FullName (('/DROOT='+$installed)) (('/DOUT='+$exe)) $probe
+            if($LASTEXITCODE){throw 'Cannot build the isolated hook probe'}
+            $p=Start-Process $exe -PassThru -Wait
+            Get-Content -Raw (Join-Path $installed 'copilot/probe.txt')
             Write-Output 'DIAGNOSTIC: direct registration after failed installer hook; does not turn this check into a pass'
             & $native -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $installed 'copilot/register.ps1') -InstallRoot $installed
             Write-Output ('Direct registration exit code: '+$LASTEXITCODE)
