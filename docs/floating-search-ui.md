@@ -1,12 +1,14 @@
 # Floating search panel
 
-Depends on PR #11. The implementation branch is based on its 147d377 head. This change does not
-change query prompts, relevance rules, accelerator execution, model fingerprints or vector storage.
+The original capsule design and its measurements below are retained as history. The current Windows
+launcher adds the [Control Panel and pinned/recent app strip](control-panel-launcher.md). It does not change query prompts, relevance rules, accelerator execution, model fingerprints or vector storage.
 Existing embeddings stay compatible.
 
 ## Behaviour and ownership
 
-Ctrl+Shift+Space opens a 640 by 64 logical-pixel capsule where the monitor work area permits.
+On Windows, Ctrl+Shift+Space opens a 720 by 120 logical-pixel launcher where the monitor work area permits.
+Its 64-pixel search header stays above a 56-pixel pinned/recent app strip. Other platforms retain the
+single-row home.
 Native geometry owns the physical monitor position, DPI conversion, work-area bounds and rounded
 hit region. The page owns content measurement and sends a coalesced height request only when its
 desired height changes. The empty header's content area is 62 pixels plus the two border edges.
@@ -14,7 +16,7 @@ desired height changes. The empty header's content area is 62 pixels plus the tw
 The query stays at the top. Current-generation native and keyword results arrive independently.
 The list grows with content, retains its height while later replies refine the current query,
 and scrolls at its maximum. A new query can choose a new height. Full search remains available
-through the circular button and Ctrl+O.
+through the expand button and Ctrl+O.
 
 The panel reuses the shared Best matches ordering, preferences, explicit prefixes and bounded app
 browsing. File rows and section containers are reconciled by stable identity. Progress-only updates
@@ -40,7 +42,7 @@ accelerator settings, annotations, folder or drive choices.
 
 On Windows, the native service checks contrast mode, transparency, composition and Remote Desktop
 before reporting native material availability. Both whole-window Acrylic paths painted beyond the
-custom capsule region in the native Windows pixel regression. The shaped panel therefore uses a
+custom rounded region in the native Windows pixel regression. The shaped panel therefore uses a
 Solid fallback and reports why Automatic could not enable transparency. Both system and accent
 backdrops are cleared. There is no CSS claim that native blur succeeded.
 

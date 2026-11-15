@@ -1481,7 +1481,7 @@ async function start() {
   $query.focus();
   if (state.query || isAppsMode() || isSettingsMode()) run();
   if (!isAppsMode() && !isSettingsMode()) ask({ op: "prewarm" }).catch(() => {});
-  if (info.debugQuery != null) debugSearch(info.debugQuery);
+  if (info.debugQuery != null){if(info.debugSelected)state.nextSelection=info.debugSelected;debugSearch(info.debugQuery);}
 }
 
 // Debug runs (--debug-window): type the query in, and once the results and their pictures are in, report what the
@@ -1498,12 +1498,12 @@ function debugSearch(query) {
 function report() {
   // Drive discovery publishes names after the first reply; do not end an installed launch check on a partial catalog.
   if (isAppsMode() && !applicationSearch.hits.length && applicationSearch.catalog.refreshing) return;
-  if (isSettingsMode() && settingsSearch.active && settingsSearch.settledEpoch !== settingsSearch.epoch) return;
+  if (isSettingsMode() && settingsSearch.active && (settingsSearch.settledEpoch !== settingsSearch.epoch || (!settingsSearch.hits.length && settingsSearch.catalog.refreshing))) return;
   debugPending = false;
   if (state.info.debugLaunch) {
     const hit = selectedHit();
-    if (!isLauncher(hit)) { invoke("debug_report", {report:{launchAccepted:false,error:"No matching catalog application"}}); return; }
-    Apps.launch(hit).then(() => invoke("debug_report", {report:{launchAccepted:true,applicationId:hit.id,name:hit.name}}),
+    if (!isLauncher(hit)) { invoke("debug_report", {report:{launchAccepted:false,error:"No matching catalog application",settingsCatalog:settingsSearch.catalog}}); return; }
+    Apps.launch(hit).then(() => invoke("debug_report", {report:{launchAccepted:true,applicationId:hit.id,name:hit.name,settingsCatalog:settingsSearch.catalog}}),
       error => invoke("debug_report", {report:{launchAccepted:false,error:String(error)}}));
     return;
   }

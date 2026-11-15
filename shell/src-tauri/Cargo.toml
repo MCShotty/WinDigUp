@@ -10,6 +10,10 @@ default-run = "digup-shell"
 name = "digup-discovery"
 path = "src/bin/discovery.rs"
 
+[features]
+# Use the production GUI subsystem for native activation checks without compiling model libraries.
+windows-gui = []
+
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
 
@@ -48,7 +52,7 @@ libc = "0.2"
 # hours (already in Tauri's build on Windows).
 [target.'cfg(windows)'.dependencies]
 window-vibrancy = "=0.8.1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem", "Win32_System_Variant"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_SystemServices", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem", "Win32_System_Variant"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects",
                                               "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_SystemInformation",

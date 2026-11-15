@@ -1,0 +1,78 @@
+name: Launcher identity package
+on:
+  pull_request:
+    paths:
+      - 'shell/src-tauri/windows/**'
+      - 'scripts/*copilot*'
+      - '.github/workflows/launcher-contracts.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Parse PowerShell sources and build test-signed package
+        shell: powershell
+        env:
+          DIGUP_MSIX_TEST_SIGN: "1"
+        run: |
+          foreach($file in @('scripts/package-copilot.ps1','scripts/check-windows-copilot.ps1','shell/src-tauri/windows/register-copilot.ps1')){
+            $tokens=$null;$errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file),[ref]$tokens,[ref]$errors) | Out-Null
+            if($errors){$errors | Format-List;throw "PowerShell parse failed: $file"}
+          }
+          scripts/package-copilot.ps1
+          if(!(Test-Path shell/src-tauri/copilot/WinDigUp.Identity.msix)){throw 'Signed identity package absent'}
+          $manifest=[xml](Get-Content -Raw shell/src-tauri/copilot/AppxManifest.xml)
+          if($manifest.Package.Identity.Name -ne 'MCShotty.WinDigUp.Launcher'){throw 'Unexpected package identity'}
+          if($manifest.Package.Applications.Application.Extensions.Extension.AppExtension.Name -ne 'com.microsoft.windows.copilotkeyprovider'){throw 'Provider registration missing'}
+          scripts/check-windows-copilot.ps1 -PrepareTrust
+          $root=[IO.Path]::GetFullPath((Join-Path $PWD 'shell/src-tauri'))
+          try {
+            # Match the WOW64 context of NSIS, then cross through Sysnative to Appx's 64-bit host.
+            $wowScript=Join-Path $env:RUNNER_TEMP 'register-from-wow64.ps1'
+            @'
+          param([string]$Root)
+          if([Environment]::Is64BitProcess){throw 'The installer-context fixture must be 32-bit.'}
+          $native=Join-Path $env:WINDIR 'Sysnative/WindowsPowerShell/v1.0/powershell.exe'
+          & $native -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $Root 'copilot/register.ps1') -InstallRoot $Root
+          exit $LASTEXITCODE
+          '@ | Set-Content -Encoding UTF8 $wowScript
+            & (Join-Path $env:WINDIR 'SysWOW64/WindowsPowerShell/v1.0/powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wowScript -Root $root
+            if($LASTEXITCODE){throw 'Windows rejected registration from the 32-bit installer context'}
+            $registered=Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher'
+            if(!$registered){throw 'Signed package was not registered'}
+            $original=$registered.PackageFullName
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root
+            if($LASTEXITCODE){throw 'Repeat registration was not idempotent'}
+            $moved=Join-Path $env:RUNNER_TEMP ('identity-upgrade-'+[Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory $moved | Out-Null
+            Copy-Item (Join-Path $root 'copilot') (Join-Path $moved 'copilot') -Recurse
+            try {
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved
+              if($LASTEXITCODE -eq 0){throw 'A moved installation reused an old identity version'}
+              if((Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher').PackageFullName -ne $original){throw 'Failed registration discarded the previous identity'}
+              $env:DIGUP_MSIX_VERSION='0.7.0.1'
+              scripts/package-copilot.ps1 -Destination (Join-Path $moved 'copilot')
+              scripts/check-windows-copilot.ps1 -PrepareTrust -CertificatePath (Join-Path $moved 'copilot/TEST-ONLY-WinDigUp.cer')
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved
+              if($LASTEXITCODE -or (Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher').Version -ne [Version]'0.7.0.1'){throw 'Higher-version identity upgrade failed'}
+              $meta=Get-Content -Raw (Join-Path $moved 'copilot/identity.json')|ConvertFrom-Json
+              $meta.enabled=$false;$meta|ConvertTo-Json|Set-Content -Encoding UTF8 (Join-Path $moved 'copilot/identity.json')
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved
+              if($LASTEXITCODE -or (Get-AppxPackage -Name 'MCShotty.WinDigUp.Launcher')){throw 'A build without identity retained a broken registration'}
+            } finally {
+              & (Join-Path $moved 'copilot/register.ps1') -InstallRoot $moved -Uninstall
+              Remove-Item $moved -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          } finally {
+            & (Join-Path $root 'copilot/register.ps1') -InstallRoot $root -Uninstall
+          }
+          Write-Output 'PASS: native activation shim, valid manifest and signed identity package; no physical picker claim.'

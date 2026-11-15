@@ -69,7 +69,8 @@ python3 -c '' 2> /dev/null || python=python
 # Installers of an earlier build (another version) would be taken for this one's.
 rm -rf shell/src-tauri/target/release/bundle/nsis
 # The helper folder goes in as the installer's resources here only: Tauri checks resources on every build.
-resources='{"helper/":"helper/","THIRD-PARTY-NOTICES.txt":"THIRD-PARTY-NOTICES.txt"}'
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/package-copilot.ps1
+resources='{"helper/":"helper/","copilot/":"copilot/","THIRD-PARTY-NOTICES.txt":"THIRD-PARTY-NOTICES.txt"}'
 (cd shell/src-tauri && bash "$tauri_runner" build --bundles nsis \
   --config "{\"bundle\":{\"resources\":$resources$signing}}")
 ls -la shell/src-tauri/target/release/bundle/nsis/

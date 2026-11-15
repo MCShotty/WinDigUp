@@ -20,6 +20,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub personalization: crate::personalization::Options,
     pub panel_material: PanelMaterial,
+    pub launcher: crate::launcher::Options,
     pub applications: crate::applications::Options,
     pub windows_settings: crate::system_settings::Options,
     pub discovery: crate::discovery::Options,
@@ -169,8 +170,10 @@ mod panel_preferences_tests {
         })).unwrap();
         assert_eq!(settings.panel_material, PanelMaterial::Automatic);
         settings.panel_material = PanelMaterial::Solid;
+        settings.launcher.pinned=vec!["app:fixture".into()];settings.launcher.show_recent=false;
         settings.save(&path).unwrap();
         let saved = Settings::load(&path);
+        assert_eq!(saved.launcher.pinned,["app:fixture"]);assert!(!saved.launcher.show_recent);
         assert_eq!(saved.panel_material, PanelMaterial::Solid);
         assert_eq!(saved.appearance, Appearance::Dark);
         assert_eq!(saved.folders, settings.folders);

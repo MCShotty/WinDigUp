@@ -4,6 +4,7 @@
 const TYPING_PAUSE = 120;          // ms after the last keystroke until the meaning results show
 const ROWS_PER_GROUP = 6;
 const FIELD_HEIGHT = 64;
+const HOME_HEIGHT = Apps.supported ? 120 : 64;
 const PANEL_HEIGHT = 640;
 const BIG_HEIGHT = 560;   // the panel at its tallest, for the big preview
 const WEAKER = "\u0000weaker";     // the selectable row that folds and unfolds the weaker matches
@@ -40,7 +41,7 @@ const state = {
   selection: null,       // a result's path, or WEAKER
   navigated: false,      // the arrow keys moved the selection since the last edit
   encoder: "stopped",
-  height: FIELD_HEIGHT,
+  height: HOME_HEIGHT,
   error: null,
   indexing: null,        // {done, total} while the index helper works through new files
   caveat: null,          // why results may be incomplete right now (the shell's status.rs)
@@ -269,7 +270,7 @@ function scheduleFit() {
       + parseFloat(listStyle.paddingTop) + parseFloat(listStyle.paddingBottom);
     const measured = FIELD_HEIGHT + $footer.getBoundingClientRect().height
       + (count ? listContent + $moreResults.getBoundingClientRect().height + 1 : 104);
-    let height = empty ? FIELD_HEIGHT : !$big.hidden ? BIG_HEIGHT : measured;
+    let height = empty ? HOME_HEIGHT : !$big.hidden ? BIG_HEIGHT : measured;
     // Keep a list steady while replies refine it; a new query can choose a new height.
     if (!empty && $big.hidden && count) {
       state.heightFloor = Math.max(state.heightFloor || FIELD_HEIGHT, height);
@@ -311,6 +312,7 @@ function render() {
   $panel.classList.toggle("previewing", !$big.hidden);
   $query.setAttribute("aria-expanded", String(!empty && $big.hidden));
   $details.setAttribute("aria-expanded", String(!$big.hidden));
+  $("launcher-shortcuts").hidden = !empty || !Apps.supported;
   $body.hidden = empty;
   $footer.hidden = empty;
   if (!empty) { renderList(); renderPreview(); renderFooter(); syncSelection(); }
@@ -700,6 +702,7 @@ document.addEventListener("keydown", (event) => {
     case "ArrowUp":
       if (event.altKey || event.shiftKey || modifier) return;
       event.preventDefault();
+      if(state.phase==="empty"){if(event.key==="ArrowDown")$("launcher-shortcuts").querySelector("button")?.focus();return;}
       move(event.key === "ArrowDown" ? 1 : -1);
       if (!$big.hidden) {
         if (state.selection === WEAKER) closeBig();

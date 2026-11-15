@@ -29,6 +29,7 @@ const DiscoverySettings = {
     this.el("drive-more").onclick=()=>this.candidates(true);
     this.el("drive-retry-list").onclick=()=>this.candidates();
     for(const id of ["win-settings-enabled","win-settings-purpose","win-settings-ordinary"])this.el(id).onchange=()=>this.settingsOptions();
+    this.el("win-settings-refresh").onclick=()=>this.action("windows","refresh_windows_settings",{},"windowsSettings","Control Panel refresh requested.");
     this.el("win-settings-prepare").onclick=()=>this.action("windows","prepare_windows_settings",{},"windowsSettingsSemantic","Purpose preparation requested.");
     for(const id of ["descriptions-enabled","descriptions-publishers"])this.el(id).onchange=()=>this.enrichmentOptions();
     this.el("descriptions-refresh").onclick=()=>this.action("enrichment","refresh_app_descriptions",{},"enrichment","Description refresh scheduled.");
@@ -151,6 +152,9 @@ const DiscoverySettings = {
     this.el("win-settings-enabled").disabled=windowsBusy;
     this.el("win-settings-purpose").disabled=windowsBusy||!w.enabled;this.el("win-settings-ordinary").disabled=windowsBusy||!w.enabled;
     this.text("win-settings-status",this.n(w.count??info.windowsSettings?.count)+" destinations available. "+
+      (w.refreshing?"Refreshing Control Panel. ":"")+
+      Object.entries(w.controlPanel||{}).filter(([,state])=>state.error).map(([source,state])=>source+": "+state.error).join(" ")+
+      
       (!w.semanticEnabled?"Purpose matching is off.":s.message||(Number.isFinite(s.total)?this.n(s.embedded)+" of "+this.n(s.total)+" prepared.":"Purpose matching starts when needed.")));
     this.el("win-settings-prepare").disabled=windowsBusy||!w.enabled||!w.semanticEnabled||info.state?.model?.state!=="ready"||
       (Number.isFinite(s.total)&&s.embedded===s.total&&s.state!=="unavailable"&&s.encoder!=="unavailable");

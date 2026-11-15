@@ -269,4 +269,6 @@ MIT
 
 ### Additional Windows search sources
 
-Windows settings can be searched by name or purpose with `settings:` / the Settings filter. Optional drive discovery finds unregistered desktop apps using NTFS records or directory fallback. Optional WinGet/publisher descriptions add attributed purpose information; online fetching is off by default. [Configuration and validation status](docs/windows-discovery.md).
+Modern Windows Settings and classic Control Panel applets/tasks can be searched by name or purpose with `settings:` / the Settings filter. Optional drive discovery finds unregistered desktop apps using NTFS records or directory fallback. Optional WinGet/publisher descriptions add attributed purpose information; online fetching is off by default. [Configuration and validation status](docs/windows-discovery.md).
+
+The Windows shortcut launcher has a pinned/recent app strip. Pin an application from its details; manage pins and recent history in General. Signed builds can register with Windows' Copilot-key app picker without changing your chosen mapping. [Launcher and signing requirements](docs/control-panel-launcher.md).

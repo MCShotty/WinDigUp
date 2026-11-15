@@ -180,6 +180,8 @@ pub async fn launch_app(
         .await.map_err(|e| AppError::new("launch_failed", &app_id, e.to_string()))?;
     if let Err(error)=result{shell.discovery.schedule(false);return Err(error)}
     shell.personalization.accepted(&app_id);
+    if shell.settings.lock().unwrap().launcher.show_recent {shell.launcher_history.accepted(&app_id);}
+    let _=app.emit("launcher-changed",());
     crate::hide_panel(app);
     Ok(json!({"accepted":true,"appId":app_id}))
 }

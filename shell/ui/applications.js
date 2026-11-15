@@ -82,7 +82,7 @@ const Apps = {
       return node;
     }
     const row = element("div", "app-row" + (selected ? " selected" : ""));
-    row.title = isSetting(hit) ? "Windows settings page" : hit.shortcut || "Registered Windows application";
+    row.title = isSetting(hit) ? (hit.source==="control_panel"?"Control Panel item or task":"Windows settings page") : hit.shortcut || "Registered Windows application";
     row.dataset.resultKey = resultKey(hit); row.setAttribute("role", expanded ? "row" : "option");
     row.setAttribute("aria-selected", String(selected));
     row.setAttribute("aria-label", `${isSetting(hit)?"Windows settings":"Application"}, ${hit.name}`);
@@ -122,6 +122,11 @@ const Apps = {
     const launch = element("button", "primary", "Launch");
     launch.onclick = async () => { launch.disabled = true; try { await this.launch(hit); } catch (e) { fail(e); } finally { launch.disabled = false; } };
     box.append(launch);
+    if(typeof Launcher!=="undefined"){
+      const pin=element("button","",Launcher.state.pinned?.includes(hit.id)?"Unpin from launcher":"Pin to launcher");
+      pin.onclick=async()=>{pin.disabled=true;try{await Launcher.pin(hit,!Launcher.state.pinned?.includes(hit.id));pin.textContent=Launcher.state.pinned?.includes(hit.id)?"Unpin from launcher":"Pin to launcher";}catch(e){fail(e);}finally{pin.disabled=false;}};
+      box.append(pin);
+    }
     if (hit.shortcut) {
       const reveal = element("button", "", "Show shortcut location");
       reveal.onclick = () => invoke("reveal", { path: hit.shortcut }).catch(fail); box.append(reveal);

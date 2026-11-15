@@ -10,15 +10,15 @@ alphabetically. Ordinary searches include up to two matching destinations in the
 names and aliases can lead file results; Apps placement preferences continue to apply to applications. Settings → Windows settings controls inclusion, purpose
 matching and ordinary-search visibility independently.
 
-The versioned built-in catalog contains 38 destinations, descriptions and aliases. Display names have English
+The built-in catalog contains 38 modern Settings destinations. Native Control Panel applets and discoverable task links extend the same search, labelled Control Panel. Their Shell catalog is refreshed and cached independently of inference; partial failures keep the previous source entries. See [launcher and Copilot-key integration](control-panel-launcher.md). Display names have English
 and selected Arabic translations; this is not a complete localized Windows Search catalog. Build ranges and
 known hardware fixtures filter entries; hardware detection can remain unknown, in which case the result explains
 that availability depends on this PC. Windows decides whether a policy-restricted destination can open.
 
 Names bypass the model helper. Purpose documents use `windows-settings.sqlite`, the existing 512-token profile,
 the serialized encoder and the same compatible query-vector cache as apps/files. Documents remain outside the
-file crawler. GPU/NPU failures leave name search and Windows activation available. Only allowlisted catalog IDs
-can open an `ms-settings:` URI; query text is never converted into a URI or command line.
+file crawler. GPU/NPU failures leave name search and Windows activation available. Only catalog IDs
+can open a built-in `ms-settings:` URI or a discovered native Control Panel target; query text is never converted into a URI or command line.
 
 ## Finding unregistered applications
 

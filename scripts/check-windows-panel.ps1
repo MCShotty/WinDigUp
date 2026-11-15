@@ -161,7 +161,7 @@ try {
                     if ($material -eq 'solid' -and $report.panel.material -ne 'solid') { throw 'Solid preference was not respected' }
                     if ($report.panel.material -notin @('solid','acrylic')) { throw 'Native material status is missing' }
                     if ($shape -eq 'empty') {
-                        if ($report.phase -ne 'empty' -or $report.panel.height -ne 64) { throw 'Empty capsule expanded' }
+                        if ($report.phase -ne 'empty' -or $report.panel.height -ne 120) { throw 'Launcher home height is invalid' }
                     } else {
                         if (-not ($report.applications | Where-Object { $_.name -eq $fixtureName })) { throw 'Real shortcut result is missing' }
                         if ($report.panel.height -le 64 -or $report.panel.listWidth -lt ($report.panel.width-30)) { throw 'Results geometry is invalid' }

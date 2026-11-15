@@ -115,7 +115,12 @@ jobs:
           : > service-after.txt
           measure() {
             local variant=$1 package=$2
-            /usr/bin/time -l swift test --skip-build --package-path "$package" --filter ServiceIndexingBenchmark 2>&1 | tee -a "service-$variant.txt"
+            local status=0
+            # Test progress uses stderr. Merging it into stdout can split a JSON record above PIPE_BUF.
+            /usr/bin/time -l swift test --skip-build --package-path "$package" --filter ServiceIndexingBenchmark \
+              > "$RUNNER_TEMP/service-$variant.stdout" 2> "$RUNNER_TEMP/service-$variant.stderr" || status=$?
+            cat "$RUNNER_TEMP/service-$variant.stdout" "$RUNNER_TEMP/service-$variant.stderr" | tee -a "service-$variant.txt"
+            return "$status"
           }
           for workload in images documents mixed; do
             export DIGUP_SERVICE_WORKLOAD="$workload" DIGUP_SERVICE_TRIALS=1
@@ -151,8 +156,19 @@ jobs:
           for name in llama llama.cpp llama-build; do
             ln -s "$GITHUB_WORKSPACE/Vendor/$name" "$base/Vendor/$name"
           done
-          swift test --package-path "$base" --filter IndexPipelineBenchmarkTests 2>&1 | tee indexing-before.txt
-          swift test --filter IndexPipelineBenchmarkTests 2>&1 | tee indexing-after.txt
+          capture() {
+            local variant=$1 status=0
+            shift
+            local report="$RUNNER_TEMP/indexing-$variant.report.txt"
+            DIGUP_PIPELINE_REPORT="$report" "$@" > "$RUNNER_TEMP/indexing-$variant.stdout" 2> "$RUNNER_TEMP/indexing-$variant.stderr" || status=$?
+            cat "$RUNNER_TEMP/indexing-$variant.stdout" "$RUNNER_TEMP/indexing-$variant.stderr" | tee "indexing-$variant-output.txt"
+            # An atomic report file avoids swift test's internal child-output multiplexing too.
+            cp "$report" "indexing-$variant.txt"
+            cat "indexing-$variant.txt"
+            return "$status"
+          }
+          capture before swift test --package-path "$base" --filter IndexPipelineBenchmarkTests
+          capture after swift test --filter IndexPipelineBenchmarkTests
           python3 scripts/compare-index-pipeline.py indexing-before.txt indexing-after.txt > indexing-comparison.json
           cat indexing-comparison.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -162,6 +178,8 @@ jobs:
           path: |
             indexing-before.txt
             indexing-after.txt
+            indexing-before-output.txt
+            indexing-after-output.txt
             indexing-comparison.json
             service-before.txt
             service-after.txt

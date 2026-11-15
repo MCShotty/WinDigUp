@@ -1,3 +1,5 @@
+#[path = "../../../shell/src-tauri/src/launcher.rs"]
+pub mod launcher;
 #[path = "../../../shell/src-tauri/src/watch_changes.rs"]
 pub mod watch_changes;
 #[path = "../../../shell/src-tauri/src/search_scope.rs"]
