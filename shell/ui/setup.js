@@ -158,11 +158,13 @@ function selectionPart() {
 
 function renderFolders() {
   const list = $("folder-list");
+  const focus = list.contains(document.activeElement) ? document.activeElement.dataset.folderControl : null;
   const scroll = list.closest("main").scrollTop;
   list.replaceChildren(...rows.map(folderBox));
   if (codeMode && !rows.length) list.append(element("p", "note", "No folders with code turned up in your home folder. Add "
                                                     + "the ones that hold your repositories."));
   list.closest("main").scrollTop = scroll;
+  restoreFolderFocus(list, focus);
   renderFooter();
 }
 
@@ -177,12 +179,15 @@ function folderBox(row) {
   disclosure.innerHTML = CHEVRON;
   disclosure.disabled = !subfolders.length;
   disclosure.title = isOpen ? "Hide its subfolders" : "Choose among its subfolders";
+  disclosure.dataset.folderControl = "expand:" + key(row);
+  disclosure.setAttribute("aria-expanded", String(isOpen));
+  disclosure.setAttribute("aria-label", "Subfolders in " + native(row));
   disclosure.onclick = (event) => {
     event.stopPropagation();
     if (open.has(key(row))) open.delete(key(row)); else open.add(key(row));
     renderFolders();
   };
-  const check = checkbox(mark, () => {
+  const check = checkbox(mark, row, () => {
     selection.setFolder(row, mark !== "on");
     renderFolders();
   });
@@ -209,7 +214,11 @@ function folderBox(row) {
     for (const subfolder of all ? subfolders : subfolders.slice(0, SHORT_LIST)) list.append(subfolderRow(subfolder));
     if (!all && subfolders.length > SHORT_LIST) {
       const more = element("button", "more", `Show ${subfolders.length - SHORT_LIST} more`);
-      more.onclick = () => { showAll.add(key(row)); renderFolders(); };
+      more.onclick = () => {
+        showAll.add(key(row));
+        renderFolders();
+        restoreFolderFocus($("folder-list"), "choose:" + key(subfolders[SHORT_LIST].folder));
+      };
       list.append(more);
     }
     box.append(list);
@@ -230,16 +239,18 @@ function subfolderRow(subfolder) {
     renderFolders();
   };
   const counts = countsText(subfolder.files || {}) + (codeMode && subfolder.bytes ? ` · ${roughBytes(subfolder.bytes)}` : "");
-  item.append(checkbox(on ? "on" : "off", toggle), element("span", "name", nameOf(subfolder.folder)),
+  item.append(checkbox(on ? "on" : "off", subfolder.folder, toggle), element("span", "name", nameOf(subfolder.folder)),
               element("span", "counts", counts));
   if (calibrated) item.append(timeOf({ seconds: subfolder.seconds, later: subfolder.later_seconds }, !on, true));
   item.onclick = (event) => { if (!event.target.closest("input")) toggle(); };
   return item;
 }
 
-function checkbox(mark, action) {
+function checkbox(mark, folder, action) {
   const box = document.createElement("input");
   box.type = "checkbox";
+  box.dataset.folderControl = "choose:" + key(folder);
+  box.setAttribute("aria-label", native(folder));
   box.checked = mark === "on";
   box.indeterminate = mark === "mixed";
   box.onclick = (event) => {
@@ -247,6 +258,10 @@ function checkbox(mark, action) {
     action();
   };
   return box;
+}
+
+function restoreFolderFocus(list, control) {
+  if (control) list.querySelector('[data-folder-control="' + CSS.escape(control) + '"]')?.focus({ preventScroll: true });
 }
 
 /// "about 4 min" (and "+ 2 min later" for the rest of long files).
@@ -318,6 +333,7 @@ const codeEstimates = new Map();
 
 function renderCode() {
   const list = $("code-list");
+  const focus = list.contains(document.activeElement) ? document.activeElement.dataset.folderControl : null;
   list.replaceChildren(...info.codeOffered.map((folder) => {
     const on = codeChosen.has(folder);
     const box = element("div", "folder-box" + (on ? "" : " off"));
@@ -331,7 +347,7 @@ function renderCode() {
     const answer = codeEstimates.get(key(folder));
     text.append(element("div", "counts", answer ? (answer.files?.code ? `${answer.files.code.toLocaleString()} files of code`
       : "No code here") : native(folder)));
-    row.append(checkbox(on ? "on" : "off", toggle), text);
+    row.append(checkbox(on ? "on" : "off", folder, toggle), text);
     if (answer?.files?.code) {
       const time = element("div", "time" + (on ? "" : " quiet"),
                            answer.seconds < 1 ? "under a second" : `about ${roughDuration(answer.seconds)}`);
@@ -344,6 +360,7 @@ function renderCode() {
     box.append(row);
     return box;
   }));
+  restoreFolderFocus(list, focus);
   renderFooter();
 }
 
@@ -359,24 +376,46 @@ async function estimateCode() {
 
 // MARK: Pages
 
-function render() {
+function render(focusHeading = false) {
+  const name = PAGES[page];
   PAGES.forEach((name, index) => { $(name).hidden = index !== page; });
+  const step = $("setup-step");
+  step.hidden = !firstTime || codeMode;
+  step.textContent = step.hidden ? "" : `Step ${page + 1} of ${PAGES.length}`;
+  const heading = $(name).querySelector("h2");
+  if (!step.hidden) heading.setAttribute("aria-describedby", step.id);
   $("back").hidden = firstTime ? page === 0 || page === PAGES.length - 1 : false;
   $("back").textContent = firstTime ? "Back" : "Cancel";
-  $("next").textContent = !firstTime ? "Save" : page === PAGES.length - 1 ? "Done" : "Continue";
-  $("next").disabled = page === 1 && !selection.folders().length;
-  $("model").hidden = codeMode || page === 0 || page === PAGES.length - 1;
+  $("next").textContent = !firstTime ? "Save" : name === "welcome" ? "Choose folders" : name === "ready" ? "Open search" : "Continue";
+  renderModelAvailability();
   renderFooter();
-  if (PAGES[page] === "ready") renderProgress();
-  if (PAGES[page] === "code") renderCode();
+  if (name === "ready") renderProgress();
+  if (name === "code") renderCode();
+  if (focusHeading) {
+    document.querySelector(".setup-main").scrollTop = 0;
+    heading.tabIndex = -1;
+    heading.focus();
+  }
+}
+
+function applicationSearchAvailable() { return info.applicationsSupported && info.applicationsEnabled !== false; }
+
+function renderModelAvailability() {
+  $("model").hidden = codeMode || ["welcome", "ready"].includes(PAGES[page]) || progress.model.state === "ready";
+  const availability = $("setup-model-availability");
+  availability.hidden = $("model").hidden || progress.model.state !== "failed";
+  availability.textContent = availability.hidden ? "" : applicationSearchAvailable()
+    ? "App names are available now. Setup can continue."
+    : "Setup can continue. Content search needs a working model.";
 }
 
 function renderFooter() {
-  $("next").disabled = page === 1 && !selection.folders().length && !(firstTime && info.applicationsSupported && !codeMode);
-  $("apps-start").hidden = !firstTime || !info.applicationsSupported || codeMode;
+  const launchAvailable = firstTime && applicationSearchAvailable() && !codeMode;
+  $("next").disabled = page === 1 && !selection.folders().length && !launchAvailable;
+  $("apps-start").hidden = !launchAvailable;
   let summary = "";
   if (PAGES[page] === "folders") {
-    if (!selection.folders().length) summary = firstTime && info.applicationsSupported ? "Application search works without selecting folders" : "Choose at least one folder";
+    if (!selection.folders().length) summary = launchAvailable ? "Application search works without selecting folders" : "Choose at least one folder";
     else if (estimating > 0 || rows.some((row) => selection.isSearched(row) && !estimates.has(key(row)))) summary = "Looking at your folders…";
     // Turning code search on: what reading the code takes, and its index.
     else if (codeMode && !info.chosen.length) {
@@ -386,7 +425,6 @@ function renderFooter() {
     // Later (Choose Folders…) the folders searched already aren't read again: no first pass to tell.
     else if (!firstTime) summary = "";
     else if (calibrated) summary = `First pass: about ${roughDuration(selectionPart().seconds)}`;
-    else summary = "Times show once DigUp has timed this computer";
   }
   if (PAGES[page] === "code") {
     const chosen = [...codeChosen].map((folder) => codeEstimates.get(key(folder))).filter(Boolean);
@@ -434,13 +472,13 @@ $("next").addEventListener("click", async () => {
     try {
       await invoke("finish_setup");
     } catch (error) {
-      $("progress-note").textContent = String(error);
+      $("summary").textContent = error?.message || String(error);
       $("next").disabled = false;
     }
     return;
   }
   page += 1;
-  render();
+  render(true);
 });
 
 $("apps-start").onclick = async () => {
@@ -456,7 +494,7 @@ $("apps-start").onclick = async () => {
     if (codePage >= 0 && page >= codePage) {
       await invoke("set_code_folders", { folders: [...codeChosen].map(native), skipped: [] });
     }
-    await invoke("finish_setup");
+    await invoke("finish_setup", { launchApps: true });
   }
   catch (error) { $("summary").textContent = String(error); $("apps-start").disabled = false; }
   finally { $("next").disabled = false; $("back").disabled = false; }
@@ -468,7 +506,7 @@ $("back").addEventListener("click", () => {
     return;
   }
   page = Math.max(0, page - 1);
-  render();
+  render(true);
 });
 
 /// Debug runs (--debug-setup): every offered folder, every page, then Done.
@@ -490,23 +528,56 @@ const progress = {
   rest: null,                // the rest of long files: {done, total, files}
 };
 
+$("repair-model").onclick = async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  $("summary").textContent = "";
+  try {
+    await invoke("open_settings", { tab: "general" });
+  } catch (error) {
+    $("summary").textContent = `Couldn't open acceleration settings. ${error?.message || String(error)}`;
+  } finally {
+    button.disabled = false;
+  }
+};
+
 function renderProgress() {
   const { state, model } = progress;
   const what = $("progress-what"), left = $("progress-left"), bar = $("bar"), fill = $("bar-fill");
+  const hasFolders = selection.folders().length > 0;
+  const needsAttention = model.state === "failed" || state.activity === "failed";
+  const fileReady = hasFolders && model.state === "ready" && state.searchable > 0;
+  const appReady = applicationSearchAvailable();
+  $("ready-title").textContent = fileReady ? "File search is ready" : appReady ? "App search is ready"
+    : needsAttention ? "File search needs attention" : "Getting file search ready";
+  $("ready-text").textContent = !hasFolders
+    ? "Choose folders later in Settings to add file search."
+    : fileReady ? "DigUp watches your selected folders for changes from the tray."
+    : needsAttention ? "File contents become searchable when indexing resumes."
+    : "Files become searchable as DigUp indexes them. You can close setup while it works.";
+  $("ready-shortcut").hidden = !(fileReady || appReady) || !$("ready-keys").childElementCount;
+  $("repair-model").hidden = model.state !== "failed";
+  $("progress").hidden = !hasFolders && !needsAttention;
   let fraction = null, busy = false, done = false, label = "", time = "", note = "";
   if (model.state === "downloading") {
     label = "Downloading the model";
-    fraction = model.total ? model.bytes / model.total : 0;
+    fraction = model.total ? model.bytes / model.total : null;
+    busy = fraction === null;
     const rate = downloadRate();
-    time = `${Math.floor(fraction * 100)}%` + (rate > 0 && model.total ? ` · about ${roughDuration((model.total - model.bytes) / rate)} left` : "");
-    note = "865 MB, once. DigUp starts reading your files when it's in; until then, search finds files by name.";
-    if (model.problem) note = `${model.problem}; trying again.`;
+    if (fraction !== null) {
+      time = `${Math.floor(fraction * 100)}%` + (rate > 0 ? ` · about ${roughDuration((model.total - model.bytes) / rate)} left` : "");
+    }
+    note = "865 MB, once. File names can appear as DigUp discovers them. Reading file contents needs the model.";
+    if (model.problem) note = `${model.problem} DigUp will retry.`;
   } else if (model.state === "waiting") {
     label = "Waiting for the network to download the model";
     busy = true;
   } else if (model.state === "failed") {
-    label = "The model couldn't download";
-    note = model.message || "";
+    label = "Model setup needs attention";
+    note = model.message || "Check the selected accelerator and model files in Settings.";
+  } else if (model.state === "checking") {
+    label = "Checking model files";
+    busy = true;
   } else if (state.measuring) {
     label = "Checking this computer's speed";
     busy = true;
@@ -524,21 +595,24 @@ function renderProgress() {
     fraction = total ? count / total : 0;
     const later = selectionPart().later, pace = progress.pace || 1;
     time = `${Math.floor(fraction * 100)}%` + (later > 0 ? ` · ${leftText(later * (1 - fraction) * pace)}` : "");
-    note = "Everything is searchable; long PDFs and documents are being read past their first pages.";
+    note = "Indexed content is searchable while DigUp reads the rest of your long documents.";
   } else if (state.activity === "idle" || (state.activity === "starting" && state.searchable > 0 && !state.pending)) {
-    label = state.searchable ? `${state.searchable.toLocaleString()} ${state.searchable === 1 ? "file" : "files"} indexed` : "Up to date";
-    done = true;
-    note = "Search from the window, or press the shortcut in any app.";
+    label = state.searchable ? `${state.searchable.toLocaleString()} ${state.searchable === 1 ? "file" : "files"} indexed` : "No file content indexed yet";
+    done = Boolean(state.searchable);
   } else if (state.activity === "failed") {
     label = state.line || "Indexing stopped";
   } else {
     label = "Looking at your folders";
     busy = true;
   }
-  what.textContent = label;
-  left.textContent = time;
+  if (what.textContent !== label) what.textContent = label;
+  if (left.textContent !== time) left.textContent = time;
+  bar.hidden = !busy && !done && fraction === null;
   bar.className = "bar" + (busy ? " busy" : "") + (done ? " done" : "");
-  fill.style.width = busy || done ? "" : `${Math.round(100 * Math.max(0, Math.min(1, fraction ?? 0)))}%`;
+  const percent = done ? 100 : Math.round(100 * Math.max(0, Math.min(1, fraction ?? 0)));
+  if (busy || bar.hidden) bar.removeAttribute("aria-valuenow");
+  else bar.setAttribute("aria-valuenow", String(percent));
+  fill.style.width = busy || done ? "" : `${percent}%`;
   $("progress-note").textContent = note;
 }
 
@@ -610,7 +684,7 @@ function showModel(model) {
     checking: "Checking the model…",
     waiting: "Waiting for the network to download the model",
     ready: "Model ready",
-    failed: `The model couldn't download: ${model.message || "unknown error"}`,
+    failed: model.message || "Model setup needs attention. Check acceleration settings.",
   };
   let text = lines[model.state] || "";
   if (model.state === "downloading") {
@@ -620,6 +694,8 @@ function showModel(model) {
     if (model.problem) text += ` (${model.problem}, trying again)`;
   }
   $("model").textContent = text;
+  $("model").classList.toggle("problem", model.state === "failed");
+  renderModelAvailability();
   if (PAGES[page] === "ready") renderProgress();
 }
 
@@ -632,9 +708,11 @@ tauri.event.listen("speed", () => {
 
 function showKeys(hotkey) {
   const keys = isMac ? [...hotkey.replace(/[^⌃⌥⇧⌘]/g, "")].concat(hotkey.replace(/[⌃⌥⇧⌘]/g, "")) : hotkey.split("+");
-  $("keys").replaceChildren(...keys.filter(Boolean).map((key) => element("span", "key", key)));
-  $("reveal-key").textContent = isMac ? "⌘↩" : "Ctrl+↩";
-  $("reveal-text").textContent = isMac ? "shows it in Finder" : isWindows ? "shows it in Explorer" : "shows it in its folder";
+  for (const id of ["keys", "ready-keys"]) {
+    $(id).replaceChildren(...keys.filter(Boolean).map(key => element("kbd", "keycap", key)));
+  }
+  $("reveal-key").textContent = isMac ? "⌘Enter" : "Ctrl+Enter";
+  $("reveal-text").textContent = isMac ? "Show the file in Finder" : isWindows ? "Show the file in Explorer" : "Show the file in its folder";
 }
 
 /// Where the shortcut lives on a desktop that keeps it itself (GNOME, KDE), or the command to give it (other Wayland

@@ -128,19 +128,22 @@ let browser;
     const keys=await page.locator("[data-result-key]").evaluateAll(nodes=>nodes.map(node=>node.dataset.resultKey));
     assert.equal(keys.length,new Set(keys).size,"A file was displayed twice after merging providers");
     if(view==="window.html"){
-      await page.evaluate(()=>{window.published=0;});await page.locator('#kinds [data-title="Documents"]').click();
+      const fileTypes = page.locator("#file-types");
+      await page.evaluate(()=>{window.published=0;});
+      await fileTypes.click();
+      await page.getByRole("menuitemradio", { name: /^Documents\b/ }).click();
       await page.waitForFunction(()=>state.finalGeneration===state.generation&&state.filter==="documents");
-      await row(oldKey).click();await page.locator('#kinds [data-title="Documents"]').focus();
+      await row(oldKey).click();await fileTypes.focus();
       const meaning=await page.evaluate(()=>calls.filter(c=>c.command==="ask"&&c.args.request.op==="search"&&c.args.request.meaning).length);
       await page.evaluate(()=>{window.published=2;emit("helper",{from:"search",event:{event:"search_index",state:"words_ready"}});});
       await row("file:C:/docs/receipt-notes.txt").waitFor({state:"visible"});
       assert.equal(await page.evaluate(()=>state.filter),"documents");
-      assert.equal(await page.locator('#kinds [data-title="Documents"]').getAttribute("aria-pressed"),"true");
-      assert.equal(await page.evaluate(()=>document.activeElement.dataset.title),"Documents","Updated counts lost the focused filter");
+      assert.match(await fileTypes.textContent(),/Documents/);
+      assert.equal(await page.evaluate(()=>document.activeElement.id),"file-types","Updated counts lost the focused filter");
       assert.equal(await page.evaluate(()=>state.selection),oldKey);
       const expected=await page.evaluate(()=>state.ranked.filter(hit=>["doc","pdf"].includes(hit.kind)).length);
-      assert.equal(Number(await page.locator('#kinds [data-title="Documents"] .number').textContent()),expected);
-      if(mode==="ready")assert.match(await page.locator('#kinds [data-title="Documents"]').getAttribute("title"),/displayed matching files/);
+      assert.equal(Number(await fileTypes.locator(".number").textContent()),expected);
+      if(mode==="ready")assert.match(await fileTypes.getAttribute("title"),/displayed matching files/);
       assert.equal(await page.evaluate(()=>calls.filter(c=>c.command==="ask"&&c.args.request.op==="search"&&c.args.request.meaning).length),meaning);
       assert.ok(await page.evaluate(()=>calls.some(c=>c.command==="ask"&&c.args.request.op==="search"&&!c.args.request.meaning&&c.args.request.kinds?.includes("pdf"))));
     }

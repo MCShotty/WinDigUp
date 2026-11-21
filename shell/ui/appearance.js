@@ -1,6 +1,7 @@
 "use strict";
 window.AppearanceUI = (() => {
   const themes = new Set(["system", "light", "dark"]), materials = new Set(["automatic", "solid"]);
+  const systemDark = matchMedia("(prefers-color-scheme: dark)");
   let selected = "system", material = "automatic", busy = false, panel = null;
   function syncControls() {
     const theme = document.getElementById("appearance"), surface = document.getElementById("panel-material");
@@ -15,7 +16,12 @@ window.AppearanceUI = (() => {
   function apply(value) {
     selected = themes.has(value) ? value : "system";
     document.documentElement.dataset.theme = selected;
+    updateColorScheme();
     syncControls();
+  }
+  function updateColorScheme() {
+    const dark = selected === "dark" || (selected === "system" && systemDark.matches);
+    document.documentElement.dataset.colorScheme = dark ? "dark" : "light";
   }
   function applyPanel(value) {
     panel = value || null;
@@ -47,6 +53,7 @@ window.AppearanceUI = (() => {
     }
   }
   apply("system");
+  systemDark.addEventListener("change", updateColorScheme);
   if (window.__TAURI__) {
     window.__TAURI__.event.listen("appearance", ({payload}) => snapshot(payload));
     window.__TAURI__.event.listen("panel-appearance", ({payload}) => applyPanel(payload));

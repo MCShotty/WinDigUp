@@ -21,6 +21,8 @@ const {setup}=require("./application-fixtures.cjs");
   const base=process.env.DIGUP_UI_URL||"http://127.0.0.1:8765";await page.goto(base+"/index.html");
   await page.waitForSelector(".launcher-shortcut");
   assert.equal(await page.locator(".launcher-shortcut").count(),2);
+  assert.equal(await page.getByRole("search",{name:"Quick search",exact:true}).count(),1);
+  assert.equal(await page.getByRole("button",{name:"All apps",exact:true}).count(),1);
   assert.equal(await page.locator("#panel").evaluate(e=>Math.round(e.getBoundingClientRect().height)),120);
   await page.focus("#query");await page.keyboard.press("ArrowDown");
   assert.equal(await page.evaluate(()=>document.activeElement.dataset.launcherId),"app:editor");

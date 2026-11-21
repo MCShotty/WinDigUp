@@ -158,6 +158,10 @@ let browser;
     assert.equal(await page.locator(".big").isVisible(),false);
     assert.equal(await page.locator("#query").evaluate(node=>document.activeElement===node),true);
     assert.match(await page.locator('#list [aria-selected="true"]').textContent(),/Synthetic note 1/);
+    await page.getByRole("button",{name:"Preview",exact:true}).click();
+    await page.keyboard.press("Control+Enter");
+    assert.equal(await page.evaluate(()=>calls.filter(call=>call.command==="reveal").at(-1)?.args.path),"C:/Documents/Synthetic note 1.txt");
+    assert.equal(await page.locator(".big").isVisible(),false);
     await page.getByRole("button",{name:"Open full search",exact:true}).click();
     assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.command==="open_window").at(-1).args.selected),
       "file:C:/Documents/Synthetic note 1.txt");
@@ -199,9 +203,18 @@ let browser;
     assert.ok(await page.evaluate(()=>window.calls.some(call=>call.command==="launch_app")));
     await page.evaluate(()=>{window.fileMode="failed";});
     await page.fill("#query","no applications");
-    await page.waitForFunction(()=>document.querySelector("#summary").textContent.includes("File helper unavailable"));
+    await page.waitForFunction(()=>document.querySelector("#summary").textContent.includes("File search unavailable"));
+    assert.equal(await page.locator("#summary").getAttribute("title"),"File helper unavailable");
+    assert.equal(await page.locator("#keys").textContent(),"");
+    const retry = page.getByRole("button",{name:"Retry file search"});
+    assert.equal(await retry.isVisible(),true);
     assert.equal(await page.locator("#activity").isVisible(),true);
     await capture(page,"error-light","#panel");
+    await page.evaluate(()=>{window.fileMode="ready";});
+    await retry.click();
+    await page.locator("#list .row").first().waitFor();
+    assert.equal(await retry.isVisible(),false);
+    assert.ok(await page.locator("#query").evaluate(node=>node===document.activeElement));
     await page.fill("#query","apps:");
     await page.waitForFunction(()=>document.querySelectorAll("#list .app-row").length===6);
     const names = await page.locator("#list .app-name").allTextContents();
@@ -231,12 +244,14 @@ let browser;
       await page.evaluate(()=>{const node=document.createElement("div");node.style.background="Canvas";document.body.append(node);
         const value=getComputedStyle(node).backgroundColor;node.remove();return value;}));
     const selectedContrast = await page.locator("#list .row.selected").evaluate(node => ({
-      background:getComputedStyle(node).backgroundColor,color:getComputedStyle(node.querySelector(".row-title")).color}));
+      background:getComputedStyle(node).backgroundColor,color:getComputedStyle(node.querySelector(".row-title")).color,
+      outline:getComputedStyle(node).outlineColor}));
     const systemContrast = await page.evaluate(() => {
-      const node=document.createElement("div");node.style.cssText="background:Highlight;color:HighlightText";document.body.append(node);
-      const value={background:getComputedStyle(node).backgroundColor,color:getComputedStyle(node).color};node.remove();return value;
+      const node=document.createElement("div");node.style.cssText="background:Canvas;color:CanvasText;outline:2px solid Highlight";document.body.append(node);
+      const style=getComputedStyle(node);
+      const value={background:style.backgroundColor,color:style.color,outline:style.outlineColor};node.remove();return value;
     });
-    assert.deepEqual(selectedContrast,systemContrast,"Forced-colour selection must retain contrasting system text");
+    assert.deepEqual(selectedContrast,systemContrast,"Forced-colour selection must pair readable system text with a visible highlight outline");
     await capture(page,"panel-contrast","#panel");
     await page.emulateMedia({forcedColors:"none",reducedMotion:"no-preference"});
     await page.close();
@@ -270,7 +285,7 @@ let browser;
     }
 
     const settings = await fixture("settings.html?tab=general",{width:660,height:620});
-    assert.equal(await settings.getByRole("combobox",{name:"Search panel appearance"}).isVisible(),true);
+    await settings.getByRole("combobox",{name:"Quick search material",exact:true}).waitFor();
     await settings.selectOption("#appearance","dark");
     await settings.waitForFunction(()=>document.documentElement.dataset.theme==="dark");
     await settings.selectOption("#panel-material","solid");

@@ -21,6 +21,7 @@ const notes = {
 
 let info = {};
 let accelerationDirty = false;
+let accelerationRevision = 0;
 let personalizationPending = false;
 let personalizationRevision = 0;
 let displayedBackend = null;
@@ -33,19 +34,32 @@ let summaries = null;        // what's indexed under each folder (search-service
 let removing = null;         // the folder whose removal is being confirmed
 let codeSummaries = null;    // what's indexed under each code folder
 let removingCode = null;     // the code folder whose removal is being confirmed
-const activityView = new ActivityUI.View($("settings-activity"), { onSettings: tab => showTab(tab) });
+const activityView = new ActivityUI.View($("settings-activity"), { onSettings: showSettingsDestination });
+const settingsScroll = document.querySelector("main.settings");
+const settingsSection = $("settings-section");
+const tabButtons = [...$("tabs").querySelectorAll("button")];
+const compactSettings = matchMedia("(max-width: 579px)");
+const tabScroll = new Map();
+let activeTab = null;
 
 // MARK: Tabs
 
-function showTab(name) {
-  if (!["activity", "general", "folders", "code", "apps", "drives", "executable-review", "windows-settings", "storage"].includes(name)) name = "general";
-  if (["drives", "executable-review", "windows-settings"].includes(name) && !info.discovery?.supported) name = "general";
+function showTab(name, target = null) {
+  if (!tabButtons.some(button => button.dataset.tab === name && !button.hidden)) name = "general";
+  const changed = activeTab !== name;
+  const oldTab = $(activeTab);
+  const focusWasInPanel = changed && oldTab?.contains(document.activeElement);
+  if (changed && activeTab) tabScroll.set(activeTab, settingsScroll.scrollTop);
+  activeTab = name;
+  let selectedTab;
   if (name === "activity") activityView.show(); else activityView.hide();
-  for (const button of document.querySelectorAll("#tabs button")) {
+  for (const button of tabButtons) {
     const selected = button.dataset.tab === name;
     button.setAttribute("aria-selected", String(selected)); button.tabIndex = selected ? 0 : -1;
-    if (selected) button.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (selected) selectedTab = button;
   }
+  settingsSection.value = name;
+  settingsSection.setAttribute("aria-controls", name);
   for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== name;
   if (name === "folders") loadSummaries();
   if (name === "code") loadCodeSummaries();
@@ -53,20 +67,56 @@ function showTab(name) {
   if (name === "drives") { DiscoverySettings.render(); DiscoverySettings.refreshVolumes(); }
   if (name === "executable-review") { DiscoverySettings.render(); DiscoverySettings.candidates(); }
   if (name === "windows-settings") DiscoverySettings.render();
+  if (changed) settingsScroll.scrollTop = tabScroll.get(name) ?? 0;
+  selectedTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (target && $(name).contains(target)) {
+    target.scrollIntoView({ block: "start" });
+    target.focus({ preventScroll: true });
+  } else if (focusWasInPanel) (compactSettings.matches ? settingsSection : selectedTab)?.focus({ preventScroll: true });
 }
 
-for (const button of document.querySelectorAll("#tabs button")) {
+function showSettingsDestination(tab) {
+  showTab(tab, tab === "general" ? $("acceleration-title") : null);
+}
+
+for (const button of tabButtons) {
   button.id ||= "settings-tab-" + button.dataset.tab;
   button.setAttribute("aria-controls", button.dataset.tab);
   $(button.dataset.tab)?.setAttribute("aria-labelledby", button.id);
   button.onclick = () => showTab(button.dataset.tab);
 }
+const sectionOptions = new Map();
+for (const section of $("tabs").querySelectorAll(".settings-tab-group")) {
+  const group = document.createElement("optgroup");
+  group.label = section.firstElementChild.textContent.trim();
+  for (const button of section.querySelectorAll("button")) {
+    const option = new Option(button.textContent.trim(), button.dataset.tab);
+    option.hidden = button.hidden;
+    sectionOptions.set(option.value, option);
+    group.append(option);
+  }
+  settingsSection.append(group);
+}
+settingsSection.onchange = () => showTab(settingsSection.value);
+const tabVisibility = new MutationObserver(changes => {
+  for (const { target } of changes) {
+    sectionOptions.get(target.dataset.tab).hidden = target.hidden;
+  }
+  if (activeTab && tabButtons.find(button => button.dataset.tab === activeTab)?.hidden) showTab("general");
+});
+for (const button of tabButtons) tabVisibility.observe(button, { attributes: true, attributeFilter: ["hidden"] });
+compactSettings.addEventListener("change", () => {
+  const focused = document.activeElement;
+  if (focused !== settingsSection && !tabButtons.includes(focused)) return;
+  const next = compactSettings.matches ? settingsSection : tabButtons.find(button => button.dataset.tab === activeTab);
+  next?.focus({ preventScroll: true });
+});
 $("tabs").onkeydown = event => {
-  const tabs = [...$("tabs").querySelectorAll('button:not([hidden])')], current = tabs.indexOf(event.target);
-  if (current < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = tabButtons.filter(button => !button.hidden), current = tabs.indexOf(event.target);
+  if (current < 0 || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
   const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
-    : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    : (current + (["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
   showTab(tabs[next].dataset.tab); tabs[next].focus();
 };
 $("open-drives").onclick = $("folders-drives").onclick = () => showTab("drives");
@@ -101,7 +151,8 @@ function renderGeneral() {
   for (const choice of document.querySelectorAll('input[name="tray-click"]')) choice.checked = choice.value === info.trayClick;
   $("center-option").hidden = !info.canCenter;
   $("center").checked = info.centered;
-  $("keys").replaceChildren(...info.hotkey.split("+").filter(Boolean).map((key) => element("span", "key", key)));
+  $("startup").hidden = !(info.canOpenAtLogin || info.canChooseTrayClick || info.canCenter);
+  $("keys").replaceChildren(...info.hotkey.split("+").filter(Boolean).map((key) => element("kbd", "key keycap", key)));
   const note = notes[info.shortcut.method];
   $("shortcut-note").hidden = !note;
   $("shortcut-note").textContent = note || "";
@@ -143,7 +194,8 @@ $("accelerator").onchange = () => {
   if (displayedBackend) gpuDrafts.set(displayedBackend, $("gpu-device").value);
   displayedBackend = $("accelerator").value;
   $("gpu-device").value = gpuDrafts.get(displayedBackend) || "";
-  accelerationDirty = true; showAcceleratorOptions();
+  editAcceleration();
+  showAcceleratorOptions();
 };
 
 function renderGPUDevices() {
@@ -179,11 +231,19 @@ $("refresh-gpus").onclick = refreshGPUDevices;
 window.__TAURI__.event.listen("acceleration", ({ payload }) => {
   if (!accelerationDirty && info.shortcut) { info.acceleration = payload; renderGeneral(); }
 });
-for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs", "resource-profile"]) $(id).oninput = () => { accelerationDirty = true; };
-$("resource-profile").onchange = () => { accelerationDirty=true;renderResourceProfile($("resource-profile").value);showAcceleratorOptions(); };
-$("apply-accelerator").onclick = async () => {
-  $("problem").hidden = true;
-  $("apply-accelerator").disabled = true;
+function editAcceleration() {
+  accelerationDirty = true;
+  accelerationRevision++;
+}
+for (const id of ["gpu-device", "npu-python", "npu-models", "gpu-jobs", "resource-profile"]) $(id).oninput = editAcceleration;
+$("resource-profile").onchange = () => { renderResourceProfile($("resource-profile").value); showAcceleratorOptions(); };
+async function applyAcceleration() {
+  const button = $("apply-accelerator");
+  if (button.disabled) return;
+  const revision = accelerationRevision;
+  const hadFocus = document.activeElement === button;
+  clearSaveFeedback("acceleration-feedback");
+  button.disabled = true;
   try {
     await invoke("set_acceleration", { acceleration: {
       backend: $("accelerator").value, gpu: $("gpu-device").value.trim(), jobs:Number($("gpu-jobs").value),
@@ -191,10 +251,12 @@ $("apply-accelerator").onclick = async () => {
       python: $("npu-python").value.trim(), models: $("npu-models").value.trim(),
     } });
   } catch (error) {
-    fail(error);
-    $("apply-accelerator").disabled = false;
+    button.disabled = false;
+    if (hadFocus && activeTab === "general" && document.activeElement === document.body) button.focus({ preventScroll: true });
+    if (revision === accelerationRevision) showSaveFailure("acceleration-feedback", button, error, applyAcceleration);
   }
-};
+}
+$("apply-accelerator").onclick = applyAcceleration;
 
 function renderPersonalization() {
   const preference = info.personalization;
@@ -334,7 +396,11 @@ $("index-now").onclick = async () => {
   finally { renderStatus(); }
 };
 
-function showIndexingDiagnostics() { showTab("activity"); activityView.setTab("diagnostics"); }
+function showIndexingDiagnostics() {
+  showTab("activity");
+  activityView.setTab("diagnostics");
+  activityView.host.querySelector('[data-tab="diagnostics"]').focus();
+}
 $("index-diagnostics").onclick = $("apps-diagnostics").onclick = showIndexingDiagnostics;
 
 async function loadSummaries() {
@@ -373,12 +439,14 @@ function renderFolders() {
 
 /// The fields: set from the settings when the window opens or they change, never while you're editing them.
 function renderFields() {
-  $("types").value = (info.skipTypes || []).join(", ");
-  const hours = info.indexHours || { on: false, start: 60, end: 420 };
-  $("hours").checked = hours.on;
-  $("times").hidden = !hours.on;
-  $("hours-start").value = clock(hours.start);
-  $("hours-end").value = clock(hours.end);
+  if (!typesDraft.dirty) $("types").value = (info.skipTypes || []).join(", ");
+  if (!hoursDraft.dirty) {
+    const hours = info.indexHours || { on: false, start: 60, end: 420 };
+    $("hours").checked = hours.on;
+    $("times").hidden = !hours.on;
+    $("hours-start").value = clock(hours.start);
+    $("hours-end").value = clock(hours.end);
+  }
 }
 
 /// A folder searched (with `code`, a code folder): its name, where it is, what's in it, how much of it is indexed, and
@@ -407,7 +475,7 @@ function folderRow(folder, summary, code = false) {
   priority.type = "button";
   priority.dataset.priorityKey = priorityKey;
   priority.dataset.unavailable = String(Boolean(summary?.missing || summary?.unreadable));
-  priority.setAttribute("aria-label", "Index " + nameOf(folder) + " first");
+  priority.setAttribute("aria-label", "Index this first: " + nameOf(folder));
   priority.disabled = priorityPending.has(priorityKey) || Boolean(summary?.missing || summary?.unreadable);
   priority.onclick = async () => {
     if (priorityPending.has(priorityKey)) return;
@@ -492,32 +560,29 @@ $("skip-folder").onclick = async () => {
   if (picked.length) setSkipped([...(info.skipped || []), ...picked.filter((path) => !info.skipped.includes(path))]);
 };
 
-// File types: applied on Return, and when the field is left.
-async function applyTypes() {
-  try {
-    info.skipTypes = await invoke("set_skip_types", { types: $("types").value });
-    $("types").value = info.skipTypes.join(", ");
-  } catch (error) {
-    fail(error);
-  }
-}
-$("types").addEventListener("keydown", (event) => { if (event.key === "Enter") applyTypes(); });
-$("types").addEventListener("blur", applyTypes);
+const typesDraft = settingDraft("types-feedback", $("types"), "set_skip_types",
+  () => ({ types: $("types").value }), list => {
+    info.skipTypes = list;
+    $("types").value = list.join(", ");
+  });
+$("types").addEventListener("input", typesDraft.edit);
+$("types").addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.isComposing) typesDraft.save(true);
+});
+$("types").addEventListener("blur", event => {
+  if (!$("types-feedback").contains(event.relatedTarget)) typesDraft.save();
+});
 
-async function applyHours() {
-  const on = $("hours").checked;
-  const hours = { on, start: minutes($("hours-start").value, 60), end: minutes($("hours-end").value, 420) };
-  $("times").hidden = !on;
-  try {
-    await invoke("set_index_hours", hours);
-    info.indexHours = hours;
-  } catch (error) {
-    fail(error);
-  }
+const hoursDraft = settingDraft("hours-feedback", $("hours"), "set_index_hours",
+  () => ({ on: $("hours").checked, start: minutes($("hours-start").value, 60), end: minutes($("hours-end").value, 420) }),
+  (_, hours) => { info.indexHours = hours; });
+for (const id of ["hours", "hours-start", "hours-end"]) {
+  $(id).addEventListener("input", hoursDraft.edit);
+  $(id).addEventListener("change", event => {
+    $("times").hidden = !$("hours").checked;
+    hoursDraft.save(false, event.currentTarget);
+  });
 }
-$("hours").addEventListener("change", applyHours);
-$("hours-start").addEventListener("change", applyHours);
-$("hours-end").addEventListener("change", applyHours);
 
 // MARK: Code
 
@@ -560,24 +625,24 @@ function renderCode() {
   $("add-code").textContent = on ? "Add Folders…" : "Choose Code Folders…";
 
   const select = $("code-editor");
-  const options = [...code.editors, { id: "default", name: "The file's default app" }];
-  select.replaceChildren(...options.map((editor) => {
-    const option = element("option", "", editor.name);
-    option.value = editor.id;
-    return option;
-  }));
-  select.value = code.editor;
+  if (!editorDraft.dirty) {
+    const options = [...code.editors, { id: "default", name: "The file's default app" }];
+    select.replaceChildren(...options.map((editor) => {
+      const option = element("option", "", editor.name);
+      option.value = editor.id;
+      return option;
+    }));
+    select.value = code.editor;
+  }
   $("code-off").hidden = !on || !$("code-off-confirm").hidden;
 }
 
 $("add-code").onclick = () => invoke("choose_code_folders").catch(fail);
-$("code-editor").addEventListener("change", async () => {
-  try {
-    await invoke("set_code_editor", { editor: $("code-editor").value });
-    info.code.editor = $("code-editor").value;
-  } catch (error) {
-    fail(error);
-  }
+const editorDraft = settingDraft("editor-feedback", $("code-editor"), "set_code_editor",
+  () => ({ editor: $("code-editor").value }), (_, { editor }) => { info.code.editor = editor; });
+$("code-editor").addEventListener("change", () => {
+  editorDraft.edit();
+  editorDraft.save();
 });
 $("code-off").onclick = () => {
   const size = info.storage?.codeBytes;
@@ -681,16 +746,69 @@ function element(tag, className, text) {
 }
 
 function fail(error) {
-  $("problem").textContent = String(error);
-  $("problem").hidden = false;
+  $("settings-error").textContent = error?.message || String(error);
+}
+
+function clearSaveFeedback(id) {
+  const feedback = $(id), message = feedback.querySelector("p");
+  message.textContent = "";
+  message.hidden = true;
+  feedback.querySelector("button").hidden = true;
+}
+
+function showSaveFailure(id, control, error, retry) {
+  const feedback = $(id), message = feedback.querySelector("p"), button = feedback.querySelector("button");
+  message.hidden = false;
+  message.textContent = error?.message || String(error);
+  button.hidden = false;
+  button.onclick = () => {
+    control.focus({ preventScroll: true });
+    retry();
+  };
+  if (control.getClientRects().length && [control, document.body].includes(document.activeElement)) {
+    feedback.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function settingDraft(feedback, control, command, read, accept) {
+  let revision = 0, attempted = -1, dirty = false, pending = false, queued = null;
+  async function save(retry = false, origin = control) {
+    if (!dirty || (!retry && attempted === revision)) return;
+    if (pending) { queued = origin; return; }
+    const args = read(), submitted = revision;
+    attempted = submitted;
+    pending = true;
+    clearSaveFeedback(feedback);
+    try {
+      const reply = await invoke(command, args);
+      if (submitted === revision) {
+        accept(reply, args);
+        dirty = false;
+        revision++;
+      }
+    } catch (error) {
+      if (submitted === revision) showSaveFailure(feedback, origin, error, () => save(true, origin));
+    } finally {
+      pending = false;
+      const next = queued;
+      queued = null;
+      if (next) save(false, next);
+    }
+  }
+  return { get dirty() { return dirty; }, get revision() { return revision; },
+    edit() { revision++; dirty = true; }, save };
 }
 
 // MARK: Start
 
 async function refresh() {
   const personalRevision = personalizationRevision;
+  const typesRevision = typesDraft.revision, hoursRevision = hoursDraft.revision, editorRevision = editorDraft.revision;
   const fresh = await invoke("settings_info"), previousDiscovery = info.discovery;
   if (personalizationPending || personalRevision !== personalizationRevision) fresh.personalization = info.personalization;
+  if (typesDraft.dirty || typesRevision !== typesDraft.revision) fresh.skipTypes = info.skipTypes;
+  if (hoursDraft.dirty || hoursRevision !== hoursDraft.revision) fresh.indexHours = info.indexHours;
+  if (fresh.code && info.code && (editorDraft.dirty || editorRevision !== editorDraft.revision)) fresh.code.editor = info.code.editor;
   info = fresh;
   if (previousDiscovery && fresh.discovery) {
     info.discovery = previousDiscovery; DiscoverySettings.accept("discovery", fresh.discovery);
@@ -708,7 +826,7 @@ async function refresh() {
 
 // Back from the code folders window (or anything else that changed the settings): shown as they are now.
 window.addEventListener("focus", () => { refresh().catch(() => {}); });
-tauri.event.listen("settings-tab", ({ payload }) => showTab(payload));
+tauri.event.listen("settings-tab", ({ payload }) => showSettingsDestination(payload));
 
 // Indexing as it goes, and what's indexed under each folder at most every two seconds.
 let summariesTimer = null;
@@ -743,7 +861,7 @@ async function start() {
                                        accelerator: $("accelerator").value, cpuOption: Boolean($("accelerator").querySelector('option[value="cpu"]')) } }).catch(() => {});
   }
   const asked = new URLSearchParams(location.search).get("tab");   // dev snapshots: ?tab=folders
-  showTab(asked || "general");
+  if (asked) showSettingsDestination(asked); else showTab("general");
 }
 
 start();

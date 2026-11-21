@@ -36,7 +36,7 @@ const Launcher = {
       children.push(button);
     }
     const browse=element("button","launcher-browse",(children.length?"All apps":"Browse apps"));
-    browse.type="button";browse.setAttribute("aria-label","Browse all applications");
+    browse.type="button";
     browse.onclick=()=>invoke("open_window",{query:"apps:",kind:"apps",selected:null}).catch(()=>{});
     children.push(browse);
     host.replaceChildren(...children);

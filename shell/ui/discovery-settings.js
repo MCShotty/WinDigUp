@@ -7,7 +7,7 @@ const DiscoverySettings = {
   n(value){return Number.isFinite(value)?value.toLocaleString():"Not reported";},
   start(){
     if(this.started)return;this.started=true;
-    this.driveList=new PipelineUI.DriveList(this.el("drive-progress-list"));
+    this.driveList=new PipelineUI.DriveList(this.el("drive-progress-list"), { headingLevel: 3 });
     for(const [event,key]of [["discovery","discovery"],["app-enrichment","enrichment"],["windows-settings","windowsSettings"],["windows-settings-progress","windowsSettingsSemantic"]]){
       tauri.event.listen(event,({payload})=>{
         this.accept(key,payload);
@@ -123,7 +123,7 @@ const DiscoverySettings = {
       const note=changed?"Unsaved choices for this drive.":volume.available===false?"Saved choices are kept while this drive is disconnected.":"Choices saved";
       if(row.selection.textContent!==note)row.selection.textContent=note;
       row.hasDriveDetails=savedApps&&d.version===2;
-      row.activity.textContent=row.hasDriveDetails?"View drive activity":"Open Activity";
+      row.activity.textContent=row.hasDriveDetails?"View activity":"Open Activity";
       row.activity.setAttribute("aria-label",row.hasDriveDetails?"View activity for "+title:"Open Activity");
     }
     for(const[id,row]of this.volumeRows)if(!present.has(id)){row.root.remove();this.volumeRows.delete(id);}

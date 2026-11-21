@@ -85,7 +85,7 @@ const Apps = {
     row.title = isSetting(hit) ? (hit.source==="control_panel"?"Control Panel item or task":"Windows settings page") : hit.shortcut || "Registered Windows application";
     row.dataset.resultKey = resultKey(hit); row.setAttribute("role", expanded ? "row" : "option");
     row.setAttribute("aria-selected", String(selected));
-    row.setAttribute("aria-label", `${isSetting(hit)?"Windows settings":"Application"}, ${hit.name}`);
+    if (expanded) row.setAttribute("aria-label", `${isSetting(hit)?"Windows settings":"Application"}, ${hit.name}`);
     const text = element("div", "app-row-text");
     const title=element("div","app-title-line");title.append(element("div", "app-name", hit.name));
     if(hit.publisher)title.append(element("span","app-inline-publisher",hit.publisher));

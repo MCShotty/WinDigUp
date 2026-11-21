@@ -1,23 +1,57 @@
-:root[data-theme="light"] {
-  color-scheme:light;
-  --surface:#fbfbfb; --card:#fff; --text:#1d1d1f; --secondary:#626269; --tertiary:#626269;
+:root {
+  color-scheme: light;
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  font-size: 13px;
+  --ui-title: 1.85rem;
+  --ui-heading: 1.23rem;
+  --ui-detail: calc(12rem / 13);
+  --ui-control: 1rem;
+  --ui-gap: 8px;
+  --ui-section-gap: 24px;
+  --moss:#356652;
+  --ember:#d97b1a;
+  --surface:#fbfbfb; --card:#fff; --text:#1d1d1f; --secondary:#58585f; --tertiary:var(--secondary);
   --pane:rgba(0,0,0,.025); --line:rgba(0,0,0,.12); --fill:rgba(0,0,0,.06);
-  --fill-strong:rgba(0,0,0,.1); --tile:rgba(0,0,0,.05); --menu:#fff;
-  --chip:rgba(79,128,88,.1); --chip-hover:rgba(79,128,88,.2); --leaf-text:#356652;
+  --fill-strong:rgba(0,0,0,.1); --tile:rgba(0,0,0,.05); --menu:var(--card);
+  --chip:rgba(79,128,88,.1); --chip-hover:rgba(79,128,88,.2); --leaf-text:var(--moss);
   --problem:#ae421c;
+  --danger-fill:var(--problem);
+  --danger-ink:#fff;
+  --primary-fill:#356652;
+  --primary-ink:#fff;
+  --action-link:var(--leaf-text);
+  --app-icon-filter:none;
+  --paper:#fff; --paper-ink:#222; --match-ink:#1d1d1f; --match-mark:#ffdb33;
+  --inline-mark:rgba(242,162,42,.28);
+  --dialog-scrim:rgba(0,0,0,.32);
 }
-:root[data-theme="dark"] {
+:root ::selection { background:var(--primary-fill); color:var(--primary-ink); }
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline:2px solid var(--selection-edge, var(--leaf-text)); outline-offset:2px;
+}
+.keycap {
+  display:inline-block; padding:0 5px; border:1px solid var(--line); border-radius:4px;
+  background:var(--fill); color:var(--text); font:inherit; font-size:var(--ui-detail);
+  line-height:1.4; white-space:nowrap;
+}
+:root[data-color-scheme="dark"] {
   color-scheme:dark;
-  --surface:#1f1f21; --card:#2a2a2d; --text:#f2f2f7; --secondary:#b0b0b6; --tertiary:#b0b0b6;
+  --surface:#1f1f21; --card:#2a2a2d; --text:#f2f2f7; --secondary:#b0b0b6;
   --pane:rgba(255,255,255,.025); --line:rgba(255,255,255,.16); --fill:rgba(255,255,255,.08);
   --fill-strong:rgba(255,255,255,.14); --tile:rgba(255,255,255,.05); --menu:#2c2c2e;
   --chip:rgba(162,199,142,.12); --chip-hover:rgba(162,199,142,.22); --leaf-text:#a2c78e;
+  --ember:#f2a22a;
   --problem:#ffb89c;
+  --danger-ink:#351910;
+  --primary-fill:#a2c78e;
+  --primary-ink:#172218;
+  --app-icon-filter:invert(.85);
+  --inline-mark:rgba(242,162,42,.35);
 }
-:root[data-theme="system"] { color-scheme:light dark; }
-@media (prefers-color-scheme:light) {
-  :root[data-theme="system"] { --secondary:#626269; --tertiary:#626269; --leaf-text:#356652; --problem:#ae421c; }
-}
-@media (prefers-color-scheme:dark) {
-  :root[data-theme="system"] { --secondary:#b0b0b6; --tertiary:#b0b0b6; --leaf-text:#a2c78e; --problem:#ffb89c; }
+@media (forced-colors:active) {
+  :root[data-theme] {
+    --primary-fill:ButtonFace; --primary-ink:ButtonText; --action-link:LinkText;
+    --danger-fill:ButtonFace; --danger-ink:ButtonText;
+  }
 }

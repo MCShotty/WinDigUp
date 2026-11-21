@@ -13,21 +13,36 @@
   <link rel="stylesheet" href="desktop.css">
   <script src="appearance.js"></script>
 </head>
-<body>
-  <nav class="tabs" id="tabs" role="tablist">
-    <button role="tab" data-tab="activity">Activity</button>
-    <button role="tab" data-tab="general">General</button>
-    <button role="tab" data-tab="folders">Folders</button>
-    <button role="tab" data-tab="code">Code</button>
-    <button role="tab" data-tab="apps" id="apps-tab" hidden>Apps</button>
-    <button role="tab" data-tab="drives" id="drives-tab" hidden>Drives</button>
-    <button role="tab" data-tab="executable-review" id="review-tab" hidden>Review apps</button>
-    <button role="tab" data-tab="windows-settings" id="win-settings-tab" hidden>Windows settings</button>
-    <button role="tab" data-tab="storage">Storage</button>
+<body class="settings-window">
+  <nav class="settings-navigation" aria-label="DigUp settings">
+    <div class="settings-navigation-title" aria-hidden="true">Settings</div>
+    <label class="visually-hidden" for="settings-section">Settings section</label>
+    <select class="field" id="settings-section"></select>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+      <div class="settings-tab-group" role="presentation">
+        <span aria-hidden="true">DigUp</span>
+        <button role="tab" data-tab="general">General</button>
+        <button role="tab" data-tab="activity">Activity</button>
+        <button role="tab" data-tab="storage">Storage</button>
+      </div>
+      <div class="settings-tab-group" role="presentation">
+        <span aria-hidden="true">Sources</span>
+        <button role="tab" data-tab="folders">Folders</button>
+        <button role="tab" data-tab="apps" id="apps-tab" hidden>Apps</button>
+        <button role="tab" data-tab="windows-settings" id="win-settings-tab" hidden>Windows settings</button>
+        <button role="tab" data-tab="code">Code</button>
+        <button role="tab" data-tab="drives" id="drives-tab" hidden>Drives</button>
+        <button role="tab" data-tab="executable-review" id="review-tab" hidden>Review apps</button>
+      </div>
+    </div>
   </nav>
   <main class="settings">
+    <h1 class="visually-hidden">DigUp Settings</h1>
     <section class="tab" id="activity" role="tabpanel" hidden><div id="settings-activity"></div></section>
     <section class="tab" id="general" role="tabpanel">
+      <h2>General</h2>
+      <section class="settings-group" id="startup" hidden>
+      <h3>Startup and tray</h3>
       <label class="option" id="login-option" hidden>
         <input type="checkbox" id="login">
         <span class="text">
@@ -36,12 +51,12 @@
         </span>
       </label>
 
-      <div class="option" id="tray-click-option" hidden>
+      <div class="option" id="tray-click-option" role="radiogroup" aria-labelledby="tray-click-title" aria-describedby="tray-click-note" hidden>
         <span class="text">
-          <span class="name">Clicking DigUp's tray icon</span>
+          <span class="name" id="tray-click-title">Clicking DigUp's tray icon</span>
           <label class="choice"><input type="radio" name="tray-click" value="window"> Opens the window</label>
           <label class="choice"><input type="radio" name="tray-click" value="panel"> Shows the search panel</label>
-          <span class="info">Right-click it for the menu.</span>
+          <span class="info" id="tray-click-note">Right-click it for the menu.</span>
         </span>
       </div>
 
@@ -55,32 +70,40 @@
             on computers without graphics acceleration.</span>
         </span>
       </label>
+      </section>
 
-      <label for="appearance">Appearance</label>
-      <select class="field" id="appearance"><option value="system">Follow Windows or system appearance</option><option value="light">Light</option><option value="dark">Dark</option></select>
+      <section class="settings-group">
+      <h3>Appearance</h3>
+      <label for="appearance">Theme</label>
+      <select class="field" id="appearance"><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select>
       <p id="appearance-message" class="note" role="status"></p>
       <div id="panel-material-option" class="appearance-option" hidden>
-        <label for="panel-material">Search panel appearance</label>
+        <label for="panel-material">Quick search material</label>
         <select class="field" id="panel-material" aria-describedby="panel-material-note">
           <option value="automatic">Automatic · Windows transparency</option>
           <option value="solid">Solid</option>
         </select>
         <p id="panel-material-note" class="note"></p>
       </div>
-      <section id="launcher-preferences" hidden>
-      <h3>Quick launcher</h3>
-      <label class="option"><input id="launcher-recents" type="checkbox"><span>Show recently launched apps after pinned apps</span></label>
-      <button id="clear-launcher-recents" type="button">Clear recent apps</button>
-      <div id="launcher-pins" aria-label="Pinned applications"></div>
-      <p id="launcher-note" class="note" role="status"></p>
-      <div id="copilot-option" hidden>
-        <h3>Copilot key</h3>
-        <p id="copilot-status" class="note" role="status"></p>
-        <button id="configure-copilot" type="button">Choose app for Copilot key in Windows</button>
-      </div>
       </section>
-      <h3>Model acceleration</h3>
-      <label for="accelerator">Inference device</label>
+
+      <section class="settings-group" id="launcher-preferences" hidden>
+        <h3>Quick launcher</h3>
+        <label class="option"><input id="launcher-recents" type="checkbox"><span>Show recently launched apps after pinned apps</span></label>
+        <button id="clear-launcher-recents" type="button">Clear recent apps</button>
+        <div id="launcher-pins" aria-label="Pinned applications"></div>
+        <p id="launcher-note" class="note" role="status"></p>
+        <div id="copilot-option" hidden>
+          <h4>Copilot key</h4>
+          <p id="copilot-status" class="note" role="status"></p>
+          <button id="configure-copilot" type="button">Choose app for Copilot key in Windows</button>
+        </div>
+      </section>
+
+      <section class="settings-group">
+      <h3 id="acceleration-title" tabindex="-1">Model acceleration</h3>
+      <p class="note accelerator-intro">A GPU or NPU runs the model for matches by meaning. You can find apps and Windows settings by name while the model is unavailable.</p>
+      <label for="accelerator">Run the model on</label>
       <select class="field" id="accelerator">
         <option value="vulkan">Vulkan GPU · non-NVIDIA hardware</option>
         <option value="amd-vulkan">AMD Vulkan · RDNA1 / RX 5000 and newer</option>
@@ -98,7 +121,7 @@
       <label for="resource-profile">Background GPU resource use</label>
       <select id="resource-profile" class="field" aria-describedby="resource-profile-note"><option value="quiet">Quiet</option><option value="balanced">Balanced</option><option value="faster">Faster</option></select>
       <p id="resource-profile-message" class="note problem" role="status" hidden></p>
-      <p id="resource-profile-note" class="note">Quiet uses one background GPU model owner. Balanced and Faster currently preserve the same GPU-job ceiling, subject to available memory. This GPU-only choice is kept when using NPU or Metal. Search keeps priority; it does not cap device power or clocks.</p>
+      <p id="resource-profile-note" class="note">Quiet runs one background GPU job. Balanced and Faster allow the same number of jobs, subject to available GPU memory. Search always has priority.</p>
       <div id="gpu-jobs-control" class="gpu-jobs-control">
         <label for="gpu-jobs">Concurrent GPU jobs</label>
         <select id="gpu-jobs" class="field"><option value="0">Automatic, up to 3</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
@@ -113,23 +136,35 @@
         <p class="note">Use an exported EmbeddingGemma 2 model bundle. Intel's NPU driver is required.
           NPU vectors use a separate index.</p>
       </div>
-      <p class="note">Text, image and audio model inference stays on the selected accelerator, including pooling and
-        normalization. Unsupported operations or missing hardware stop inference. CPU fallback is disabled.
-        File reading, decoding, tokenization and the app still use the CPU.</p>
-      <button id="apply-accelerator">Apply and Restart DigUp</button>
+      <details class="accelerator-details">
+        <summary>How DigUp uses your hardware</summary>
+        <p class="note">The model runs on your chosen GPU or NPU. If the device is unavailable or an operation fails, model work stops. Reading files, decoding media and preparing text use the CPU.</p>
+        <p class="note">The background GPU profile is saved when using NPU or Metal. It controls concurrent work and leaves power and clocks to the device.</p>
+      </details>
+      <button id="apply-accelerator" aria-describedby="problem">Apply and Restart DigUp</button>
+      <div class="save-feedback" id="acceleration-feedback">
+        <div role="alert" aria-atomic="true"><p class="problem" id="problem" hidden></p></div>
+        <button type="button" aria-label="Retry applying acceleration settings" hidden>Retry</button>
+      </div>
+      </section>
 
+      <section class="settings-group">
       <h3>Result order</h3>
-      <label class="option"><input id="personalization-enabled" type="checkbox" checked disabled><span class="text"><span class="name">Personalize result order</span><span class="info">Uses successful opens and useful-result feedback stored only on this computer. Turn off for consistent ranking. Search text is not stored. Turning off stops collection and restores consistent ranking. Your history stays local until you clear it.</span></span></label>
+      <label class="option"><input id="personalization-enabled" type="checkbox" checked disabled><span class="text"><span class="name">Personalize result order</span><span class="info">Uses the results you open and mark useful. Turn it off to stop collecting this history and restore consistent ranking. The history stays on this computer until you clear it.</span></span></label>
       <button id="clear-personalization" type="button" disabled>Clear relevance history</button>
       <p id="personalization-status" class="note" role="status"></p>
+      </section>
 
-      <h3>The shortcut</h3>
+      <section class="settings-group">
+      <h3>Quick search shortcut</h3>
       <div class="keys" id="keys"></div>
       <button class="link" id="change-shortcut" hidden>Change Shortcut…</button>
       <p class="note" id="recording" hidden></p>
       <p class="shortcut-note" id="shortcut-note" hidden></p>
       <code class="command" id="shortcut-command" hidden></code>
+      </section>
 
+      <section class="settings-group">
       <h3>Updates</h3>
       <label class="option">
         <input type="checkbox" id="update-checks">
@@ -142,9 +177,11 @@
         <button class="link" id="update-version"></button>
         <button id="check-now">Check Now</button>
       </div>
+      </section>
     </section>
 
     <section class="tab" id="folders" role="tabpanel" hidden>
+      <h2>Folders</h2>
       <div class="card status-card">
         <div class="status-text">
           <div class="status-line" id="status-line"></div>
@@ -154,38 +191,55 @@
         <button id="pause" hidden>Pause</button>
       </div>
 
-      <h3>Folders to search</h3>
-      <button class="link" id="index-now">Index now</button>
-      <button class="link" id="index-diagnostics">Activity and diagnostics…</button>
+      <div class="settings-inline-actions">
+        <button class="link" id="index-now">Index now</button>
+        <button class="link" id="index-diagnostics">Activity and diagnostics…</button>
+      </div>
+      <div class="settings-section-heading">
+        <h3>Folders to search</h3><button id="add-folders">Add folders…</button>
+      </div>
       <div class="card list" id="folder-rows"></div>
       <p id="folder-priority-status" class="note" role="status"></p>
       <button class="link" id="folders-drives" type="button" hidden>Choose drives…</button>
-      <button class="link" id="add-folders">Add Folders…</button>
 
-      <h3>Skip these folders</h3>
+      <div class="settings-section-heading">
+        <h3>Skip these folders</h3><button id="skip-folder">Skip a folder…</button>
+      </div>
       <div class="card list" id="skipped-rows"></div>
-      <button class="link" id="skip-folder">Skip a Folder…</button>
 
-      <h3>Skip these file types</h3>
-      <input class="field" id="types" type="text" placeholder="e.g. heic, txt" spellcheck="false" autocomplete="off">
+      <h3 id="types-title">Skip these file types</h3>
+      <input class="field" id="types" type="text" aria-labelledby="types-title" aria-describedby="types-problem"
+             placeholder="e.g. heic, txt" spellcheck="false" autocomplete="off">
+      <div class="save-feedback" id="types-feedback">
+        <div role="alert" aria-atomic="true"><p class="problem" id="types-problem" hidden></p></div>
+        <button type="button" aria-label="Retry saving file types" hidden>Retry</button>
+      </div>
       <p class="note">DigUp reads pictures, PDFs, documents (txt, md, rtf, docx, odt, html), audio and video. Keys,
         certificates and password files are never read, nor are hidden folders.</p>
 
-      <label class="option hours-option">
-        <input type="checkbox" id="hours">
-        <span class="text">
-          <span class="name">Index only at set hours</span>
-          <span class="info">Files are read only between these times, and what changed meanwhile is picked up when
-            they begin. Search works all day.</span>
-          <span class="times" id="times" hidden>From <input type="time" id="hours-start"> to
-            <input type="time" id="hours-end"></span>
-        </span>
-      </label>
+      <div class="hours-option">
+        <label class="option">
+          <input type="checkbox" id="hours" aria-labelledby="hours-title" aria-describedby="hours-hint hours-problem">
+          <span class="text">
+            <span class="name" id="hours-title">Index only at set hours</span>
+            <span class="info" id="hours-hint">Files are read only between these times, and what changed meanwhile is picked up when
+              they begin. Search works all day.</span>
+          </span>
+        </label>
+        <div class="times" id="times" role="group" aria-label="Scheduled indexing hours" hidden>
+          <div><label for="hours-start">Start time</label><input type="time" id="hours-start" aria-describedby="hours-problem"></div>
+          <div><label for="hours-end">End time</label><input type="time" id="hours-end" aria-describedby="hours-problem"></div>
+        </div>
+        <div class="save-feedback" id="hours-feedback">
+          <div role="alert" aria-atomic="true"><p class="problem" id="hours-problem" hidden></p></div>
+          <button type="button" aria-label="Retry saving indexing hours" hidden>Retry</button>
+        </div>
+      </div>
     </section>
 
     <section class="tab" id="code" role="tabpanel" hidden>
-      <p class="intro">DigUp can find code by what it does. Type “code:” in the search panel and say what the code does,
-        or pick Code in the window. Results open in your editor at the line.</p>
+      <h2>Code search</h2>
+      <p class="intro">Use the Code filter or type <code>code:</code> and describe what the code does. Results open at the matching line.</p>
       <div class="card status-card" id="code-status" hidden>
         <div class="status-text">
           <div class="status-line" id="code-status-line"></div>
@@ -193,13 +247,18 @@
         </div>
       </div>
 
-      <h3>Code folders</h3>
+      <div class="settings-section-heading">
+        <h3>Code folders</h3><button id="add-code">Add folders…</button>
+      </div>
       <div class="card list" id="code-rows"></div>
       <p id="code-priority-status" class="note" role="status"></p>
-      <button class="link" id="add-code">Add Folders…</button>
 
-      <h3>Open code in</h3>
-      <select class="field" id="code-editor"></select>
+      <h3 id="code-editor-title">Open code in</h3>
+      <select class="field" id="code-editor" aria-labelledby="code-editor-title" aria-describedby="editor-problem"></select>
+      <div class="save-feedback" id="editor-feedback">
+        <div role="alert" aria-atomic="true"><p class="problem" id="editor-problem" hidden></p></div>
+        <button type="button" aria-label="Retry saving the code editor" hidden>Retry</button>
+      </div>
       <p class="note">DigUp reads what git keeps in these folders: source, configuration, a repository's docs and
         notebooks. It leaves out what git ignores, dependencies and build output, data files, keys and password files.
         Code gets an index of its own and shows up only when you search for code.</p>
@@ -215,9 +274,10 @@
     </section>
 
     <section class="tab" id="apps" role="tabpanel" hidden>
+      <h2>Apps</h2>
       <label class="option"><input type="checkbox" id="apps-enabled"><span class="text"><span class="name">Include installed applications</span><span class="info">Find and launch the applications registered with Windows.</span></span></label>
       <label class="option"><input type="checkbox" id="apps-semantic"><span class="text"><span class="name">Match applications by purpose</span><span class="info">Describe what you want to do. Uses the selected inference device; name matching works while the model is unavailable.</span></span></label>
-      <label class="option"><span class="text"><span class="name">Apps in ordinary searches</span><span class="info">Choose how applications appear alongside your files. The Apps filter and apps: always search applications directly.</span></span>
+      <label class="option option-select"><span class="text"><span class="name">Apps alongside files</span><span class="info">The Apps filter and <code>apps:</code> search apps directly.</span></span>
         <select id="apps-placement" aria-label="Apps in ordinary searches"><option value="smart">Smart placement</option><option value="files-first">Files first</option><option value="apps-only">Apps view only</option></select></label>
       <div id="apps-status" class="apps-settings-status" aria-label="Application availability"><p id="apps-catalog-status"></p><p id="apps-purpose-status"></p></div>
       <div class="apps-settings-actions"><button id="apps-refresh">Refresh applications</button>
@@ -235,7 +295,8 @@
         </details>
         <span id="sources-announcement" class="visually-hidden" role="status"></span>
       </div>
-      <div class="apps-catalog-tools"><label for="apps-filter">Find an application to customize</label>
+      <h3>Customize apps</h3>
+      <div class="apps-catalog-tools"><label for="apps-filter">Find an app</label>
         <input id="apps-filter" class="field" type="search" placeholder="Application name or alias" autocomplete="off">
         <label for="apps-visibility">Show</label><select id="apps-visibility" class="field"><option value="visible">Visible</option><option value="hidden">Hidden</option><option value="all">All</option></select></div>
       <p id="apps-drafts" class="note" role="status"></p>
@@ -246,12 +307,15 @@
 
     <section class="tab" id="drives" role="tabpanel" hidden>
       <h2>Drives</h2>
-      <button id="drive-file-settings" class="link" type="button">File indexing status and exclusions</button>
-      <p class="note">Choose Files, Applications, or both. File choices retain your folder exclusions. Windows shortcuts remain the preferred application launch targets.</p>
-          <button id="drive-list-refresh" type="button">Refresh drive list</button>
+      <p class="intro">Choose what DigUp searches on each drive. File choices keep your folder exclusions. Apps still open through their Windows shortcuts when available.</p>
+      <div class="settings-inline-actions">
+        <button id="drive-list-refresh" type="button">Refresh drive list</button>
+        <button id="drive-file-settings" class="link" type="button">Folder status and exclusions</button>
+      </div>
           <p id="drive-volumes-state" class="note" role="status"></p><p id="source-message-volumes" class="source-message" role="status"></p>
           <p id="drive-status" class="note" aria-label="Drive discovery progress"></p>
           <div id="drive-volumes" class="source-volumes" aria-label="Drives to scan"></div>
+          <h3>Application discovery</h3>
           <div class="drive-source-policy" aria-label="Application discovery policy">
           <label class="option"><input id="drive-enabled" type="checkbox"><span>Discover applications on selected drives</span></label>
           <label class="option"><input id="drive-paused" type="checkbox"><span>Pause application discovery</span></label>
@@ -260,17 +324,19 @@
           <div class="apps-settings-actions"><button id="drive-save">Save drive choices</button><button id="drive-revert">Revert</button><button id="drive-refresh">Rescan applications</button></div>
           <p id="source-message-discovery" class="source-message" role="status"></p>
           <details id="drive-measurements"><summary>Application discovery stage measurements</summary><div id="drive-progress-list"></div></details>
-          <button id="drive-install">Install or update fast NTFS discovery…</button>
+          <h3>Fast NTFS discovery</h3>
+          <button id="drive-install">Install or update…</button>
           <p class="note">Optional, administrator permission required. The read-only component reads NTFS records and checks your access before returning executable paths. Other filesystems and unavailable components use slower directory discovery. The shared component remains installed when a user removes DigUp.</p>
-          <button id="open-app-review" type="button">Review discovered applications</button>
-          <p class="note">Review installers, helpers and uncertain executables separately. Including an entry makes it searchable; it does not run it.</p>
+          <h3>Apps to review</h3>
+          <p class="note">Choose which installers, helpers, and other executables appear in search.</p>
+          <button id="open-app-review" type="button">Review discovered apps</button>
     </section>
 
     <section class="tab" id="executable-review" role="tabpanel" hidden>
-      <h2>Review discovered applications</h2>
-      <p class="note">Drive scans can find installers and internal helpers as well as applications. Include only the programs you want to find and launch. Original Windows shortcuts remain the preferred launch targets.</p>
+      <h2>Review discovered apps</h2>
+      <p class="intro">Drive scans can find installers and internal helpers. Include the programs you want to see in search. DigUp uses Windows shortcuts when available.</p>
       <button id="review-drive-settings" class="link" type="button">Drive choices and scan status</button>
-          <label for="drive-filter">Review discovered executables</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
+          <label for="drive-filter">Find an executable</label><input id="drive-filter" type="search" class="field" placeholder="Executable name">
           <label for="drive-visibility">Candidates</label><select id="drive-visibility" class="field"><option value="review">Needs review</option><option value="accepted">Included</option><option value="hidden">Hidden</option><option value="excluded">Excluded</option><option value="all">All</option></select>
           <p id="drive-list-state" class="note" role="status"></p><button id="drive-retry-list" type="button" hidden>Retry catalog</button><div id="drive-candidates" aria-label="Discovered executable candidates"></div><button id="drive-more" hidden>Show more executables</button><p id="drive-count" class="note"></p>
           <p id="source-message-review" class="source-message" role="status"></p>
@@ -279,9 +345,9 @@
     <section class="tab" id="windows-settings" role="tabpanel" hidden>
       <h2>Windows settings search</h2>
       <div class="settings-source">
-          <p class="note">Open Windows pages by name or describe a task. Use the Settings filter or settings: for destinations only.</p>
+          <p class="intro">Find a Windows page by name or describe what you want to change. Use the Windows settings filter or type <code>settings:</code> to search only these pages.</p>
           <label class="option"><input id="win-settings-enabled" type="checkbox"><span>Include Windows settings</span></label>
-          <label class="option"><input id="win-settings-purpose" type="checkbox"><span>Match settings by purpose on the selected accelerator</span></label>
+          <label class="option"><input id="win-settings-purpose" type="checkbox"><span class="text"><span class="name">Match settings by purpose</span><span class="info">Uses the model on your GPU or NPU. Page name matching works while the model is unavailable.</span></span></label>
           <label class="option"><input id="win-settings-ordinary" type="checkbox"><span>Show settings in ordinary searches</span></label>
           <p id="win-settings-status" class="note" role="status"></p><button id="win-settings-refresh" type="button">Refresh Control Panel</button><button id="win-settings-prepare">Prepare settings purpose matching</button>
           <p id="source-message-windows" class="source-message" role="status"></p>
@@ -290,6 +356,7 @@
     </section>
 
     <section class="tab" id="storage" role="tabpanel" hidden>
+      <h2>Storage</h2>
       <h3>Model</h3>
       <div class="card facts">
         <div class="fact"><span>EmbeddingGemma 2</span><span>Google · Apache 2.0 · 865 MB</span></div>
@@ -308,7 +375,7 @@
       <p class="note"><span id="version"></span> <button class="link inline" id="licenses" hidden>Licenses</button></p>
     </section>
 
-    <p class="note problem" id="problem" hidden></p>
+    <p class="note problem" id="settings-error" role="alert"></p>
   </main>
   <script src="shortcut.js"></script>
   <script src="pipeline.js"></script>

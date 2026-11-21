@@ -57,7 +57,12 @@ window.PipelineUI = (() => {
     if (table.children.length) list.append(heading, table);
   }
   class DriveList {
-    constructor(host) { this.host = host; this.rows = new Map(); host.classList.add("pipeline-drives"); }
+    constructor(host, { headingLevel = 4 } = {}) {
+      this.host = host;
+      this.headingTag = `h${headingLevel}`;
+      this.rows = new Map();
+      host.classList.add("pipeline-drives");
+    }
     update(discovery = {}) {
       const items = entries(discovery), present = new Set();
       for (const item of items) {
@@ -66,7 +71,7 @@ window.PipelineUI = (() => {
         if (!row) {
           const root = create("article", "pipeline-drive");
           root.dataset.volumeId = item.id;
-          const name = create("h4", "pipeline-drive-name");
+          const name = create(this.headingTag, "pipeline-drive-name");
           const state = create("p", "pipeline-drive-phase");
           const numbers = create("p", "pipeline-drive-counts");
           const explanation = create("p", "pipeline-drive-note");

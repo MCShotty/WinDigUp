@@ -73,4 +73,32 @@ async function setup(page, platform='Win32') {
 }
 
 
-module.exports = {setup, app, photo, semantic};
+async function renderedContrast(locator, pseudo = null) {
+  return locator.evaluate((element, pseudo) => {
+    function rgba(value) {
+      const channels = (value.match(/[\d.]+/g) || []).map(Number);
+      if (value.startsWith("color(srgb")) return channels.map((channel, i) => i < 3 ? channel * 255 : channel);
+      return channels;
+    }
+    const mix = (front, back) => {
+      const alpha = front[3] ?? 1;
+      return front.slice(0, 3).map((value, i) => alpha * value + (1 - alpha) * back[i]);
+    };
+    const ancestors = [];
+    for (let node = element; node; node = node.parentElement) ancestors.unshift(node);
+    let background = [255, 255, 255];
+    for (const node of ancestors) background = mix(rgba(getComputedStyle(node).backgroundColor), background);
+    const style = getComputedStyle(element, pseudo);
+    const ink = rgba(style.color);
+    ink[3] = (ink[3] ?? 1) * Number(style.opacity);
+    const foreground = mix(ink, background);
+    const luminance = channels => channels.reduce((result, value, i) => {
+      const v = value / 255;
+      return result + [0.2126, 0.7152, 0.0722][i] * (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    }, 0);
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  }, pseudo);
+}
+
+module.exports = {setup, app, photo, semantic, renderedContrast};
