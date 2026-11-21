@@ -8,9 +8,6 @@
 button, input, select, textarea { font-family: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .65; }
-:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--selection-edge); outline-offset: 2px;
-}
 #query:focus-visible { outline: none; }
 .panel .row.selected, .panel .app-row.selected, .panel .weaker.selected,
 .cell.selected, .row.selected, .app-row.selected {
@@ -18,49 +15,65 @@ button:disabled { cursor: default; opacity: .65; }
   outline: 2px solid var(--selection-edge); outline-offset: -2px;
 }
 .top, body.apps-mode .top { padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
-.bar, body.apps-mode .bar { height: 48px; min-height: 48px; gap: 10px; }
+.top .bar, body.apps-mode .top .bar { height: 48px; min-height: 48px; gap: 10px; }
 .top .field, body.apps-mode .top .field { height: 48px; min-height: 48px; border-radius: 16px;
   padding: 0 12px 0 16px; background: var(--card, var(--surface)); border: 1px solid var(--line); }
 .top .field:focus-within { box-shadow: 0 0 0 2px var(--selection-edge); }
 .top .glass svg { stroke: var(--secondary); stroke-width: 1.8; }
 .top #query { font-size: 19px; }
 .top .tool { width: 40px; height: 40px; border-radius: 10px; }
+.top .details-tool { width: auto; min-width: 54px; padding-inline: 8px; font-size: 12px; }
 .kinds { margin-top: 14px; gap: 6px; }
 .chip { min-height: 30px; border-radius: 8px; padding-inline: 11px; }
-.chip[aria-selected="true"] { color: var(--text); background: var(--selection-bg); }
 .content { padding: 20px; }
-.side { border-left: 1px solid var(--line); }
+#side { border-left:1px solid var(--line); }
 .app-row-expanded { min-height: 76px; padding: 14px 12px; gap: 12px; border-radius: 10px; border-left: 0; }
 .app-row-expanded.selected { border-left: 0; }
 .app-row-expanded .app-name { font-size: 15px; }
 .app-row-expanded .app-description { font-size: 12px; }
 .app-row-expanded .app-icon { width: 36px; height: 36px; }
 .app-row-actions .app-launch { min-height: 32px; }
-.tabs { justify-content: flex-start; gap: 3px; padding: 10px 16px 0; overflow-x: auto; }
-.tabs button { flex: none; min-height: 42px; padding: 8px 12px; border-radius: 8px 8px 0 0; border-bottom: 2px solid transparent; }
-.tabs button[aria-selected="true"] { background: var(--fill); color: var(--leaf-text, var(--moss)); border-bottom-color: var(--selection-edge); }
-main.settings { padding: 12px 28px 28px; }
-main.settings h3 { margin-top: 24px; margin-bottom: 12px; font-size: 15px; line-height: 1.4; }
-main.settings label[for] { display: block; margin-top: 12px; margin-bottom: 6px; font-weight: 600; font-size: 13px; }
-main.settings .note, main.settings .option .info { line-height: 1.5; }
-main.settings .option { padding: 14px 0; }
-main.settings input.field, main.settings select.field { min-height: 36px; max-width: 100%; }
-.appearance-option { margin-top: 16px; }
 .status { min-height: 38px; }
 .status-line { min-height: 32px; }
 @media (max-width: 720px) {
   .top, body.apps-mode .top { padding: 14px 14px 10px; }
-  .bar, body.apps-mode .bar { gap: 6px; }
+  .top .bar, body.apps-mode .top .bar { gap: 6px; }
   .content, body.apps-mode #content { padding: 16px; }
-  main.settings { padding: 10px 18px 24px; }
   .app-row-expanded { grid-template-columns: 36px minmax(0,1fr) auto; gap: 10px; }
   .app-row-expanded .app-match-reason { display: none; }
   .top #query { font-size: 17px; }
 }
+@media (max-width: 700px) {
+  body:not(.activity-open) .split { flex-direction: column; }
+  body:not(.activity-open) #side {
+    flex: 0 1 auto; min-block-size: 0; max-block-size: 38%; width: 100%;
+    border-inline-start: 0; border-block-start: 1px solid var(--line);
+  }
+  #side .app-details { padding: 2px; }
+  #side .app-details > .app-icon { float: inline-start; width: 32px; height: 32px; margin: 0 8px 4px 0; }
+}
+@media (max-width: 480px) {
+  .top .bar, body.apps-mode .top .bar { gap: 5px; }
+  .top .tool { width: 34px; }
+  .top .details-tool { width: auto; }
+  .top .tool { min-height: 36px; height: 36px; }
+  .kinds { gap:5px; margin-top:8px; }
+  .kinds .chip { padding-inline:8px; }
+  .search-scopes .chip svg { display:none; }
+  .kinds .chip:focus-visible { outline-offset: -2px; }
+  .file-types { margin-inline-start:0; }
+  .top .tool, .top .chip { flex-shrink: 0; }
+  .content > * { min-inline-size: 0; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(min(154px, 100%), 1fr)); }
+}
+@media (max-width: 380px) {
+  .top .bar, body.apps-mode .top .bar { height: auto; flex-wrap: wrap; justify-content: flex-end; }
+  .top .field, body.apps-mode .top .field { flex-basis: 100%; }
+}
 @media (pointer: coarse) {
-  .panel-action, .activity, .more-results .app-more, .preview-back,
+  .panel-action, .activity, .more-results .app-more, .preview-back, .preview-open, .status-line,
   .top .tool, .chip, .tabs button, .app-launch { min-height: 44px; }
-  :root { --footer-height: 96px; }
+  .top .tool, .top .clear, .remove { min-inline-size: 44px; min-block-size: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; }
@@ -68,7 +81,8 @@ main.settings input.field, main.settings select.field { min-height: 36px; max-wi
 @media (forced-colors: active) {
   :root { --selection-edge: Highlight; --selection-bg: Canvas; --accent: Highlight; }
   .panel .row.selected, .panel .app-row.selected, .panel .weaker.selected,
-  .cell.selected, .row.selected, .app-row.selected { outline: 2px solid Highlight; background: Highlight; color: HighlightText; }
-  .cell.selected *, .row.selected *, .app-row.selected * { color: HighlightText; }
+  .cell.selected, .row.selected, .app-row.selected { outline: 2px solid Highlight; background: Canvas; color: CanvasText; }
+  .chip:is([aria-pressed="true"], .filter-active) { border:2px solid Highlight; padding-inline:9px; }
+  .top .field:focus-within, .panel .field:focus-within { outline: 2px solid Highlight; outline-offset: -2px; }
   button { border-color: ButtonText; }
 }

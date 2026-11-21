@@ -8,18 +8,21 @@
   <link rel="stylesheet" href="appearance.css">
   <link rel="stylesheet" href="pipeline.css">
   <link rel="stylesheet" href="desktop.css">
+  <link rel="stylesheet" href="search-help.css">
   <script src="appearance.js"></script>
 </head>
 <body>
   <main id="panel" class="panel" data-state="empty">
-    <header class="field" role="search" aria-label="Quick search">
+    <h1 class="sr-only">DigUp quick search</h1>
+    <div class="field" role="search" aria-label="Quick search">
       <img class="launcher-brand" src="icon.png" alt="">
       <input id="query" type="text" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search files, apps and settings" role="combobox" aria-autocomplete="list" aria-controls="list" aria-expanded="false"
              placeholder="Search files, apps and settings">
+      <button id="search-help-button" class="help-tool" type="button" aria-haspopup="dialog" aria-keyshortcuts="F1" title="Search help (F1)">Help</button>
       <button id="expand-search" class="expand-search" type="button" aria-label="Open full search" title="Open full search (Ctrl+O)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="13" height="13" rx="2"/><path d="M9 7V4h11v11h-3"/></svg>
       </button>
-    </header>
+    </div>
     <nav id="launcher-shortcuts" class="launcher-shortcuts" aria-label="Pinned and recent applications"></nav>
     <section id="body" class="body" hidden>
       <div id="results" class="results">
@@ -32,12 +35,16 @@
       <div class="footer-line">
         <span id="summary" class="summary"></span>
         <button id="activity" class="activity" type="button" title="Open Activity and diagnostics" hidden>Activity</button>
+        <button id="retry-file-search" class="panel-action" type="button" hidden>Retry file search</button>
         <button id="file-setup" class="activity" type="button" aria-label="Choose folders for file search" hidden>Choose folders for files</button>
         <span class="footer-spacer"></span>
         <button id="details-action" class="panel-action" type="button" hidden>Preview</button>
-        <button id="primary-action" class="panel-action primary-action" type="button" hidden>Open</button>
+        <div class="primary-choice" id="primary-choice" hidden>
+          <kbd class="keycap" aria-hidden="true">Enter</kbd>
+          <button id="primary-action" class="panel-action primary-action" type="button" aria-keyshortcuts="Enter">Open</button>
+        </div>
       </div>
-      <span id="keys" class="keys"></span>
+      <div id="keys" class="keys"></div>
     </footer>
   </main>
   <div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -46,6 +53,7 @@
   <script src="windows-settings.js"></script>
   <script src="mixed-results.js"></script>
   <script src="launcher.js"></script>
+  <script src="search-help.js"></script>
   <script src="panel.js"></script>
 </body>
 </html>

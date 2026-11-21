@@ -7,6 +7,7 @@ const FIELD_HEIGHT = 64;
 const HOME_HEIGHT = Apps.supported ? 120 : 64;
 const PANEL_HEIGHT = 640;
 const BIG_HEIGHT = 560;   // the panel at its tallest, for the big preview
+const HELP_HEIGHT = 500;
 const WEAKER = "\u0000weaker";     // the selectable row that folds and unfolds the weaker matches
 // Wayland: the window fills the screen and this page places the panel (the shell's wayland.rs).
 const fillsScreen = new URLSearchParams(location.search).has("fills");
@@ -21,7 +22,7 @@ const $moreResults = $("more-results"), $results = $("results"), $primary = $("p
 const panelConfig = {maxHeight: PANEL_HEIGHT, nativeSized: false};
 let layoutFrame = null, announceTimer = null, lastAnnouncement = "", statusTimer = null;
 if (!Apps.supported) { $query.placeholder = "Search files and code"; $query.setAttribute("aria-label", "Search files and code"); }
-$("expand-search").title = "Open full search (" + MOD + "+O)";
+$("expand-search").title = "Open full search (" + MOD + "O)";
 $("expand-search").setAttribute("aria-keyshortcuts", isMac ? "Meta+O" : "Control+O");
 
 const state = {
@@ -43,6 +44,7 @@ const state = {
   encoder: "stopped",
   height: HOME_HEIGHT,
   error: null,
+  fileError: null,
   indexing: null,        // {done, total} while the index helper works through new files
   caveat: null,          // why results may be incomplete right now (the shell's status.rs)
 };
@@ -78,6 +80,7 @@ function queryChanged(filesOnly = false) {
   state.chosen = retained?.chosen || null;
   if(retained)state.selection=retained.selection;
   state.error = null;
+  state.fileError = null;
   const typed = $query.value.trim();
   const mode = Apps.parse(typed);
   const code = mode.code;
@@ -110,6 +113,7 @@ function queryChanged(filesOnly = false) {
         if(generation!==state.generation||request<lexicalPublished||reply.status==="superseded"||
           (reply.generation!=null&&reply.generation!==generation))return;
         lexicalPublished=request;
+        state.fileError = null;
         if(reply.scope_empty===true)state.fileMeaning=null;
         state.lexicalReady=true;state.fileWords=reply.hits||[];state.fileWordsReply=reply;
         state.fileWordsRefresh ||= passive;
@@ -118,7 +122,7 @@ function queryChanged(filesOnly = false) {
         show(state.finalGeneration===generation?mergeFileSearchReplies(state.fileMeaning,reply,text):reply,
           text,state.finalGeneration===generation?state.phase:"words");
       })
-      .catch(error => { if (generation === state.generation && request===lexicalRequest && state.finalGeneration !== generation) failed(error); });
+      .catch(error => { if (generation === state.generation && request===lexicalRequest && state.finalGeneration !== generation) fileSearchFailed(error); });
   };
   state.frame=requestAnimationFrame(()=>state.refreshWords());
   // Submit meaning only after typing pauses; current-query words remain available meanwhile.
@@ -129,6 +133,7 @@ function queryChanged(filesOnly = false) {
         if (generation !== state.generation||request<meaningPublished||reply.status==="superseded"||
           (reply.generation!=null&&reply.generation!==generation)) return;
         meaningPublished=request;
+        state.fileError = null;
         state.finalGeneration = generation;state.fileMeaning=reply;
         if(reply.scope_empty===true){state.fileWords=[];state.fileWordsReply=null;state.fileWordsRefresh=false;state.lexicalReady=true;state.exactFilenameKnown=true;state.exactFilename=false;}
         if(reply.semantic_error)state.error=reply.semantic_error;
@@ -136,9 +141,14 @@ function queryChanged(filesOnly = false) {
           text, reply.meaning ? "meaning" : "wordsOnly");
         if (debugPending) report();
       })
-      .catch(error => { if (generation === state.generation && request===meaningRequest) failed(error); });
+      .catch(error => { if (generation === state.generation && request===meaningRequest) fileSearchFailed(error); });
   };
   state.timer=setTimeout(state.refine,TYPING_PAUSE);
+}
+
+function fileSearchFailed(error) {
+  state.fileError = error?.message || String(error);
+  render();
 }
 
 function show(reply, text, phase) {
@@ -276,6 +286,7 @@ function scheduleFit() {
       state.heightFloor = Math.max(state.heightFloor || FIELD_HEIGHT, height);
       height = state.heightFloor;
     }
+    if (searchHelp.open) height = HELP_HEIGHT;
     const screenLimit = fillsScreen ? window.innerHeight * 0.8 - 16
       : panelConfig.nativeSized ? panelConfig.maxHeight : window.innerHeight;
     height = Math.round(Math.min(Math.max(FIELD_HEIGHT, height), panelConfig.maxHeight, Math.max(FIELD_HEIGHT, screenLimit)));
@@ -290,14 +301,17 @@ invoke("panel_config").then(reply => {acceptConfig(reply); scheduleFit();}).catc
 function announceResults() {
   clearTimeout(announceTimer);
   const count = rowIDs().filter(id => id !== WEAKER).length;
-  const text = state.phase === "empty" ? "" : state.error && !count ? "Search unavailable. Open Activity for details."
-    : count ? count + (count === 1 ? " result available." : " results available.")
+  const text = state.phase === "empty" ? "" : state.fileError && !count ? "File search unavailable. Retry file search or open Activity."
+    : state.error && !count ? "Search unavailable. Open Activity for details."
+    : count ? count + (count === 1 ? " result available." : " results available.") + (state.fileError ? " File search unavailable." : "")
     : state.waitingVisible && state.phase === "words" ? "Searching." : "";
   if (text === lastAnnouncement) return;
   announceTimer = setTimeout(() => { $("announcer").textContent = text; lastAnnouncement = text; }, 250);
 }
 function syncSelection() {
-  if (!$big.hidden) { $query.removeAttribute("aria-activedescendant"); return; }
+  const expanded = state.phase !== "empty" && $big.hidden && !$list.hidden;
+  $query.setAttribute("aria-expanded", String(expanded));
+  if (!expanded) { $query.removeAttribute("aria-activedescendant"); return; }
   for (const node of $list.querySelectorAll('[role="option"]')) {
     const key = node.dataset.resultKey || (node.classList.contains("weaker") ? WEAKER : "");
     node.id = "panel-option-" + encodeURIComponent(key);
@@ -310,13 +324,12 @@ function render() {
   const empty = state.phase === "empty";
   $panel.dataset.state = empty ? "empty" : "results";
   $panel.classList.toggle("previewing", !$big.hidden);
-  $query.setAttribute("aria-expanded", String(!empty && $big.hidden));
   $details.setAttribute("aria-expanded", String(!$big.hidden));
   $("launcher-shortcuts").hidden = !empty || !Apps.supported;
   $body.hidden = empty;
-  $footer.hidden = empty;
+  $footer.hidden = empty || !$big.hidden;
   if (!empty) { renderList(); renderPreview(); renderFooter(); syncSelection(); }
-  else { $query.removeAttribute("aria-activedescendant"); $activity.hidden = true; }
+  else { syncSelection(); $activity.hidden = true; }
   announceResults(); scheduleFit();
 }
 
@@ -365,6 +378,7 @@ function renderList() {
         if (!fold) { fold = element("div", "weaker"); fold.innerHTML = ICONS.chevron; fold.label = element("span"); fold.append(fold.label); extraNodes.set("weaker", fold); }
         fold.classList.toggle("open", state.showWeaker); fold.classList.toggle("selected", state.selection === WEAKER);
         fold.setAttribute("role", "option"); fold.setAttribute("aria-selected", String(state.selection === WEAKER));
+        fold.setAttribute("aria-description", state.showWeaker ? "Expanded. Press Enter to hide these matches." : "Collapsed. Press Enter to show these matches.");
         fold.label.textContent = state.showWeaker ? "Weaker matches" : weaker.length + " weaker matches";
         fold.onclick = toggleWeaker; group.nodes.push(fold);
         if (state.showWeaker) for (const hit of weaker) group.nodes.push(row(hit));
@@ -393,7 +407,6 @@ function row(hit) {
   const item = element("div", "row" + (state.selection === resultKey(hit) ? " selected" : ""));
   item.setAttribute("role", "option"); item.setAttribute("aria-selected", String(state.selection === key));
   item.dataset.resultKey = key;
-  item.setAttribute("aria-label", (KIND_TITLE[hit.kind] || "File") + ", " + nameOf(hit.path));
   item.append(thumbnail(hit));
   const text = element("div", "row-text");
   const title = element("div", "row-title");
@@ -449,7 +462,7 @@ function renderPreview() {
   const hasResults = rowIDs().length > 0;
   $preview.hidden = hasResults;
   if (hasResults) return;
-  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps,state.waitingVisible,state.error,state.indexing,state.fileScopeEmpty]);
+  const signature=JSON.stringify([state.selection,state.text,selectedHit(),state.phase,state.isApps,state.waitingVisible,state.error,state.fileError,state.indexing,state.fileScopeEmpty]);
   if(signature===previewSignature)return;
   previewSignature=signature;
   $preview.replaceChildren();
@@ -458,6 +471,7 @@ function renderPreview() {
       ? "Choose code folders in Settings to search their names and contents."
       : "Choose folders to search their names and contents."));return;
   }
+  if (state.fileError) { $preview.append(message("Couldn’t search files", "Retry this search or open Activity to see what needs attention.")); return; }
   if (state.error) { $preview.append(message("Search needs attention", "Open Activity for details. Available app and settings matches remain usable.")); return; }
   if (!state.strong.length && !state.weaker.length && !applicationSearch.hits.length && !settingsSearch.visible().length) {
     if(state.isSettings){$preview.append(message("Windows settings",settingsSearch.status()));return;}
@@ -479,6 +493,10 @@ function renderPreview() {
       const { done, total } = state.indexing;
       $preview.append(message("Nothing yet", Number.isFinite(total) ? `Still indexing (${done} of ${total} files). Until a file is read, `
         + "DigUp finds it only by its name." : "Files are still being prepared. App names and Windows settings are available."));
+    } else if (state.phase === "wordsOnly") {
+      $preview.append(message("No word matches", state.isCode
+        ? "Try a filename, a symbol name, or words from the code."
+        : "Try a filename or words you remember from the file."));
     } else if (state.isCode) {
       $preview.append(message("No good matches in your code", "Try saying what the code does, or a name that's in it."));
     } else {
@@ -577,15 +595,17 @@ function facts(hit) {
   return box;
 }
 
+let footerHint = "";
 function renderFooter() {
   const weaker = weakerFiles().length, strong = state.strong.length + state.weaker.length - weaker;
   let summary;
-  if (state.error) summary = `DigUp: ${state.error}`;
+  if (state.fileError) summary = "File search unavailable";
+  else if (state.error) summary = `DigUp: ${state.error}`;
   else if(state.isSettings)summary=settingsSearch.status();
   else if (state.isApps) summary = applicationSearch.status();
   else if (state.phase === "words") {
     summary = !state.waitingVisible ? "" : state.encoder === "starting" ? "Loading purpose and content search…" : "Searching contents…";
-  } else if (state.phase === "wordsOnly") summary = "Words only: meaning search isn't available";
+  } else if (state.phase === "wordsOnly") summary = "Words only · Content search unavailable";
   else if (state.phase === "codeHint") summary = "Searching your code";
   // Results while indexing (or before the model is in) may be missing some: that, where they're counted.
   else if (state.caveat && !state.isCode) summary = state.caveat;
@@ -596,23 +616,34 @@ function renderFooter() {
     if(settingsSearch.active&&settingsSearch.total)native.push(settingsSearch.total+" Windows "+(settingsSearch.total===1?"setting":"settings"));
     if(native.length){
       const files=resultLayout().rows.filter(hit=>!isLauncher(hit)).length;
-      summary=(state.error?summary+" · ":"")+native.join(" · ")+" · "+(state.lexicalReady?files+" file "+(files===1?"match":"matches")+" shown":"Files pending");
+      const phase = state.fileError || state.error || state.phase === "words" || state.phase === "wordsOnly" ? summary : "";
+      const fileCount = state.fileError ? "" : state.lexicalReady ? `${files} file ${files === 1 ? "match" : "matches"}` : "Files pending";
+      summary = [phase, ...native, fileCount].filter(Boolean).join(" · ");
     }
   }
-  $summary.textContent = summary;
+  if ($summary.textContent !== summary) $summary.textContent = summary;
+  $summary.title = state.fileError || summary;
+  $("retry-file-search").hidden = !state.fileError;
   $fileSetup.hidden=state.fileScopeEmpty!==true||state.isApps||state.isSettings||!$big.hidden;
   $fileSetup.textContent=state.isCode?"Choose folders for code search":"Choose folders for file search";
   $fileSetup.setAttribute("aria-label",state.isCode?"Choose folders for code search":"Choose folders for file search");
   const hit = selectedHit();
-  $primary.hidden = !hit; $details.hidden = !hit;
-  $primary.textContent = isSetting(hit) ? "Open settings" : isLauncher(hit) ? "Launch" : "Open";
-  $primary.setAttribute("aria-label", hit ? $primary.textContent + " " + titleOf(hit) : "Open selected result");
+  $("primary-choice").hidden = !hit; $details.hidden = !hit;
+  const action = isSetting(hit) ? "Open settings" : isLauncher(hit) ? "Launch" : "Open";
+  if ($primary.textContent !== action) $primary.textContent = action;
+  $primary.setAttribute("aria-label", hit ? action + " " + titleOf(hit) : "Open selected result");
   $primary.disabled = isLauncher(hit) && Apps.launching.has(hit.id);
   $details.textContent = !$big.hidden ? "Back" : isLauncher(hit) ? "Details" : "Preview";
-  $activity.hidden = !(state.error || state.caveat || state.activityBadge || state.phase === "wordsOnly");
-  $activity.classList.toggle("has-problem", Boolean(state.error || state.phase === "wordsOnly"));
-  $activity.title = state.error || state.caveat || state.activityLine || "Open Activity and diagnostics";
-  $keys.textContent = state.selection === WEAKER ? (state.showWeaker ? "↩ Hide weaker matches" : "↩ Show weaker matches") : isSetting(selectedHit()) ? "↩ Open Windows settings" : isLauncher(selectedHit()) ? "↩ Launch application" : `↩ Open   ${MOD}↩ Show in ${FILE_MANAGER}   ␣ Preview`;
+  $activity.hidden = !(state.fileError || state.error || state.caveat || state.activityBadge || state.phase === "wordsOnly");
+  $activity.classList.toggle("has-problem", Boolean(state.fileError || state.error || state.phase === "wordsOnly"));
+  $activity.title = state.fileError || state.error || state.caveat || state.activityLine || "Open Activity and diagnostics";
+  const hint = state.selection === WEAKER ? (state.showWeaker ? "Hide weaker matches" : "Show weaker matches")
+    : hit && !isLauncher(hit) ? `Show in ${FILE_MANAGER}` : "";
+  if (hint !== footerHint) {
+    footerHint = hint;
+    $keys.replaceChildren();
+    if (hint) $keys.append(element("kbd", "keycap", state.selection === WEAKER ? "Enter" : `${MOD}Enter`), " " + hint);
+  }
 }
 
 // MARK: The big preview (Space, as Quick Look on the Mac)
@@ -622,6 +653,15 @@ $big.id = "result-preview"; $big.setAttribute("role", "region"); $big.setAttribu
 $details.setAttribute("aria-controls", "result-preview");
 $big.hidden = true;
 document.getElementById("panel").append($big);
+const searchHelp = createSearchHelp({ quick: true, onExample: text => {
+  $query.value = text;
+  $query.focus({ preventScroll: true });
+  queryChanged();
+}, scopes: () => ({
+  apps: Apps.supported && Apps.enabled,
+  settings: WindowsSettings.supported && WindowsSettings.enabled,
+  code: state.hasCode,
+}), afterOpen: scheduleFit, afterClose: scheduleFit });
 
 /// Space, once a result is chosen with the arrows or a click: the panel at its tallest with the result over all of
 /// it, a video playing from its moment. Space or Esc puts it away; the arrows go on through the results under it.
@@ -631,6 +671,7 @@ function toggleBig() {
   $big.hidden = false;
   renderBig();
   render();
+  $big.querySelector(".preview-back").focus();
 }
 
 function closeBig() {
@@ -644,11 +685,17 @@ function closeBig() {
 function renderBig() {
   const hit = selectedHit();
   if (!hit) return closeBig();
+  const previous = document.activeElement;
+  const focusedHeader = previous.closest(".big .head");
   const head = element("div", "head");
   const back = element("button", "preview-back", "Back"); back.type = "button"; back.onclick = closeBig;
-  head.append(back, element("span", "name", titleOf(hit)));
+  head.append(back, element("h2", "name", titleOf(hit)));
   const place = isLauncher(hit) ? "" : placeOf(hit);
   if (place) head.append(element("span", "place", place));
+  const open = element("button", "preview-open", "Open");
+  open.type = "button";
+  open.onclick = openSelected;
+  if (!isLauncher(hit)) head.append(open);
   let view;
   if (isLauncher(hit)) {
     view = Apps.details(hit, failed);
@@ -661,12 +708,19 @@ function renderBig() {
     view = picture(hit);
   }
   const box = element("div", "view");
+  if (view.matches(".passage")) {
+    box.classList.add("text");
+    box.tabIndex = 0;
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", "File content");
+  }
   box.append(view);
   const location = element("div", "preview-location");
   if (!isLauncher(hit)) { location.textContent = folderOf(hit) + " · " + details(hit); location.title = hit.path; }
   const feedback = element("div","feedback-actions");
   if (!isLauncher(hit)) appendUsefulResult(feedback,hit,failed);
   $big.replaceChildren(head, ...(!isLauncher(hit) ? [location] : []), box, ...(!feedback.childElementCount ? [] : [feedback]));
+  if (focusedHeader) (previous.matches(".preview-open") && !isLauncher(hit) ? open : back).focus({ preventScroll: true });
 }
 
 function message(title, text) {
@@ -680,10 +734,13 @@ function message(title, text) {
 $query.addEventListener("input", queryChanged);
 
 document.addEventListener("keydown", (event) => {
-  if (event.isComposing) return; // an input method is composing: its keys
-  if (event.key !== "Escape" && event.target !== $query
-      && event.target.closest("button, a, input, textarea, select, summary, video, audio, [contenteditable]")) return;
+  if (event.isComposing || event.defaultPrevented || searchHelp.open) return;
   const modifier = isMac ? event.metaKey : event.ctrlKey;
+  const inPreviewHeader = !$big.hidden && event.target.closest(".big .head");
+  const previewShortcut = inPreviewHeader && (["ArrowDown", "ArrowUp"].includes(event.key)
+    || (modifier && !event.altKey && !event.shiftKey && ["Enter", "c", "C", "o", "O"].includes(event.key)));
+  if (event.key !== "Escape" && event.target !== $query
+      && !previewShortcut && event.target.closest("button, a, input, textarea, select, summary, video, audio, [contenteditable], .big .view.text")) return;
   switch (event.key) {
     case "Escape":
       event.preventDefault();
@@ -744,6 +801,7 @@ tauri.event.listen("panel-shown", ({payload}) => {
   if (!state.isApps && !state.isSettings) ask({ op: "prewarm" }).catch(() => {});
 });
 tauri.event.listen("panel-hidden",()=>{
+  if (searchHelp.open) searchHelp.close();
   clearTimeout(state.timer); clearTimeout(statusTimer); clearTimeout(announceTimer); cancelAnimationFrame(state.frame); applicationSearch.suspend();settingsSearch.suspend();
   ask({op:"cancel",generation:++state.generation}).catch(()=>{});
 });
@@ -773,6 +831,7 @@ function showState(app) {
 $("expand-search").onclick = () => openInWindow();
 $primary.onclick = openSelected;
 $details.onclick = toggleBig;
+$("retry-file-search").onclick = () => { $query.focus({ preventScroll: true }); queryChanged(true); };
 $fileSetup.onclick = () => invoke("open_settings",{tab:state.isCode?"code":"folders"}).catch(failed);
 $activity.onclick = () => invoke("open_settings", {tab:"activity"}).catch(failed);
 

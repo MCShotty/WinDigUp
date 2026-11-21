@@ -381,6 +381,7 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
     };
     json!({
         "applicationsSupported": applications::Catalog::supported(),
+        "applicationsEnabled": shell.applications.enabled(),
         "windowsSettings": shell.windows_settings.info(),
         "offered": offered.iter().map(|folder| folder.display().to_string()).collect::<Vec<_>>(),
         "chosen": shell.folders(),
@@ -415,9 +416,10 @@ fn apply_setup_folders(app: AppHandle, shell: State<'_, Arc<Shell>>, folders: Ve
     -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
-        settings.folders = folders;
-        settings.skipped = skipped;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings.save_update(&shell.settings_path, |next| {
+            next.folders = folders;
+            next.skipped = skipped;
+        }).map_err(|error| format!("can't save the settings: {error}"))?;
     }
     apply_folders(&app);
     Ok(())
@@ -426,12 +428,12 @@ fn apply_setup_folders(app: AppHandle, shell: State<'_, Arc<Shell>>, folders: Ve
 /// Setup's last step, Done (indexing has started already): the first time, DigUp opens at login from now on, gets its
 /// shortcut on GNOME, and its window comes up.
 #[tauri::command]
-fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), String> {
+fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>, launch_apps: Option<bool>) -> Result<(), String> {
     let first = !shell.is_set_up();
     if first {
         let mut settings = shell.settings.lock().unwrap();
-        settings.set_up = true;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings.save_update(&shell.settings_path, |next| next.set_up = true)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     // The first setup has DigUp open at login (it lives in the tray; Settings turns that off), as the Mac app does.
     if first && shell.opens_at_login() {
@@ -452,9 +454,13 @@ fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Stri
     }
     // The first time, the window comes up: searching starts there while indexing goes on.
     if first && !shell.options.debug_setup {
-        later(&app, |app| {
-            let _ = show_window(app);
-        });
+        if launch_apps.unwrap_or_default() && shell.applications.enabled() {
+            open_window(app, shell, String::new(), Some("apps".into()), None);
+        } else {
+            later(&app, |app| {
+                let _ = show_window(app);
+            });
+        }
     }
     Ok(())
 }
@@ -1950,8 +1956,8 @@ fn set_acceleration(app: AppHandle, shell: State<'_, Arc<Shell>>, acceleration: 
 #[tauri::command]
 fn set_code_editor(shell: State<'_, Arc<Shell>>, editor: String) -> Result<(), String> {
     let mut settings = shell.settings.lock().unwrap();
-    settings.code_editor = editor;
-    settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
+    settings.save_update(&shell.settings_path, |next| next.code_editor = editor)
+        .map_err(|error| format!("can't save the settings: {error}"))
 }
 
 /// Settings → Folders: the folders skipped inside the ones searched.
@@ -1980,8 +1986,8 @@ fn set_skip_types(app: AppHandle, shell: State<'_, Arc<Shell>>, types: String) -
         if settings.skip_types == list {
             return Ok(list);
         }
-        settings.skip_types = list.clone();
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings.save_update(&shell.settings_path, |next| next.skip_types = list.clone())
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     apply_folders(&app);
     Ok(list)
@@ -1992,9 +1998,10 @@ fn set_skip_types(app: AppHandle, shell: State<'_, Arc<Shell>>, types: String) -
 fn set_index_hours(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool, start: u32, end: u32) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
-        settings.index_hours_on = on;
-        settings.index_hours = hours::Hours { start: start % 1440, end: end % 1440 };
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings.save_update(&shell.settings_path, |next| {
+            next.index_hours_on = on;
+            next.index_hours = hours::Hours { start: start % 1440, end: end % 1440 };
+        }).map_err(|error| format!("can't save the settings: {error}"))?;
     }
     held_now(&app);
     Ok(())

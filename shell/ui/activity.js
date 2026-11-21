@@ -67,8 +67,8 @@ window.ActivityUI = (() => {
     } catch { return hide(text); }
   }
 
-  async function copy(text, field, message) {
-    try { await navigator.clipboard.writeText(text); message.textContent = "Copied."; }
+  async function copy(text, field, message, confirmation) {
+    try { await navigator.clipboard.writeText(text); message.textContent = confirmation; }
     catch {
       if (field) { field.focus(); field.select(); message.textContent = "Press Ctrl+C to copy the selected report."; }
       else {
@@ -111,7 +111,7 @@ window.ActivityUI = (() => {
       const update = () => { field.value = checkbox.checked ? redact(raw) : raw; message.textContent = ""; };
       checkbox.onchange = update; checkbox.disabled = false; update();
       copyButton.disabled = exportButton.disabled = false;
-      copyButton.onclick = () => copy(field.value, field, message);
+      copyButton.onclick = () => copy(field.value, field, message, "Report copied.");
       exportButton.onclick = async () => {
         exportButton.disabled = checkbox.disabled = copyButton.disabled = true;
         try { const result = await invoke("export_diagnostics", { report: field.value }); if(generation === reportGeneration)message.textContent = result?.saved ? "Report exported." : "Export cancelled."; }
@@ -162,15 +162,18 @@ window.ActivityUI = (() => {
         <p class="activity-connection" data-key="connection" role="status" hidden></p>
         <div data-key="loading" class="activity-empty">Reading current activity…</div>
         <section data-pane="overview" role="tabpanel" aria-label="Activity overview" hidden>
-          <section class="activity-files"><h3 data-key="phase"></h3><p data-key="explanation" class="activity-explanation"></p>
+          <section class="activity-files">
+            <div class="activity-phase-heading"><h3 data-key="phase"></h3>
+              <button data-key="pause" type="button">Pause indexing</button>
+            </div>
+            <div class="activity-metrics"><div><strong data-key="first-value"></strong><span data-key="first-label"></span></div>
+              <div><strong data-key="second-value"></strong><span data-key="second-label"></span></div></div>
             <ol class="activity-stages" aria-label="File indexing stages"><li>Discover</li><li>Index</li><li>Ready</li></ol>
             <div class="activity-meter" data-key="meter" role="progressbar" aria-label="File indexing progress"><span></span></div>
             <p data-key="progress-label" class="activity-progress-label"></p>
-            <div class="activity-metrics"><div><strong data-key="first-value"></strong><span data-key="first-label"></span></div>
-              <div><strong data-key="second-value"></strong><span data-key="second-label"></span></div></div>
+            <p data-key="explanation" class="activity-explanation"></p>
             <p data-key="candidates-note" class="activity-muted"></p><p data-key="held-work" class="activity-muted" hidden></p><p data-key="inventory-note" class="activity-muted" hidden></p>
-            <div class="activity-location"><div><span data-key="root"></span><p data-key="path" class="activity-path"></p></div>
-              <button data-key="pause" type="button">Pause indexing</button></div>
+            <div class="activity-location"><span data-key="root"></span><p data-key="path" class="activity-path"></p></div>
             <p data-key="freshness" class="activity-muted"></p>
             <p data-key="file-error" class="activity-error" hidden></p>
             <details data-key="file-details"><summary>File statistics and exclusions</summary>
@@ -182,13 +185,14 @@ window.ActivityUI = (() => {
               <div><dt>Long files held</dt><dd data-key="held-unfinished"></dd></div></dl><div data-key="skip-reasons"></div></details>
           </section>
           <section class="activity-section" data-key="indexing-work" hidden></section>
-          <section class="activity-section"><h3>Last search</h3><p data-key="search-total">No search timing reported yet.</p>
+          <section class="activity-section" data-key="search-timing" hidden><h3>Last search</h3><p data-key="search-total"></p>
             <p data-key="search-breakdown" class="activity-muted"></p><p class="activity-muted">Local timings; inference and cached queries are measured separately.</p></section>
           <section class="activity-section" data-key="apps-section"><h3>Applications</h3><dl>
             <div><dt>Installed apps</dt><dd data-key="catalog"></dd></div><div><dt>Purpose matching</dt><dd data-key="purpose"></dd></div></dl>
             <p data-key="purpose-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="discovery-section" hidden><h3>Application sources</h3>
-            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p><button data-key="source-settings" type="button">Apps settings</button><button data-key="windows-settings" type="button">Windows settings search</button><button data-key="drive-settings" type="button">Choose drives</button>
+            <p data-key="settings-status"></p><p data-key="drive-status"></p><div data-key="drive-list"></div><p data-key="description-status"></p>
+            <div class="activity-actions"><button data-key="source-settings" type="button">Apps settings</button><button data-key="windows-settings" type="button">Windows settings search</button><button data-key="drive-settings" type="button">Choose drives</button></div>
             <p data-key="discovery-note" class="activity-muted"></p></section>
           <section class="activity-section" data-key="gpu-work"></section><section class="activity-section"><h3>Inference device</h3><p data-key="device" class="activity-device"></p>
             <p data-key="backend" class="activity-muted"></p><p data-key="encoder" class="activity-muted"></p>
@@ -214,7 +218,7 @@ window.ActivityUI = (() => {
             <button data-key="report" type="button">Preview diagnostic report…</button></details>
         </section>
         <div class="activity-footer"><button data-key="copy" type="button">Copy summary</button>
-          <button data-key="diagnostics" type="button">Open diagnostics</button></div><div data-key="message" role="status" class="activity-muted"></div>
+          <div data-key="message" role="status" class="activity-muted"></div></div>
         <span data-key="announcement" class="visually-hidden" role="status" aria-live="polite"></span>`;
       this.get = key => host.querySelector(`[data-key="${key}"]`);
       this.driveList=new PipelineUI.DriveList(this.get("drive-list"));
@@ -240,9 +244,8 @@ window.ActivityUI = (() => {
         this.setTab(tabs[next].dataset.tab); tabs[next].focus();
       };
       host.addEventListener("keydown", event => { if(event.key === "Escape" && !document.querySelector(".activity-report[open]")) { event.preventDefault(); options.onClose?.(); } });
-      this.get("diagnostics").onclick = () => this.setTab("diagnostics");
       this.get("report").onclick = showReport;
-      this.get("copy").onclick = () => copy(redact(summary(this.snapshot)), null, this.get("message"));
+      this.get("copy").onclick = () => copy(redact(summary(this.snapshot)), null, this.get("message"), "Summary copied.");
       this.get("pause").onclick = () => this.action("pause_indexing", { paused: !this.snapshot?.files.paused });
       this.get("retry").onclick = () => this.action("index_now");
       this.get("refresh-apps").onclick = () => this.action("refresh_apps");
@@ -267,10 +270,10 @@ window.ActivityUI = (() => {
     hide() { this.stop?.(); this.stop = null; this.pendingDrive = null; }
     destroy() { this.hide(); this.host.replaceChildren(); }
     setTab(tab) {
+      if (this.tab !== tab) this.host.scrollTop = 0;
       this.tab = tab;
       for (const button of this.host.querySelectorAll("[data-tab]")) { button.setAttribute("aria-selected", String(button.dataset.tab === tab)); button.tabIndex=button.dataset.tab === tab ? 0 : -1; }
       for (const pane of this.host.querySelectorAll("[data-pane]")) pane.hidden = pane.dataset.pane !== tab || !this.snapshot;
-      this.get("diagnostics").hidden = tab === "diagnostics";
     }
     async action(command, args) {
       if (this.busy) return;
@@ -290,7 +293,8 @@ window.ActivityUI = (() => {
       const f = snapshot.files, apps = snapshot.applications, catalog = apps.catalog || {}, purpose = apps.purpose || {}, inference = snapshot.inference;
       const put = (key, value) => { const el=this.get(key), text=value == null ? "" : String(value); if(el.textContent !== text) el.textContent=text; };
       const search=snapshot.search?.last;
-      put("search-total",search?`${Math.round(search.total||0)} ms input to render · ${search.phase.replace(/_/g," ")}${search.cacheHit?" · Cached query":""}`:"No search timing reported yet.");
+      this.get("search-timing").hidden = !search;
+      put("search-total",search?`${Math.round(search.total||0)} ms input to render · ${search.phase.replace(/_/g," ")}${search.cacheHit?" · Cached query":""}`:"");
       put("search-breakdown",search?searchBreakdown(search):"");
       const discovery = f.discoveryActive === true && !f.paused && !["paused", "pausing", "stopped", "failed", "scheduled"].includes(f.phase);
       const overlap = discovery && ["indexing", "finishing"].includes(f.phase);
@@ -303,7 +307,7 @@ window.ActivityUI = (() => {
         discovering: f.searchable ? "Checking for changes. Your existing file index remains searchable." : "The first scan is running. Discovered names and completed content appear as they become available.",
         preparing_queue: "Applying exclusions and reconciling supported files with the index.",
         not_configured: "Apps work without folders. Choose folders in Settings to add file search.",
-        indexing: "Reading eligible files and preparing searchable content on your selected accelerator.",
+        indexing: "You can search the files DigUp has indexed while it reads the rest.",
         waiting: PipelineUI.heldFiles(f) ? "Some file work is held until its folders are checked. Existing searchable content is kept. "
           + ((f.unreadable?.length || f.missing?.length) ? "Review the unavailable or unreadable folders below, then choose Index now in Diagnostics." : "Choose Index now in Diagnostics to retry scanning.")
           : "No file operation is in progress. Open Diagnostics to check worker state or choose Index now.",
@@ -323,13 +327,14 @@ window.ActivityUI = (() => {
           ? "File names are being discovered. Content matching is waiting for the selected accelerator; its status is shown independently below."
           : explanations[f.phase] || "Waiting for the next file-worker update.");
       const known = f.knownCountsComplete !== false && !scanning && typeof f.total === "number" && f.total > 0 && ["indexing", "finishing"].includes(f.phase);
-      const meter = this.get("meter"); meter.classList.toggle("indeterminate", !known);
-      meter.hidden = !known && !scanning && !["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
+      const meter = this.get("meter");
+      meter.hidden = !known;
+      const showUnknownTotal = scanning || ["starting", "discovering", "preparing_queue", "checking_accelerator", "preparing_model"].includes(f.phase);
       meter.firstElementChild.style.width = known ? `${100 * f.done / f.total}%` : "";
       for (const attr of ["aria-valuenow", "aria-valuemin", "aria-valuemax"]) meter.removeAttribute(attr);
       if (known) { meter.setAttribute("aria-valuemin", "0"); meter.setAttribute("aria-valuemax", String(f.total)); meter.setAttribute("aria-valuenow", String(f.done)); }
       meter.setAttribute("aria-valuetext", known ? `${number(f.done)} of ${number(f.total)}` : "Working; total not known yet");
-      put("progress-label", known ? `${number(f.done)} of ${number(f.total)} ${f.phase === "finishing" ? "pages and chunks" : "files"}` : meter.hidden ? "" : "Total not known yet");
+      put("progress-label", known ? `${number(f.done)} of ${number(f.total)} ${f.phase === "finishing" ? "pages and chunks" : "files"}` : showUnknownTotal ? "Total not known yet" : "");
       const stage = f.phase === "idle" ? 2 : ["indexing", "finishing", "waiting"].includes(f.phase) ? 1 : 0;
       this.host.querySelectorAll(".activity-stages li").forEach((el, i) => { const current = i === stage || (overlap && (i === 0 || i === 1)); el.classList.toggle("current", current); if (i === stage) el.setAttribute("aria-current", "step"); else el.removeAttribute("aria-current"); });
       this.host.querySelector(".activity-stages").setAttribute("aria-label", overlap ? "File indexing stages. Discovery and indexing overlap." : "File indexing stages");

@@ -101,12 +101,46 @@ impl Settings {
         std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temporary, path)
     }
+
+    pub fn save_update(&mut self, path: &Path, edit: impl FnOnce(&mut Self)) -> std::io::Result<()> {
+        let mut next = self.clone();
+        edit(&mut next);
+        next.save(path)?;
+        *self = next;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn rejected_update_keeps_saved_settings_and_can_be_retried() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("digup-settings-retry-{}-{nonce}", std::process::id()));
+        let path = dir.join("settings.json");
+        let mut settings = Settings::default();
+        settings.skip_types = vec!["jpg".into()];
+        settings.save(&path).unwrap();
+        let saved = std::fs::read(&path).unwrap();
+
+        let temporary = path.with_extension("json.new");
+        std::fs::create_dir(&temporary).unwrap();
+        let update = |next: &mut Settings| { next.skip_types = vec!["pdf".into()]; };
+        assert!(settings.save_update(&path, update).is_err());
+        assert_eq!(settings.skip_types, ["jpg"]);
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+
+        std::fs::remove_dir(&temporary).unwrap();
+        settings.save_update(&path, update).unwrap();
+        assert_eq!(settings.skip_types, ["pdf"]);
+        let disk: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk.skip_types, settings.skip_types);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn migration_is_atomic_isolated_and_preserves_annotations_and_folders() {
         let dir=std::env::temp_dir().join(format!("digup-settings-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));

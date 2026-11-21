@@ -77,5 +77,6 @@ class WindowsSettingsSearch {
     if(this.error)return "Windows settings: "+this.error;
     if(this.semantic.state==="unavailable")return "Names available · Purpose matching unavailable";
     if(this.semantic.state==="preparing"&&this.text)return "Names available · Purpose matching preparing";
-    return this.total+" Windows settings "+(this.text?"matches":"pages");}
+    const noun = this.text ? (this.total === 1 ? "match" : "matches") : (this.total === 1 ? "page" : "pages");
+    return this.total + " Windows settings " + noun;}
 }

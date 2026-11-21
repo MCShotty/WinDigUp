@@ -1,36 +1,6 @@
 /* The setup window: DigUp's first launch, and Choose Folders… later. The Mac app's onboarding
    (Sources/DigUpApp/Onboarding.swift) is the reference; moss and amber are DigUp's colors. */
 
-:root {
-  --amber: #f2a22a;
-  --ember: #d97b1a;
-  --moss: #356652;
-  --leaf: #4f8058;
-  --surface: #fbfbfb;
-  --card: #ffffff;
-  --text: #1d1d1f;
-  --secondary: #6e6e73;
-  --tertiary: #a1a1a6;
-  --line: rgba(0, 0, 0, 0.09);
-  --accent: #0a84ff;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, Ubuntu, Cantarell,
-    "Noto Sans", sans-serif;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--surface);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface: #1f1f21;
-    --card: #2a2a2d;
-    --text: #f2f2f7;
-    --secondary: #a1a1a6;
-    --tertiary: #6e6e73;
-    --line: rgba(255, 255, 255, 0.1);
-  }
-}
-
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
@@ -38,34 +8,35 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--surfac
 
 body { display: flex; flex-direction: column; user-select: none; -webkit-user-select: none; cursor: default; }
 
-main { flex: 1; min-height: 0; overflow-y: auto; padding: 34px 48px 12px; }
+.setup-main { flex:1; min-block-size:0; overflow-y:auto; padding:clamp(16px, 5vw, 40px); }
+.page { max-inline-size:624px; margin-inline:auto; }
 
-.hero { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.hero { display:flex; gap:16px; align-items:center; margin-block-end:var(--ui-section-gap); }
+.hero .subtitle { margin-block-end:0; }
 
-.icon { width: 96px; height: 96px; filter: drop-shadow(0 6px 14px rgba(53, 102, 82, 0.35)); }
+.icon { inline-size:clamp(44px, 9vw, 72px); block-size:auto; flex:none; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-h1 { font-size: 30px; margin: 10px 0 0; }
-h2 { font-size: 24px; margin: 0 0 6px; }
-h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--secondary); margin: 28px 0 10px; }
+h2 { font-size:var(--ui-title); line-height:1.25; margin:0 0 var(--ui-gap); text-wrap:balance; }
+h3 { font-size:var(--ui-heading); line-height:1.35; margin:var(--ui-section-gap) 0 var(--ui-gap); }
 
-.tagline { font-size: 16px; color: var(--secondary); margin: 2px 0 0; }
-.subtitle { font-size: 13px; color: var(--secondary); margin: 0 0 18px; line-height: 1.45; }
-.centered { text-align: center; max-width: 470px; margin: 18px auto 0; }
+.subtitle { font-size:var(--ui-control); color:var(--secondary); margin:0 0 16px; line-height:1.5; }
+.subtitle code { font-family:inherit; font-weight:600; }
 
-.features { list-style: none; padding: 0; margin: 30px auto 0; max-width: 470px; display: grid; gap: 16px; }
-.features li { display: flex; align-items: center; gap: 14px; }
+.features { list-style:none; padding:0; margin:0; border-block-start:1px solid var(--line); }
+.features li { display:flex; align-items:center; gap:12px; padding:10px 0; border-block-end:1px solid var(--line); }
 .features div { display: flex; flex-direction: column; gap: 2px; }
-.features b { font-size: 14px; }
-.features span:not(.tile) { font-size: 12px; color: var(--secondary); }
+.features b { font-size:var(--ui-control); }
+.features span:not(.tile) { color:var(--secondary); }
 
 .tile {
   width: 34px; height: 34px; flex: none; border-radius: 9px;
-  background: linear-gradient(145deg, var(--leaf), var(--moss));
+  background:var(--chip);
   display: grid; place-items: center;
 }
-.tile svg { width: 18px; height: 18px; fill: none; stroke: white; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tile svg { width:18px; height:18px; fill:none; stroke:var(--leaf-text); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 
-.privacy { max-width: 470px; margin: 26px auto 0; font-size: 12px; color: var(--secondary); line-height: 1.45; }
+.privacy { margin:var(--ui-section-gap) 0 0; color:var(--secondary); line-height:1.5; }
 
 .folders { display: flex; flex-direction: column; gap: 6px; }
 
@@ -84,49 +55,57 @@ h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: 
 .folder input, .subfolder input { width: 16px; height: 16px; accent-color: var(--moss); flex: none; margin: 0; }
 .folder .text { min-width: 0; flex: 1; }
 .folder .name { font-size: 13px; font-weight: 600; }
-.folder .path, .folder .counts { font-size: 11px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.folder .counts.problem { color: var(--ember); }
+.folder .path, .folder .counts { font-size: 12px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder .counts.problem { color: var(--problem); }
 .time { flex: none; text-align: right; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.time small { display: block; font-size: 10px; font-weight: 400; color: var(--tertiary); }
+.time small { display:block; font-size:var(--ui-detail); font-weight:400; color:var(--tertiary); }
 .off .time, .subfolder.off .time, .time.quiet { color: var(--tertiary); }
 .subfolders { border-top: 1px solid var(--line); padding: 4px 0 6px; }
 .subfolder { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 34px; }
 .subfolder .name { font-size: 12px; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subfolder .counts { font-size: 11px; color: var(--secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subfolder.off .name, .subfolder.off .counts { opacity: 0.6; }
-.subfolder .time { font-size: 11px; color: var(--secondary); }
-.more { font: inherit; font-size: 11px; color: var(--ember); background: none; border: 0; padding: 4px 0 2px 58px; }
+.subfolder .counts { font-size: 12px; color: var(--secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subfolder.off .name { color: var(--secondary); }
+.subfolder .time { font-size: 12px; color: var(--secondary); }
+.more { font: inherit; font-size: 12px; color: var(--action-link); background: none; border: 0; padding: 4px 0 2px 58px; }
 
 /* Setup's last step: the model's download, then indexing, as it goes. */
 .progress-card {
-  max-width: 470px; margin: 26px auto 0; padding: 16px 18px;
-  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  margin:0 0 16px; padding:16px 0; border-block:1px solid var(--line);
 }
-.progress-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; }
+.progress-line { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; font-size: 13px; }
 .progress-what { font-weight: 600; }
-.progress-left { color: var(--secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.progress-left { color: var(--secondary); font-variant-numeric: tabular-nums; }
 .bar { position: relative; height: 6px; margin-top: 10px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 3px; background: var(--moss); transition: width 0.3s; }
-.bar.busy .fill { width: 30%; animation: busy 1.3s ease-in-out infinite; }
+.bar .fill { position:absolute; left:0; top:0; bottom:0; width:0; border-radius:3px; background:var(--primary-fill); }
+.bar.busy .fill { left:38%; width:24%; }
 .bar.done .fill { width: 100%; }
-@keyframes busy { from { left: -30%; } to { left: 100%; } }
-.progress-note { font-size: 12px; color: var(--secondary); line-height: 1.45; margin: 10px 0 0; }
+.progress-note { font-size:var(--ui-detail); color:var(--secondary); line-height:1.5; margin:8px 0 0; overflow-wrap:anywhere; text-wrap:pretty; }
+.progress-note:empty { display: none; }
+#repair-model { margin-top: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure svg { transition:none; }
+}
 
 button {
   font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--line);
   border-radius: 7px; padding: 6px 16px;
 }
-button.primary { background: var(--moss); color: white; border-color: transparent; }
+button.primary { background: var(--primary-fill); color: var(--primary-ink); border-color: transparent; }
 button.primary:disabled { opacity: 0.45; }
-button.link { background: none; border: 0; color: var(--ember); padding: 10px 2px 0; }
+button.link { background: none; border: 0; color: var(--action-link); padding: 10px 2px 0; }
 
-.note { font-size: 11px; color: var(--secondary); margin-top: 18px; }
+.note { font-size:var(--ui-detail); color:var(--secondary); margin:12px 0 0; line-height:1.5; }
+.note:empty { display:none; }
+.note, .subtitle, .shortcut-note, .privacy { max-inline-size: 70ch; text-wrap: pretty; }
 
-.keys { display: flex; gap: 6px; margin: 8px 0 4px; }
-.key {
-  min-width: 44px; padding: 8px 12px; text-align: center; font-size: 16px; font-weight: 500;
-  background: var(--card); border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 9px;
+.keys { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 4px; }
+.keys .keycap {
+  min-inline-size:40px; padding:6px 10px; text-align:center; font-size:var(--ui-control); font-weight:600;
+  background:var(--card); border-bottom-width:2px; border-radius:6px;
 }
+.ready-shortcut { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ui-gap); margin-block-start:var(--ui-section-gap); }
+.ready-shortcut .keys { margin:0; }
 
 .shortcut-note { font-size: 12px; color: var(--secondary); line-height: 1.45; margin: 12px 0 0; max-width: 560px; }
 .command {
@@ -134,14 +113,35 @@ button.link { background: none; border: 0; color: var(--ember); padding: 10px 2p
   background: var(--card); border: 1px solid var(--line); border-radius: 7px; overflow-wrap: anywhere; cursor: text;
 }
 
-.panel-keys { display: grid; grid-template-columns: 80px 1fr; gap: 8px 12px; margin: 0; }
+.panel-keys { display:grid; grid-template-columns:max-content minmax(0, 1fr); gap:var(--ui-gap) 14px; margin:0; }
 .panel-keys dt { font-weight: 600; color: var(--text); }
 .panel-keys dd { margin: 0; color: var(--secondary); }
 
-footer {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+.setup-footer {
+  flex: none; display: grid; gap: 8px; min-width: 0;
   padding: 12px 20px; border-top: 1px solid var(--line);
 }
-.model { font-size: 11px; color: var(--secondary); white-space: nowrap; }
-.summary { flex: 1; text-align: right; font-size: 12px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.buttons { display: flex; gap: 8px; }
+.setup-status { min-width: 0; max-block-size: 24vh; overflow: auto; }
+.setup-status:not(:has(p:not([hidden]):not(:empty))) { display: none; }
+.setup-status p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--secondary); overflow-wrap: anywhere; }
+.setup-status .model.problem { color: var(--problem); }
+.setup-status p:not([hidden]):not(:empty) + p:not(:empty) { margin-top: 4px; }
+.setup-navigation { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
+#setup-step { margin:0; color:var(--secondary); font-size:var(--ui-detail); font-variant-numeric:tabular-nums; }
+.setup-footer .buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.setup-footer button { flex: none; min-height: 36px; max-inline-size: 100%; }
+.setup-navigation .buttons { margin-inline-start:auto; }
+.setup-footer #apps-start { padding:6px 10px; color:var(--leaf-text); }
+#apps-start:hover { background:var(--chip); }
+@media (max-width:400px) {
+  .setup-main { padding-block-start:20px; }
+  .setup-footer { padding-inline:12px; }
+  .hero { align-items:flex-start; }
+}
+
+@media (pointer: coarse) {
+  .setup-footer button, #add-folder, .subfolders .more, #repair-model { min-inline-size: 44px; min-block-size: 44px; }
+  .folder, .subfolder { min-block-size: 44px; }
+  .disclosure { inline-size: 44px; block-size: 44px; }
+  .folder input, .subfolder input { inline-size: 24px; block-size: 24px; }
+}

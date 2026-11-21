@@ -92,7 +92,8 @@ let browser;
   await page.waitForSelector('[data-result-key="setting:bluetooth"]');
   await page.press("#query","Enter");
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==="open_windows_setting").at(-1).args.settingId),"setting:bluetooth");
-  assert.match(await page.locator("#keys").textContent(),/Windows settings/);
+  assert.equal(await page.locator("#primary-choice kbd").textContent(), "Enter");
+  assert.equal(await page.locator("#primary-action").textContent(), "Open settings");
   for (const outcome of ["match", "empty", "error"]) {
     const matched=outcome==="match";
     const launchPage = await browser.newPage({viewport:{width:1120,height:800}});
